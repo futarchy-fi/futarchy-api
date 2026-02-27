@@ -99,10 +99,80 @@ Both endpoints accept standard GraphQL `POST` requests.
 
 ### Candles Indexer
 - **Endpoint:** `POST /candles/graphql`
-- **Purpose:** Queries historical OHLCV candle data from the automated market makers.
-- **Example:**
-  ```bash
-  curl -X POST "https://api.futarchy.fi/candles/graphql" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"{ _metadatas { id value } }"}'
-  ```
+- **Purpose:** Queries historical OHLCV candle data, tracked pools, and swap events from the automated market makers.
+
+> ⚠️ **Important:** Pool addresses must include the **chain prefix** (`100-` for Gnosis, `1-` for Mainnet).  
+> Example: `100-0xf8346e622557763a62cc981187d084695ee296c3`
+
+#### Available Entities
+| Entity | Description |
+|--------|-------------|
+| `candles` | OHLCV candle data (hourly) per pool |
+| `pools` | All tracked pools with token pairs |
+| `swaps` | Individual swap events |
+| `proposals` | Indexed proposals |
+| `whitelistedtokens` | Tokens recognized by the indexer |
+
+#### Query Candles for a Pool
+```bash
+curl -X POST "https://api.futarchy.fi/candles/graphql" \
+-H "Content-Type: application/json" \
+-d '{
+  "query": "{ candles(where: { pool: \"100-0xf8346e622557763a62cc981187d084695ee296c3\" }, first: 5, orderBy: periodStartUnix, orderDirection: desc) { periodStartUnix open high low close pool } }"
+}'
+```
+
+**Response:**
+```json
+{
+  "data": {
+    "candles": [
+      {
+        "periodStartUnix": 1769857200,
+        "open": "104.83014050856292",
+        "high": "104.83014050856292",
+        "low": "104.77871319787265",
+        "close": "104.77871319787265",
+        "pool": "100-0xf8346e622557763a62cc981187d084695ee296c3"
+      }
+    ]
+  }
+}
+```
+
+#### List All Tracked Pools
+```bash
+curl -X POST "https://api.futarchy.fi/candles/graphql" \
+-H "Content-Type: application/json" \
+-d '{"query":"{ pools { id token0 token1 } }"}'
+```
+
+#### Check a Specific Pool
+```bash
+curl -X POST "https://api.futarchy.fi/candles/graphql" \
+-H "Content-Type: application/json" \
+-d '{"query":"{ pool(id: \"100-0xf8346e622557763a62cc981187d084695ee296c3\") { id token0 token1 } }"}'
+```
+
+#### Check Indexer Block Height
+```bash
+curl -X POST "https://api.futarchy.fi/candles/graphql" \
+-H "Content-Type: application/json" \
+-d '{"query":"{ _metadatas { id value } }"}'
+```
+
+#### Candle Query Parameters
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `pool` | String | Pool address with chain prefix (e.g. `100-0x...`) |
+| `first` | Int | Number of results to return |
+| `skip` | Int | Number of results to skip (pagination) |
+| `orderBy` | Enum | Field to sort by: `periodStartUnix`, `open`, `high`, `low`, `close` |
+| `orderDirection` | Enum | `asc` or `desc` |
+
+---
+
+## 🔗 Status & Monitoring
+- **Status Page:** [status.futarchy.fi](https://status.futarchy.fi)
+- **Status JSON API:** [status.futarchy.fi/api/status](https://status.futarchy.fi/api/status)
+- **Status Repo:** [futarchy-fi/futarchy-status](https://github.com/futarchy-fi/futarchy-status)
