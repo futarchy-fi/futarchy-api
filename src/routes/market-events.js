@@ -544,6 +544,7 @@ export async function handleMarketEventsRequest(req, res) {
         console.log(`   [DEBUG] Building response...`);
         // Build response with REAL pool IDs (essential for candles query)
         const response = {
+            status: 'ok',
             event_id: resolved.originalProposalId,  // Original case for links
             conditional_yes: {
                 price_usd: yesPrice,
