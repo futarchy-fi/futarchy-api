@@ -209,6 +209,7 @@ export async function handleUnifiedChartRequest(req, res) {
                     end: closeTimestamp || (now + 3 * 24 * 3600),
                     chain_id: chainId,
                     chart_start_range: chartStartRange || null,
+                    start_candle_unix: chartStartRange ? parseInt(chartStartRange) : null,
                     close_timestamp: closeTimestamp || null,
                     price_precision: pricePrecision ? parseInt(pricePrecision) : null,
                     currency_rate: currencyRateProvider ? currencyRate : null,
