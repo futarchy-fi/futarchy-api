@@ -17,10 +17,58 @@
  *   - ID format: plain addresses (same as Graph Node for registry)
  */
 
+import { ethers } from 'ethers';
 import { ENDPOINTS, IS_CHECKPOINT } from '../config/endpoints.js';
 import { registryCache } from '../utils/cache.js';
 
 const AGGREGATOR_ADDRESS = '0xc5eb43d53e2fe5fdde5faf400cc4167e5b5d4fc1';
+
+// ============================================================================
+// ON-CHAIN SNAPSHOT LINK REGISTRY (canonical source of truth)
+// ============================================================================
+
+const SNAPSHOT_LINK_REGISTRY = '0xa6Bc2857906C808bc0041f3A2977F53c6b6b0823';
+const FACTORY_ADDRESS = '0xa6cB18FCDC17a2B44E5cAd2d80a6D5942d30a345';
+const GNOSIS_RPC = process.env.GNOSIS_RPC_URL || 'https://rpc.gnosischain.com';
+
+const registryAbi = [
+    'function getFutarchyId(bytes32 snapshotId) view returns (uint256 futarchyId, bool exists)',
+];
+const factoryAbi = [
+    'function proposals(uint256 index) view returns (address)',
+];
+
+let _rpcProvider = null;
+function getRpcProvider() {
+    if (!_rpcProvider) {
+        _rpcProvider = new ethers.JsonRpcProvider(GNOSIS_RPC, 100, { staticNetwork: true });
+    }
+    return _rpcProvider;
+}
+
+/**
+ * Look up a snapshot proposal ID in the on-chain SnapshotLinkRegistry.
+ * Returns the proposal address if found, null otherwise.
+ */
+async function onchain_lookupBySnapshotId(snapshotId) {
+    try {
+        const provider = getRpcProvider();
+        const registry = new ethers.Contract(SNAPSHOT_LINK_REGISTRY, registryAbi, provider);
+        const padded = ethers.zeroPadValue(snapshotId, 32);
+        const [futarchyId, exists] = await registry.getFutarchyId(padded);
+        if (!exists) return null;
+
+        const factory = new ethers.Contract(FACTORY_ADDRESS, factoryAbi, provider);
+        const proposalAddr = await factory.proposals(futarchyId);
+        if (proposalAddr === ethers.ZeroAddress) return null;
+
+        console.log(`   🔗 SnapshotLinkRegistry: ${snapshotId.slice(0, 10)}... → #${futarchyId} → ${proposalAddr}`);
+        return proposalAddr.toLowerCase();
+    } catch (e) {
+        console.warn(`   ⚠️ SnapshotLinkRegistry lookup failed: ${e.message}`);
+        return null;
+    }
+}
 
 // ============================================================================
 // INTERNAL HELPERS
@@ -241,6 +289,42 @@ async function checkpoint_lookupOrgMetadata(orgId, key) {
 }
 
 // ============================================================================
+// FETCH PROPOSAL BY ADDRESS (used after on-chain registry resolves an address)
+// ============================================================================
+
+async function fetchProposalByAddress(proposalAddress) {
+    const entityName = IS_CHECKPOINT ? 'proposalentities' : 'proposalEntities';
+    const data = await gqlFetch(ENDPOINTS.registry, `{
+        ${entityName}(where: { proposalAddress: "${proposalAddress}" }) {
+            id
+            proposalAddress
+            title
+            metadata
+            organization {
+                id
+                name
+                aggregator { id }
+            }
+        }
+    }`);
+
+    const proposals = data?.[entityName] || [];
+    const proposal = proposals.find(p => {
+        const aggId = p.organization?.aggregator?.id?.toLowerCase();
+        return aggId === AGGREGATOR_ADDRESS.toLowerCase();
+    }) || proposals[0];
+
+    if (!proposal) return null;
+
+    let config = {};
+    if (proposal.metadata) {
+        try { config = JSON.parse(proposal.metadata); } catch (e) { /* ignore */ }
+    }
+
+    return normalizeProposalResult(proposal, config);
+}
+
+// ============================================================================
 // NORMALIZATION
 // ============================================================================
 
@@ -285,7 +369,17 @@ export async function resolveProposalId(proposalId) {
         return cached;
     }
 
-    // 1. Try snapshot_id lookup
+    // 1. Try on-chain SnapshotLinkRegistry (canonical, no stale entries)
+    const onchainAddr = await onchain_lookupBySnapshotId(normalized);
+    if (onchainAddr) {
+        const onchainResult = await fetchProposalByAddress(onchainAddr);
+        if (onchainResult) {
+            registryCache.set(normalized, onchainResult);
+            return onchainResult;
+        }
+    }
+
+    // 2. Fall back to metadataentries snapshot_id lookup
     const lookupFn = IS_CHECKPOINT ? checkpoint_lookupBySnapshotId : graphNode_lookupBySnapshotId;
     const snapshotResult = await lookupFn(normalized);
     if (snapshotResult) {
@@ -293,7 +387,7 @@ export async function resolveProposalId(proposalId) {
         return snapshotResult;
     }
 
-    // 2. Fall back to org metadata lookup
+    // 3. Fall back to org metadata lookup
     const orgLookupFn = IS_CHECKPOINT ? checkpoint_lookupInOrgMetadata : graphNode_lookupInOrgMetadata;
     const orgResult = await orgLookupFn(normalized);
     if (orgResult) {
@@ -301,7 +395,7 @@ export async function resolveProposalId(proposalId) {
         return orgResult;
     }
 
-    // 3. Use ID directly
+    // 4. Use ID directly
     const fallback = {
         proposalId: normalized,
         proposalAddress: normalized,
