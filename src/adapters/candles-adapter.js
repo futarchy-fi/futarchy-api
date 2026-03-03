@@ -182,12 +182,14 @@ async function checkpoint_fetchPools(proposalAddress, chainId = 100) {
             ? String(parseFloat(pool.volumeToken1) / 1e18)
             : '0',
         // Checkpoint returns token0/token1 as addresses, not objects
-        // We create minimal token objects for compatibility
+        // Use isInverted to assign roles:
+        //   Default:  token0 = COMPANY, token1 = CURRENCY
+        //   Inverted: token0 = CURRENCY, token1 = COMPANY
         token0: typeof pool.token0 === 'string'
-            ? { id: pool.token0, symbol: null, role: null }
+            ? { id: pool.token0, symbol: null, role: pool.isInverted ? 'CURRENCY' : 'COMPANY' }
             : pool.token0,
         token1: typeof pool.token1 === 'string'
-            ? { id: pool.token1, symbol: null, role: null }
+            ? { id: pool.token1, symbol: null, role: pool.isInverted ? 'COMPANY' : 'CURRENCY' }
             : pool.token1,
         // Checkpoint has flat proposal reference
         proposal: typeof pool.proposal === 'string'
