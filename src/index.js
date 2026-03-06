@@ -78,14 +78,27 @@ app.get('/api/v1/spot-candles', async (req, res) => {
             }
         }
 
+        // Compute rate divisor when ticker has :: rate provider
+        let rateDivisor = 1;
+        // Only divide if the ticker contains a rate provider and is NOT a composite pool.
+        // Composite pools natively divide their prices in the backend proxy (spot-price.js).
+        if (ticker.includes('::') && !ticker.startsWith('composite::')) {
+            const rateProviderAddress = ticker.split('::')[1]?.split('-')[0];
+            const networkPart = ticker.split('-').pop() || 'xdai';
+            const chainId = networkPart === 'xdai' ? 100 : 1;
+            if (rateProviderAddress) {
+                rateDivisor = await getRateCached(rateProviderAddress, chainId);
+            }
+        }
+
         const candles = (spotData?.candles || [])
             .filter(c => c.time >= min && c.time <= max)
             .map(c => ({
                 periodStartUnix: String(c.time),
-                close: String(c.value)
+                close: String(c.value / rateDivisor)
             }));
 
-        console.log(`📊 [Spot Candles] ticker=${ticker.slice(0, 20)}... → ${candles.length} candles (rate removed)`);
+        console.log(`📊 [Spot Candles] ticker=${ticker.slice(0, 20)}... → ${candles.length} candles (rate: ${rateDivisor.toFixed(4)})`);
         logCacheStats();
         res.json({ spotCandles: candles });
     } catch (error) {

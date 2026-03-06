@@ -138,20 +138,27 @@ export async function handleUnifiedChartRequest(req, res) {
 
         console.log(`   ⏱️ Parallel fetch total: ${Date.now() - t4}ms`);
 
-        // ── Step 5: Process spot candles (RAW - no rate logic) ──
+        // ── Step 5: Process spot candles (exclude composite from rate logic) ──
         let spotCandles = [];
         let spotPrice = null;
         if (spotData && ticker) {
+            let rateDivisor = 1;
+            // Only divide if the ticker contains a rate provider and is NOT a composite pool.
+            // Composite pools natively divide their prices in the backend proxy (spot-price.js).
+            if (ticker.includes('::') && !ticker.startsWith('composite::')) {
+                rateDivisor = currencyRate || 1;
+            }
+
             spotCandles = (spotData.candles || [])
                 .filter(c => c.time >= effectiveMinTimestamp && c.time <= maxTimestamp)
                 .map(c => ({
                     periodStartUnix: String(c.time),
-                    close: String(c.value)
+                    close: String(c.value / rateDivisor)
                 }));
 
             const rawSpotPrice = spotData.price;
             if (rawSpotPrice !== null) {
-                spotPrice = rawSpotPrice;
+                spotPrice = rawSpotPrice / rateDivisor;
             }
         }
 
