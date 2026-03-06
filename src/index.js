@@ -71,10 +71,15 @@ app.get('/api/v1/spot-candles', async (req, res) => {
         if (USE_FUTARCHY_SPOT) {
             spotData = await fetchSpotCandles(ticker, 500, max + 3600, min);
         } else {
-            spotData = spotCache.get(ticker);
+            // Identify if the request represents a historical chart (> 3 days old)
+            const now = Math.floor(Date.now() / 1000);
+            const isHistorical = max < (now - 3 * 86400);
+            const cacheKey = isHistorical ? `${ticker}:hist:${Math.floor(max / 86400)}` : ticker;
+
+            spotData = spotCache.get(cacheKey);
             if (!spotData) {
                 spotData = await fetchSpotCandles(ticker, 500, max + 3600, min);
-                if (spotData?.candles?.length > 0) spotCache.set(ticker, spotData);
+                if (spotData?.candles?.length > 0) spotCache.set(cacheKey, spotData);
             }
         }
 

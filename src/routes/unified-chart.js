@@ -129,11 +129,23 @@ export async function handleUnifiedChartRequest(req, res) {
             getRateCached(currencyRateProvider, chainId).then(r => { console.log(`      💱 Rate: ${r?.toFixed(4) || 'N/A'} (${Date.now() - tRate}ms)`); return r; }),
             yesPool ? (candlesCache.get(`yes:${yesPool.id}:${effectiveMinTimestamp}:${maxTimestamp}`) || fetchCandles(yesPool.id, effectiveMinTimestamp, maxTimestamp, chainId).then(c => { candlesCache.set(`yes:${yesPool.id}:${effectiveMinTimestamp}:${maxTimestamp}`, c); console.log(`      📈 YES candles: ${c.length} (${Date.now() - tYes}ms)`); return c; })) : Promise.resolve([]),
             noPool ? (candlesCache.get(`no:${noPool.id}:${effectiveMinTimestamp}:${maxTimestamp}`) || fetchCandles(noPool.id, effectiveMinTimestamp, maxTimestamp, chainId).then(c => { candlesCache.set(`no:${noPool.id}:${effectiveMinTimestamp}:${maxTimestamp}`, c); console.log(`      📉 NO candles: ${c.length} (${Date.now() - tNo}ms)`); return c; })) : Promise.resolve([]),
-            (includeSpot && ticker) ? (
-                USE_FUTARCHY_SPOT
-                    ? fetchSpotCandles(ticker, 500, maxTimestamp + 3600, effectiveMinTimestamp).then(s => { console.log(`      💹 Spot: ${s?.candles?.length || 0} raw [futarchy-spot] (${Date.now() - tSpot}ms)`); return s; })
-                    : (spotCache.get(ticker) || fetchSpotCandles(ticker, 500, maxTimestamp + 3600, effectiveMinTimestamp).then(s => { if (s?.candles?.length > 0) spotCache.set(ticker, s); console.log(`      💹 Spot: ${s?.candles?.length || 0} raw (${Date.now() - tSpot}ms)`); return s; }))
-            ) : Promise.resolve(null),
+            (includeSpot && ticker) ? (async () => {
+                if (USE_FUTARCHY_SPOT) return fetchSpotCandles(ticker, 500, maxTimestamp + 3600, effectiveMinTimestamp).then(s => { console.log(`      💹 Spot: ${s?.candles?.length || 0} raw [futarchy-spot] (${Date.now() - tSpot}ms)`); return s; });
+                
+                // Identify if the request represents a historical chart (> 3 days old)
+                const now = Math.floor(Date.now() / 1000);
+                const isHistorical = maxTimestamp < (now - 3 * 86400);
+                // Use a different cache key to prevent live dates from poisoning historical queries
+                const cacheKey = isHistorical ? `${ticker}:hist:${Math.floor(maxTimestamp / 86400)}` : ticker;
+
+                const cached = spotCache.get(cacheKey);
+                if (cached) return cached;
+
+                const s = await fetchSpotCandles(ticker, 500, maxTimestamp + 3600, effectiveMinTimestamp);
+                if (s?.candles?.length > 0) spotCache.set(cacheKey, s);
+                console.log(`      💹 Spot: ${s?.candles?.length || 0} raw (${Date.now() - tSpot}ms) key=${cacheKey}`);
+                return s;
+            })() : Promise.resolve(null),
         ]);
 
         console.log(`   ⏱️ Parallel fetch total: ${Date.now() - t4}ms`);
