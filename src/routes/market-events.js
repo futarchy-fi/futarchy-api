@@ -579,48 +579,35 @@ export async function handleMarketEventsRequest(req, res) {
                 // If rate provider is configured, include the rate for YES/NO price conversion
                 currency_rate: currencyRateProvider ? currencyRate : null
             },
+            // Volume: use currency volume (consistent with unified-chart.js v2)
             volume: {
                 conditional_yes: yesPool ? (() => {
-                    // Roles are: YES_CURRENCY, NO_CURRENCY, YES_COMPANY, NO_COMPANY
-                    // Use includes() to match the suffix
-                    const currencyVolume = yesPool.token0?.role?.includes('CURRENCY')
+                    const currencyVol = yesPool.token0?.role?.includes('CURRENCY')
                         ? yesPool.volumeToken0
                         : yesPool.token1?.role?.includes('CURRENCY')
                             ? yesPool.volumeToken1
                             : yesPool.volumeToken1;
-                    const companyVolume = yesPool.token0?.role?.includes('COMPANY')
-                        ? yesPool.volumeToken0
-                        : yesPool.token1?.role?.includes('COMPANY')
-                            ? yesPool.volumeToken1
-                            : yesPool.volumeToken0;
-                    // volume_usd = company volume * currency rate (sDAI→xDAI)
-                    const rawCompany = parseFloat(companyVolume || '0');
-                    const volumeUsd = String(rawCompany * (currencyRate || 1));
+                    const rawCurrency = parseFloat(currencyVol || '0');
+                    const volumeUsd = String(rawCurrency * (currencyRate || 1));
                     return {
                         status: 'ok',
                         pool_id: yesPool.id,
-                        volume: companyVolume || '0',
+                        volume: String(rawCurrency),
                         volume_usd: volumeUsd
                     };
                 })() : undefined,
                 conditional_no: noPool ? (() => {
-                    const currencyVolume = noPool.token0?.role?.includes('CURRENCY')
+                    const currencyVol = noPool.token0?.role?.includes('CURRENCY')
                         ? noPool.volumeToken0
                         : noPool.token1?.role?.includes('CURRENCY')
                             ? noPool.volumeToken1
                             : noPool.volumeToken1;
-                    const companyVolume = noPool.token0?.role?.includes('COMPANY')
-                        ? noPool.volumeToken0
-                        : noPool.token1?.role?.includes('COMPANY')
-                            ? noPool.volumeToken1
-                            : noPool.volumeToken0;
-                    // volume_usd = company volume * currency rate (sDAI→xDAI)
-                    const rawCompany = parseFloat(companyVolume || '0');
-                    const volumeUsd = String(rawCompany * (currencyRate || 1));
+                    const rawCurrency = parseFloat(currencyVol || '0');
+                    const volumeUsd = String(rawCurrency * (currencyRate || 1));
                     return {
                         status: 'ok',
                         pool_id: noPool.id,
-                        volume: companyVolume || '0',
+                        volume: String(rawCurrency),
                         volume_usd: volumeUsd
                     };
                 })() : undefined

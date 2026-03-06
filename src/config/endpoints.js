@@ -20,9 +20,14 @@ const GRAPH_NODE = {
     candles: 'BROKEN_GRAPH_NODE_DO_NOT_USE://d3ugkaojqkfud0.cloudfront.net/subgraphs/name/algebra-proposal-candles-v1',
 };
 
+// ⚠️  IMPORTANT: Port mapping for Checkpoint indexers:
+//   3001 = Production candles checkpoint
+//   3003 = Registry checkpoint
+//   3004 = STAGING (volume persistence fix, but Gnosis stalled near tip)
+// TODO: Once staging getLogs issue is fixed, switch candles back to 3004.
 const CHECKPOINT = {
     registry: process.env.REGISTRY_URL || 'http://localhost:3003/graphql',
-    candles: process.env.CANDLES_URL || 'http://localhost:3001/graphql',
+    candles: process.env.CANDLES_URL || 'http://localhost:3004/graphql',
 };
 
 export const ENDPOINTS = MODE === 'checkpoint' ? CHECKPOINT : GRAPH_NODE;
