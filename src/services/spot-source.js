@@ -20,11 +20,11 @@ console.log(`📡 [Spot Source] ${USE_FUTARCHY_SPOT ? '✅ Using FUTARCHY-SPOT a
  * Fetch spot candles from futarchy-spot service.
  * Returns the same shape as fetchSpotCandles: { candles: [{time, value}], price, error }
  */
-async function fetchFromFutarchySpot(ticker, limit = 500, beforeTimestamp = null) {
+async function fetchFromFutarchySpot(ticker, limit = 500, beforeTimestamp = null, minTimestamp = null) {
     try {
         const maxTs = beforeTimestamp || Math.floor(Date.now() / 1000);
-        // Go back ~limit hours for minTs
-        const minTs = maxTs - (limit * 3600);
+        // Use explicitly provided minTimestamp, otherwise go back ~limit hours
+        const minTs = minTimestamp !== null ? Math.max(0, minTimestamp) : maxTs - (limit * 3600);
 
         const url = `${FUTARCHY_SPOT_URL}/api/v1/candles?ticker=${encodeURIComponent(ticker)}&minTimestamp=${minTs}&maxTimestamp=${maxTs}`;
         
@@ -59,9 +59,9 @@ async function fetchFromFutarchySpot(ticker, limit = 500, beforeTimestamp = null
  * Main export — replaces fetchSpotCandles everywhere.
  * Automatically routes to futarchy-spot or CoinGecko based on toggle.
  */
-export async function fetchSpotCandles(configString, limit = null, beforeTimestamp = null) {
+export async function fetchSpotCandles(configString, limit = null, beforeTimestamp = null, minTimestamp = null) {
     if (USE_FUTARCHY_SPOT) {
-        return fetchFromFutarchySpot(configString, limit || 500, beforeTimestamp);
+        return fetchFromFutarchySpot(configString, limit || 500, beforeTimestamp, minTimestamp);
     }
     return fetchFromGecko(configString, limit, beforeTimestamp);
 }

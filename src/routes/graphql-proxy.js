@@ -110,7 +110,7 @@ export async function handleGraphQLRequest(req, res) {
     try {
         // ⭐ Only fetch spot candles if poolTicker is provided
         const spotPromise = poolTicker
-            ? fetchSpotCandles(poolTicker, 500)
+            ? fetchSpotCandles(poolTicker, 500, maxTimestamp + 3600, minTimestamp)
             : Promise.resolve({ candles: [], price: null, error: null });
 
         // Fetch both subgraph data and spot candles in parallel

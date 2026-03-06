@@ -131,8 +131,8 @@ export async function handleUnifiedChartRequest(req, res) {
             noPool ? (candlesCache.get(`no:${noPool.id}:${effectiveMinTimestamp}:${maxTimestamp}`) || fetchCandles(noPool.id, effectiveMinTimestamp, maxTimestamp, chainId).then(c => { candlesCache.set(`no:${noPool.id}:${effectiveMinTimestamp}:${maxTimestamp}`, c); console.log(`      📉 NO candles: ${c.length} (${Date.now() - tNo}ms)`); return c; })) : Promise.resolve([]),
             (includeSpot && ticker) ? (
                 USE_FUTARCHY_SPOT
-                    ? fetchSpotCandles(ticker, 500, maxTimestamp + 3600).then(s => { console.log(`      💹 Spot: ${s?.candles?.length || 0} raw [futarchy-spot] (${Date.now() - tSpot}ms)`); return s; })
-                    : (spotCache.get(ticker) || fetchSpotCandles(ticker, 500, maxTimestamp + 3600).then(s => { if (s?.candles?.length > 0) spotCache.set(ticker, s); console.log(`      💹 Spot: ${s?.candles?.length || 0} raw (${Date.now() - tSpot}ms)`); return s; }))
+                    ? fetchSpotCandles(ticker, 500, maxTimestamp + 3600, effectiveMinTimestamp).then(s => { console.log(`      💹 Spot: ${s?.candles?.length || 0} raw [futarchy-spot] (${Date.now() - tSpot}ms)`); return s; })
+                    : (spotCache.get(ticker) || fetchSpotCandles(ticker, 500, maxTimestamp + 3600, effectiveMinTimestamp).then(s => { if (s?.candles?.length > 0) spotCache.set(ticker, s); console.log(`      💹 Spot: ${s?.candles?.length || 0} raw (${Date.now() - tSpot}ms)`); return s; }))
             ) : Promise.resolve(null),
         ]);
 

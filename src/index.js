@@ -69,11 +69,11 @@ app.get('/api/v1/spot-candles', async (req, res) => {
         // When using CoinGecko, use spot cache to avoid rate limits
         let spotData;
         if (USE_FUTARCHY_SPOT) {
-            spotData = await fetchSpotCandles(ticker, 500, max + 3600);
+            spotData = await fetchSpotCandles(ticker, 500, max + 3600, min);
         } else {
             spotData = spotCache.get(ticker);
             if (!spotData) {
-                spotData = await fetchSpotCandles(ticker, 500, max + 3600);
+                spotData = await fetchSpotCandles(ticker, 500, max + 3600, min);
                 if (spotData?.candles?.length > 0) spotCache.set(ticker, spotData);
             }
         }
