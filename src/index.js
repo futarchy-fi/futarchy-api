@@ -30,6 +30,23 @@ app.use(cors({
 app.use(express.json());
 app.disable('etag'); // Prevent 304 — ensures browser always gets fresh response
 
+// Strip the legacy `/charts` path prefix so URLs like
+//   /charts/api/v2/proposals/:id/chart
+//   /charts/api/v1/market-events/...
+// route to the same handlers as the unprefixed paths. The prefix existed on
+// the AWS API Gateway (path-based routing to the EC2 backend); after the GCP
+// migration the Cloud Run service serves Express directly with no prefix.
+// The Snapshot widget at snapshot-labs/sx-monorepo still uses the prefixed
+// URL (`https://api.futarchy.fi/charts` as default base), so we accept both.
+app.use((req, _res, next) => {
+    if (req.url.startsWith('/charts/')) {
+        req.url = req.url.slice('/charts'.length);
+    } else if (req.url === '/charts') {
+        req.url = '/';
+    }
+    next();
+});
+
 // Health check
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
