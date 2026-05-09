@@ -15,6 +15,7 @@ import { handleGraphQLRequest } from './routes/graphql-proxy.js';
 import { makeGraphQLPassthrough } from './routes/graphql-passthrough.js';
 import { handleUnifiedChartRequest, refreshChart } from './routes/unified-chart.js';
 import { ENDPOINTS } from './config/endpoints.js';
+import { proxyCandlesQuery } from './adapters/candles-adapter.js';
 import { fetchSpotCandles, USE_FUTARCHY_SPOT } from './services/spot-source.js';
 import { getRateCached } from './services/rate-provider.js';
 import { spotCache, logCacheStats } from './utils/cache.js';
@@ -146,7 +147,28 @@ app.post('/subgraphs/name/algebra-proposal-candles-v1', handleGraphQLRequest);
 // passthroughs that forward GraphQL POSTs to the configured upstream.
 // ============================================
 app.post('/registry/graphql', makeGraphQLPassthrough(() => ENDPOINTS.registry, 'registry'));
-app.post('/candles/graphql',  makeGraphQLPassthrough(() => ENDPOINTS.candles,  'candles'));
+
+// /candles/graphql translates plain pool IDs (0xabc...) to chain-prefixed
+// (100-0xabc...) and rewrites response IDs back. This keeps the older
+// frontend (which assumes Graph Node IDs) working against Checkpoint
+// without per-call changes. In Graph Node mode it's a transparent passthrough.
+app.post('/candles/graphql', async (req, res) => {
+    try {
+        const { query, variables } = req.body || {};
+        if (!query) {
+            return res.status(400).json({ errors: [{ message: '[candles] missing query' }] });
+        }
+        // Default to Gnosis (100); callers can override via $chainId variable.
+        const chainId = parseInt(variables?.chainId) || 100;
+        const result = await proxyCandlesQuery(query, variables || {}, chainId);
+        res.json(result);
+    } catch (err) {
+        console.error('[candles] passthrough failed:', err?.message || err);
+        res.status(502).json({
+            errors: [{ message: `[candles] upstream error: ${err?.message || 'unknown'}` }],
+        });
+    }
+});
 
 // Start server
 
