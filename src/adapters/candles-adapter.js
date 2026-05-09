@@ -324,12 +324,19 @@ export async function proxyCandlesQuery(query, variables = {}, chainId = 100) {
     // Checkpoint mode: adapt variables (prefix pool IDs) and query fields
     const adaptedVars = { ...variables };
 
-    // Prefix pool IDs in variables (when UI uses $yesPoolId/$noPoolId)
-    if (adaptedVars.yesPoolId) {
-        adaptedVars.yesPoolId = addChainPrefix(adaptedVars.yesPoolId, chainId);
-    }
-    if (adaptedVars.noPoolId) {
-        adaptedVars.noPoolId = addChainPrefix(adaptedVars.noPoolId, chainId);
+    // Prefix any plain-address pool IDs in known variables. Scalar values
+    // get prefixed; arrays get each entry prefixed (for $ids: [String!]!).
+    const VAR_KEYS_TO_PREFIX = ['yesPoolId', 'noPoolId', 'poolId', 'id', 'ids'];
+    for (const key of VAR_KEYS_TO_PREFIX) {
+        const v = adaptedVars[key];
+        if (typeof v === 'string' && /^0x[a-fA-F0-9]{40}$/.test(v)) {
+            adaptedVars[key] = addChainPrefix(v, chainId);
+        } else if (Array.isArray(v)) {
+            adaptedVars[key] = v.map(x =>
+                typeof x === 'string' && /^0x[a-fA-F0-9]{40}$/.test(x)
+                    ? addChainPrefix(x, chainId) : x
+            );
+        }
     }
 
     // Adapt query: replace periodStartUnix with time, period "3600" with period 3600
@@ -340,30 +347,44 @@ export async function proxyCandlesQuery(query, variables = {}, chainId = 100) {
         .replace(/period:\s*"3600"/g, 'period: 3600')
         .replace(/orderBy:\s*periodStartUnix/g, 'orderBy: time');
 
-    // Also prefix inline pool IDs in the query string (pool: "0xabc..." → pool: "100-0xabc...")
-    adaptedQuery = adaptedQuery.replace(
-        /pool:\s*"(0x[a-fA-F0-9]{40})"/g,
-        (match, addr) => `pool: "${addChainPrefix(addr, chainId)}"`
-    );
+    // Prefix inline pool IDs in the query string. Catches both filter syntax
+    // (pool: "0xabc...") AND entity-lookup syntax (pool(id: "0xabc...")).
+    adaptedQuery = adaptedQuery
+        .replace(/pool:\s*"(0x[a-fA-F0-9]{40})"/g,
+            (_m, addr) => `pool: "${addChainPrefix(addr, chainId)}"`)
+        .replace(/(pool|proposal)\s*\(\s*id\s*:\s*"(0x[a-fA-F0-9]{40})"/g,
+            (_m, entity, addr) => `${entity}(id: "${addChainPrefix(addr, chainId)}"`);
 
     console.log(`   [PROXY] Adapted query pool refs for chain ${chainId}`);
 
     const rawData = await gqlFetch(ENDPOINTS.candles, adaptedQuery, adaptedVars);
 
-    // Normalize response: convert `time` back to `periodStartUnix` for downstream
-    const normalizedData = {};
-    for (const [key, value] of Object.entries(rawData || {})) {
-        if (Array.isArray(value)) {
-            normalizedData[key] = value.map(candle => {
-                if (candle.time !== undefined && candle.periodStartUnix === undefined) {
-                    return { ...candle, periodStartUnix: String(candle.time) };
-                }
-                return candle;
-            });
-        } else {
-            normalizedData[key] = value;
-        }
-    }
-
+    // Normalize response:
+    //   - Strip "<chainId>-" prefix from any `id` field (frontend expects plain
+    //     addresses).
+    //   - Convert candle `time` back to `periodStartUnix` for downstream.
+    const normalizedData = stripPrefixesAndNormalize(rawData);
     return { data: normalizedData };
+}
+
+function stripPrefixesAndNormalize(value) {
+    if (Array.isArray(value)) {
+        return value.map(stripPrefixesAndNormalize);
+    }
+    if (value && typeof value === 'object') {
+        const out = {};
+        for (const [k, v] of Object.entries(value)) {
+            if (typeof v === 'string' && (k === 'id' || k === 'proposal' || k === 'pool')) {
+                out[k] = stripChainPrefix(v);
+            } else {
+                out[k] = stripPrefixesAndNormalize(v);
+            }
+        }
+        // Add Graph-Node-compatible periodStartUnix when we have `time` only
+        if (out.time !== undefined && out.periodStartUnix === undefined) {
+            out.periodStartUnix = String(out.time);
+        }
+        return out;
+    }
+    return value;
 }
