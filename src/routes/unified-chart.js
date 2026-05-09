@@ -105,8 +105,19 @@ export async function handleUnifiedChartRequest(req, res) {
             ? await fetchPoolsAdapter(tradingContractId, chainId)
             : await fetchPoolsForProposal(tradingContractId);
 
-        const yesPool = pools.find(p => p.outcomeSide === 'YES' && p.type === 'CONDITIONAL');
-        const noPool = pools.find(p => p.outcomeSide === 'NO' && p.type === 'CONDITIONAL');
+        // Pool-type preference: CONDITIONAL is the legacy/canonical YES/NO pool
+        // (YES_TOKEN/YES_CURRENCY). Newer markets like GIP-150 v2 are deployed
+        // with PREDICTION pools (YES_sDAI/sDAI = probability) and EXPECTED_VALUE
+        // pools (YES_TOKEN/CURRENCY = projected value) instead. Fall back to
+        // PREDICTION (probability semantics match what UI shows as "YES Price")
+        // and finally EXPECTED_VALUE so something is always returned when pools exist.
+        function findPoolByOutcome(side) {
+            return pools.find(p => p.outcomeSide === side && p.type === 'CONDITIONAL')
+                || pools.find(p => p.outcomeSide === side && p.type === 'PREDICTION')
+                || pools.find(p => p.outcomeSide === side && p.type === 'EXPECTED_VALUE');
+        }
+        const yesPool = findPoolByOutcome('YES');
+        const noPool = findPoolByOutcome('NO');
 
         console.log(`   📦 Pools: YES=${!!yesPool} NO=${!!noPool} (${Date.now() - t2}ms)`);
 
