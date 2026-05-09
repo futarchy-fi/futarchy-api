@@ -20,6 +20,7 @@ import { getSpotPrice, fetchSpotCandles, USE_FUTARCHY_SPOT } from '../services/s
 import { responseCache, candlesCache, spotCache, logCacheStats } from '../utils/cache.js';
 import { registerForWarming } from '../utils/warmer.js';
 import { RESPONSE_TTL_SEC } from '../config/cache-config.js';
+import { extractTokensFromPools } from '../utils/token-from-pool.js';
 
 // ============================================================================
 // REGISTRY HELPERS (only for non-Checkpoint fallback)
@@ -186,16 +187,17 @@ export async function handleUnifiedChartRequest(req, res) {
         }
 
         // ── Step 6: Extract token info ──
+        // Graph Node responses include nested companyToken/currencyToken on the
+        // proposal; Checkpoint doesn't, so we walk all available pools and
+        // parse names (CONDITIONAL > EXPECTED_VALUE > PREDICTION).
         const proposal = pools[0]?.proposal;
         let companyToken = proposal?.companyToken;
         let currencyToken = proposal?.currencyToken;
 
-        if (!companyToken?.symbol && yesPool?.name) {
-            const match = yesPool.name.match(/^YES_(\w+)\s*\/\s*YES_(\w+)$/);
-            if (match) {
-                companyToken = { id: null, symbol: match[1] };
-                currencyToken = { id: null, symbol: match[2] };
-            }
+        if (!companyToken?.symbol || !currencyToken?.symbol) {
+            const fromPools = extractTokensFromPools(pools);
+            companyToken  = companyToken?.symbol  ? companyToken  : fromPools.companyToken;
+            currencyToken = currencyToken?.symbol ? currencyToken : fromPools.currencyToken;
         }
 
         // ── Step 7: Prices ──
