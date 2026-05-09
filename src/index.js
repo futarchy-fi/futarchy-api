@@ -12,7 +12,9 @@ import express from 'express';
 import cors from 'cors';
 import { handleMarketEventsRequest } from './routes/market-events.js';
 import { handleGraphQLRequest } from './routes/graphql-proxy.js';
+import { makeGraphQLPassthrough } from './routes/graphql-passthrough.js';
 import { handleUnifiedChartRequest, refreshChart } from './routes/unified-chart.js';
+import { ENDPOINTS } from './config/endpoints.js';
 import { fetchSpotCandles, USE_FUTARCHY_SPOT } from './services/spot-source.js';
 import { getRateCached } from './services/rate-provider.js';
 import { spotCache, logCacheStats } from './utils/cache.js';
@@ -135,6 +137,16 @@ app.get('/api/v1/spot-candles', async (req, res) => {
 // Proxies: d3ugkaojqkfud0.cloudfront.net/subgraphs/name/algebra-proposal-candles-v1
 // ============================================
 app.post('/subgraphs/name/algebra-proposal-candles-v1', handleGraphQLRequest);
+
+// ============================================
+// CHECKPOINT INDEXER PASSTHROUGH (HTTPS)
+// The Checkpoint indexers (registry: 3003, candles: 3001) only speak
+// HTTP, so the browser app on https://futarchy.fi can't reach them
+// directly (mixed content). These two routes are transparent JSON
+// passthroughs that forward GraphQL POSTs to the configured upstream.
+// ============================================
+app.post('/registry/graphql', makeGraphQLPassthrough(() => ENDPOINTS.registry, 'registry'));
+app.post('/candles/graphql',  makeGraphQLPassthrough(() => ENDPOINTS.candles,  'candles'));
 
 // Start server
 
