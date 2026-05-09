@@ -347,11 +347,12 @@ export async function proxyCandlesQuery(query, variables = {}, chainId = 100) {
         .replace(/period:\s*"3600"/g, 'period: 3600')
         .replace(/orderBy:\s*periodStartUnix/g, 'orderBy: time');
 
-    // Prefix inline pool IDs in the query string. Catches both filter syntax
-    // (pool: "0xabc...") AND entity-lookup syntax (pool(id: "0xabc...")).
+    // Prefix inline pool/proposal IDs in the query string. Catches:
+    //   - filter syntax:        pool: "0xabc..." | proposal: "0xabc..."
+    //   - entity-lookup syntax: pool(id: "0xabc...") | proposal(id: "0xabc...")
     adaptedQuery = adaptedQuery
-        .replace(/pool:\s*"(0x[a-fA-F0-9]{40})"/g,
-            (_m, addr) => `pool: "${addChainPrefix(addr, chainId)}"`)
+        .replace(/(pool|proposal):\s*"(0x[a-fA-F0-9]{40})"/g,
+            (_m, field, addr) => `${field}: "${addChainPrefix(addr, chainId)}"`)
         .replace(/(pool|proposal)\s*\(\s*id\s*:\s*"(0x[a-fA-F0-9]{40})"/g,
             (_m, entity, addr) => `${entity}(id: "${addChainPrefix(addr, chainId)}"`);
 
