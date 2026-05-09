@@ -12,6 +12,7 @@ import { IS_CHECKPOINT, ENDPOINTS } from '../config/endpoints.js';
 import { fetchPoolsForProposal } from '../services/algebra-client.js';
 import { getRateCached } from '../services/rate-provider.js';
 import { getSpotPrice } from '../services/spot-price.js';
+import { extractTokensFromPools } from '../utils/token-from-pool.js';
 
 // ============================================================================
 // CONFIGURATION - Easy to modify
@@ -525,18 +526,18 @@ export async function handleMarketEventsRequest(req, res) {
         const noPool = findPoolByOutcome('NO');
 
         console.log(`   [DEBUG] Getting tokens...`);
-        // Get company token from proposal (Graph Node has nested objects, Checkpoint doesn't)
+        // Get company token from proposal (Graph Node has nested objects, Checkpoint doesn't).
+        // Checkpoint fallback walks all pools and parses names — supports
+        // CONDITIONAL ("YES_X / YES_Y"), EXPECTED_VALUE ("YES_X / Y"), and
+        // PREDICTION ("YES_Y / Y", currency-only) shapes.
         const proposal = pools[0]?.proposal;
         let companyToken = proposal?.companyToken;
         let currencyToken = proposal?.currencyToken;
 
-        // Checkpoint fallback: parse token symbols from pool name (e.g., "YES_GNO / YES_sDAI")
-        if (!companyToken?.symbol && yesPool?.name) {
-            const match = yesPool.name.match(/^YES_(\w+)\s*\/\s*YES_(\w+)$/);
-            if (match) {
-                companyToken = { id: null, symbol: match[1] };    // e.g., "GNO"
-                currencyToken = { id: null, symbol: match[2] };   // e.g., "sDAI"
-            }
+        if (!companyToken?.symbol || !currencyToken?.symbol) {
+            const fromPools = extractTokensFromPools(pools);
+            companyToken  = companyToken?.symbol  ? companyToken  : fromPools.companyToken;
+            currencyToken = currencyToken?.symbol ? currencyToken : fromPools.currencyToken;
         }
 
         // Convert prices to USD using chain-aware currency rate
@@ -568,7 +569,7 @@ export async function handleMarketEventsRequest(req, res) {
             },
             company_tokens: {
                 base: {
-                    tokenSymbol: companyToken?.symbol || 'PNK'
+                    tokenSymbol: companyToken?.symbol || 'TOKEN'
                 },
                 currency: {
                     tokenSymbol: currencyToken?.symbol || 'CURRENCY',
