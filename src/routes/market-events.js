@@ -514,9 +514,15 @@ export async function handleMarketEventsRequest(req, res) {
             : await fetchPoolsForProposal(tradingContractId);
         console.log(`   📦 Found ${pools.length} pools`);
 
-        // Find YES and NO conditional pools
-        const yesPool = pools.find(p => p.outcomeSide === 'YES' && p.type === 'CONDITIONAL');
-        const noPool = pools.find(p => p.outcomeSide === 'NO' && p.type === 'CONDITIONAL');
+        // Find YES/NO pool: prefer CONDITIONAL, fall back to PREDICTION (newer
+        // markets like GIP-150 v2 don't have CONDITIONAL pools), then EXPECTED_VALUE.
+        function findPoolByOutcome(side) {
+            return pools.find(p => p.outcomeSide === side && p.type === 'CONDITIONAL')
+                || pools.find(p => p.outcomeSide === side && p.type === 'PREDICTION')
+                || pools.find(p => p.outcomeSide === side && p.type === 'EXPECTED_VALUE');
+        }
+        const yesPool = findPoolByOutcome('YES');
+        const noPool = findPoolByOutcome('NO');
 
         console.log(`   [DEBUG] Getting tokens...`);
         // Get company token from proposal (Graph Node has nested objects, Checkpoint doesn't)
