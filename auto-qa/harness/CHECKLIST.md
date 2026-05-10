@@ -583,6 +583,17 @@ freshly-generated addresses as recipients; documented in
       Also created `auto-qa/harness/ci/README.md` on api
       side (mirrors interface ci/README.md) explaining the
       staging dance + currently-staged table.
+- [x] **3e-extend — INVARIANTS.md drift check.** Two new
+      steps appended to `auto-qa-harness-smoke.yml.staged`:
+      "Regenerate invariants catalog" (runs `npm run
+      invariants:catalog`) + "Verify invariants catalog
+      is in sync" (runs `git diff --exit-code` against
+      `auto-qa/harness/orchestrator/INVARIANTS.md`). Mirrors
+      the interface-side scenarios:catalog drift check (slice
+      3a). Without this, an invariant added without
+      regenerating INVARIANTS.md would silently drift in CI.
+      YAML re-validated via `js-yaml@4`; drift assertion
+      pre-verified locally (regen + git diff exits 0).
 - [ ] **3e-promote** — maintainer task: copy
       `auto-qa/harness/ci/auto-qa-harness-smoke.yml.staged`
       into `.github/workflows/auto-qa-harness-smoke.yml`

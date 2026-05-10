@@ -1104,7 +1104,52 @@ Phase 7 slice 3d summary (this iteration on the interface side):
   smoke-tested live first). Then slice 4 — full-stack
   docker-compose.
 
-Phase 7 slice 4d-root-aliases summary (this iteration, both sides):
+Phase 7 slice 3e-extend summary (this iteration on the api side):
+
+- **CI integration slice** (no new invariant). The api-
+  side staged smoke workflow (slice 3e) currently runs
+  `npm run smoke:scenarios` + a dry-run catalog sanity
+  check. It does NOT cover the new
+  `smoke-invariants-catalog.test.mjs` shipped two
+  iterations ago. This slice extends the staged workflow
+  with a mirror of the interface-side scenarios:catalog
+  drift check (slice 3a):
+
+  * **Step 1 — Regenerate invariants catalog**: runs
+    `npm run invariants:catalog` from `auto-qa/harness/`.
+  * **Step 2 — Verify invariants catalog is in sync**:
+    `git diff --exit-code auto-qa/harness/orchestrator/
+    INVARIANTS.md` from the repo root. Fails if a PR
+    added or edited an invariant without re-running the
+    catalog generator.
+
+- **Why the regen + git-diff pattern (vs running the
+  smoke test directly)**: matches the interface 3a
+  pattern exactly so the two CI workflows stay
+  symmetric. Both catch the same bug class
+  (forgot-to-regen catalog) at the same point in the
+  pipeline. The unit-level smoke test still runs in
+  developer-side `npm test`.
+
+- **Validation**:
+  * YAML re-parsed clean via `js-yaml@4`; new steps
+    appear in the parsed JSON at the right level inside
+    the `scenarios-smoke` job's `steps` array.
+  * Locally: ran the regen, then `git diff --exit-code
+    auto-qa/harness/orchestrator/INVARIANTS.md` from
+    repo root → exits 0 (would pass in CI).
+
+- **Workflow remains workflow_dispatch only**; nothing
+  about this slice changes the trigger model. Same
+  conservative roll-out as 3a/3c/3e.
+
+- **Why this iteration is CI-only on the api side**:
+  same reason as the last few slices — safe parallel
+  work that pays off whichever strategic direction the
+  user picks. Adds no new behavior; just protects an
+  existing artifact (INVARIANTS.md) at the CI layer.
+
+Phase 7 slice 4d-root-aliases summary (previous iteration, both sides):
 
 - **Tooling slice** (no new invariant, no new script).
   Cross-repo wiring: the new catalog scripts shipped in

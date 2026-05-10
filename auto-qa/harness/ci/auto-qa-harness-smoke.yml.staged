@@ -62,3 +62,18 @@ jobs:
           HARNESS_COMPOSE: '1'
           HARNESS_DRY_RUN: '1'
         run: node orchestrator/scenario-runner.mjs
+
+      - name: Regenerate invariants catalog
+        # Sister to the interface-side scenarios:catalog drift
+        # check (slice 3a there). Regens the committed
+        # orchestrator/INVARIANTS.md from the live INVARIANTS
+        # array; the next step diffs it.
+        working-directory: auto-qa/harness
+        run: npm run invariants:catalog
+
+      - name: Verify invariants catalog is in sync
+        # If a PR adds/changes an invariant without re-running
+        # the catalog script, this step fails. Fix locally with:
+        #   npm run auto-qa:e2e:invariants:catalog
+        # then commit the regenerated INVARIANTS.md.
+        run: git diff --exit-code auto-qa/harness/orchestrator/INVARIANTS.md
