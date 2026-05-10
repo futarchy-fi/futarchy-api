@@ -377,6 +377,103 @@ export const INVARIANTS = [
             return { ok: true, detail: `candles has ≥1 candle (sample id: ${j.data.candles[0].id})` };
         },
     },
+    {
+        name: 'candleOHLCOrdering',
+        description: 'latest candle satisfies OHLC: low ≤ {open, close} ≤ high (vacuously true when no candles)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // OHLC ordering is the most fundamental sanity check on
+            // aggregated candle data. A `high < low` or `close > high`
+            // (or analogous violations) means the period-aggregator's
+            // running min/max accumulators have a bug — either a
+            // signedness error, a swap-direction misclassification,
+            // or an uninitialized-min-equals-max edge case.
+            //
+            // Schema: open/high/low/close are String-encoded decimals
+            // (Algebra prices are stored as raw integers but
+            // Checkpoint's String type lets handlers emit decimal
+            // strings; either way parseFloat tolerates the format).
+            //
+            // Vacuously true when 0 candles exist — that's a
+            // distinct concern (candlesHasCandles).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ candles(first: 1, orderBy: time, orderDirection: desc) { id open high low close } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.candles)) {
+                throw new Error(`unexpected candles response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.candles.length === 0) {
+                return { ok: true, detail: 'no candles to check (vacuously true)' };
+            }
+            const c = j.data.candles[0];
+            const open = parseFloat(c.open);
+            const high = parseFloat(c.high);
+            const low = parseFloat(c.low);
+            const close = parseFloat(c.close);
+            for (const [name, val] of [['open', open], ['high', high], ['low', low], ['close', close]]) {
+                if (!Number.isFinite(val)) {
+                    throw new Error(`candle ${c.id}: ${name}="${c[name]}" is not a finite number`);
+                }
+            }
+            if (low > high) {
+                throw new Error(`candle ${c.id}: low=${low} > high=${high} (impossible OHLC ordering)`);
+            }
+            if (open < low || open > high) {
+                throw new Error(`candle ${c.id}: open=${open} outside [low=${low}, high=${high}]`);
+            }
+            if (close < low || close > high) {
+                throw new Error(`candle ${c.id}: close=${close} outside [low=${low}, high=${high}]`);
+            }
+            return { ok: true, detail: `candle ${c.id}: OHLC=${open}/${high}/${low}/${close} consistent` };
+        },
+    },
+    {
+        name: 'candleVolumesNonNegative',
+        description: 'latest candle has volumeToken0 ≥ 0 AND volumeToken1 ≥ 0 (vacuously true when no candles)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Volumes per period are always ≥ 0 by definition (sum of
+            // |swap amount| over swaps in the period). A negative volume
+            // means the aggregator's signed-amount bug: probably
+            // subtracting outgoing from incoming when it should be
+            // taking the absolute value.
+            //
+            // Schema: volumeToken0, volumeToken1 are String-encoded
+            // (same as OHLC fields). Distinct invariant from
+            // candleOHLCOrdering because the failure mode is
+            // different: OHLC failure = aggregator's min/max logic
+            // broken; volume failure = aggregator's accumulator bug.
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ candles(first: 1, orderBy: time, orderDirection: desc) { id volumeToken0 volumeToken1 } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.candles)) {
+                throw new Error(`unexpected candles response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.candles.length === 0) {
+                return { ok: true, detail: 'no candles to check (vacuously true)' };
+            }
+            const c = j.data.candles[0];
+            const v0 = parseFloat(c.volumeToken0);
+            const v1 = parseFloat(c.volumeToken1);
+            for (const [name, val] of [['volumeToken0', v0], ['volumeToken1', v1]]) {
+                if (!Number.isFinite(val)) {
+                    throw new Error(`candle ${c.id}: ${name}="${c[name]}" is not a finite number`);
+                }
+                if (val < 0) {
+                    throw new Error(`candle ${c.id}: ${name}=${val} < 0 (signed-amount aggregator bug)`);
+                }
+            }
+            return { ok: true, detail: `candle ${c.id}: volumes=${v0}/${v1} non-negative` };
+        },
+    },
     // ── Chain-process probes ────────────────────────────────────────
     // Validate the chain process itself before checking contract state.
     // If anvilBlockNumber + anvilChainId pass but rateSanity fails,

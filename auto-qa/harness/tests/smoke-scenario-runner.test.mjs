@@ -55,6 +55,15 @@ function startFixture({
     candlesPoolsCount = 1,
     candlesSwapsCount = 1,
     candlesCandlesCount = 1,
+    // Latest-candle field values for OHLC + volume invariants.
+    // Default values satisfy both invariants; override to simulate
+    // bugs in the aggregator.
+    latestCandleOpen = '0.45',
+    latestCandleHigh = '0.50',
+    latestCandleLow = '0.40',
+    latestCandleClose = '0.48',
+    latestCandleVolumeToken0 = '100.0',
+    latestCandleVolumeToken1 = '50.0',
     // Set to true to make the direct-indexer paths return 502, simulating
     // an indexer that's down even though the api passthrough still works
     // (e.g., api is caching).
@@ -128,8 +137,23 @@ function startFixture({
                         (_, i) => ({ id: `mock-pool-${i}` }));
                     const swaps = Array.from({ length: candlesSwapsCount },
                         (_, i) => ({ id: `mock-swap-${i}` }));
-                    const candles = Array.from({ length: candlesCandlesCount },
-                        (_, i) => ({ id: `mock-candle-${i}` }));
+                    // Latest-candle fields (OHLC + volumes) populated on
+                    // the FIRST element so candleOHLCOrdering and
+                    // candleVolumesNonNegative can probe a real-shape
+                    // record. `id` is set on every element so
+                    // candlesHasCandles still works.
+                    const candles = Array.from({ length: candlesCandlesCount }, (_, i) => {
+                        const row = { id: `mock-candle-${i}` };
+                        if (i === 0) {
+                            row.open = latestCandleOpen;
+                            row.high = latestCandleHigh;
+                            row.low = latestCandleLow;
+                            row.close = latestCandleClose;
+                            row.volumeToken0 = latestCandleVolumeToken0;
+                            row.volumeToken1 = latestCandleVolumeToken1;
+                        }
+                        return row;
+                    });
                     response.end(JSON.stringify({
                         data: { __typename: candlesDirectTypename, pools, swaps, candles },
                     }));
@@ -553,6 +577,96 @@ test('runAllInvariants — failure: registry has orgs but no aggregators (root e
     }
 });
 
+test('runAllInvariants — candleOHLCOrdering happy: low ≤ open/close ≤ high', async () => {
+    const fx = await startFixture();  // defaults: low=0.40 ≤ open=0.45, close=0.48 ≤ high=0.50
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'candleOHLCOrdering');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /OHLC.*consistent/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candle high < low (impossible OHLC)', async () => {
+    const fx = await startFixture({
+        latestCandleHigh: '0.30',
+        latestCandleLow: '0.60',
+        latestCandleOpen: '0.40',
+        latestCandleClose: '0.50',
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candleOHLCOrdering');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /low=0\.6 > high=0\.3|impossible OHLC ordering/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candle close > high', async () => {
+    const fx = await startFixture({
+        latestCandleHigh: '0.50',
+        latestCandleLow: '0.40',
+        latestCandleOpen: '0.45',
+        latestCandleClose: '0.99',
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candleOHLCOrdering');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /close=0\.99 outside/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — candleOHLCOrdering vacuously true when no candles', async () => {
+    const fx = await startFixture({ candlesCandlesCount: 0 });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'candleOHLCOrdering');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /vacuously true/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — candleVolumesNonNegative happy', async () => {
+    const fx = await startFixture();  // defaults: 100.0 / 50.0
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'candleVolumesNonNegative');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /volumes=100\/50 non-negative/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candle volume0 < 0 (signed-amount aggregator bug)', async () => {
+    const fx = await startFixture({ latestCandleVolumeToken0: '-1.5' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candleVolumesNonNegative');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /volumeToken0=-1\.5 < 0|signed-amount aggregator bug/);
+        // OHLC invariant still passes (only volume is broken)
+        const ohlc = results.find((r) => r.name === 'candleOHLCOrdering');
+        assert.equal(ohlc.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('runAllInvariants — candlesHasPools happy: 1 pool indexed', async () => {
     const fx = await startFixture();  // default candlesPoolsCount=1
     try {
@@ -665,6 +779,8 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /candlesHasPools/);
     assert.match(r.stdout, /candlesHasSwaps/);
     assert.match(r.stdout, /candlesHasCandles/);
+    assert.match(r.stdout, /candleOHLCOrdering/);
+    assert.match(r.stdout, /candleVolumesNonNegative/);
     assert.match(r.stdout, /anvilBlockNumber/);
     assert.match(r.stdout, /anvilChainId/);
     assert.match(r.stdout, /rateSanity/);

@@ -750,17 +750,18 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 16 invariants:
-      5 api-internal + 8 indexer probes (2 `__typename`
-      liveness + 6 data-aware: full registry-entity coverage
-      via `registryHasProposalEntities` + `registryHasOrganizations`
-      + `registryHasAggregators` (the latter two added this
-      slice) and full candles-pipeline coverage via the
-      Pools/Swaps/Candles triplet) + 3 chain-layer probes.
-      33 smoke tests green. Still to add: probabilityBounds
-      (price ∈ [0, 1]), candlesAggregation (cross-layer
-      Candle vs Swap reconciliation), chartShape, conservation,
-      cross-run monotonicity on rateSanity.
+      PROGRESS.md's invariant tables). Now 18 invariants:
+      5 api-internal + 10 indexer probes (2 `__typename`
+      liveness + 6 data-aware coverage probes + 2 first
+      data-SHAPE invariants — `candleOHLCOrdering` and
+      `candleVolumesNonNegative` added this slice; both
+      query the latest candle and validate
+      aggregator-output sanity, vacuously true when no
+      candles exist) + 3 chain-layer probes. 39 smoke tests
+      green. Still to add: probabilityBounds (price ∈ [0, 1]),
+      candlesAggregation (cross-layer Candle vs Swap
+      reconciliation), chartShape, conservation, cross-run
+      monotonicity on rateSanity.
 - [x] **4d-activate — orchestrator block UNCOMMENTED.**
       Replaced the `tail -f /dev/null` placeholder with
       `node orchestrator/scenario-runner.mjs`. Dropped the

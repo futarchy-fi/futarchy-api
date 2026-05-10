@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 16 invariants — 5 api-internal + 8 indexer + 3 chain-layer; 33 smoke tests green). 30/30 browser tests green. Phase 3 25+33 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 18 invariants — 5 api-internal + 10 indexer + 3 chain-layer; 39 smoke tests green). 30/30 browser tests green. Phase 3 25+39 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2333,6 +2333,78 @@ Phase 7 slice 4d-scenarios-more (registryHasOrganizations + registryHasAggregato
   `chartShape` (api vs indexer), `probabilityBounds`,
   `conservation`. Cross-run monotonicity on rateSanity needs
   persistent state.
+
+Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) summary (this iteration on the api side):
+
+- **First data-SHAPE invariants** — up to now all 16 indexer
+  invariants checked existence (does the row exist?). These
+  two check VALUES (does the row's content make sense?).
+  Both query the latest candle and validate
+  aggregator-output sanity:
+  * `candleOHLCOrdering` — `low ≤ open, close ≤ high`
+    (and `low ≤ high`)
+  * `candleVolumesNonNegative` — `volumeToken0 ≥ 0` AND
+    `volumeToken1 ≥ 0`
+
+- **Bug classes caught**:
+  * `candleOHLCOrdering` failure: aggregator's running
+    min/max accumulators have a bug — signedness error,
+    swap-direction misclassification, uninitialized-min-
+    equals-max edge case. A `high < low` is impossible by
+    definition; `close > high` means the close-of-period
+    update path missed a max() call.
+  * `candleVolumesNonNegative` failure: signed-amount bug
+    in the volume accumulator — probably subtracting
+    outgoing from incoming when it should be taking
+    `Math.abs()`. Negative volumes are nonsensical and
+    catch this directly.
+
+- **Vacuously true when no candles**: both invariants
+  return `ok` if `candles[]` is empty. That's the
+  candlesHasCandles invariant's concern, not these two.
+  Cleanly separates "no data" from "data is wrong" —
+  important for compose-stack startup where indexer
+  catch-up takes time.
+
+- **Schema details pinned**: open/high/low/close/volumeToken0/
+  volumeToken1 are all `String!` in the Candle entity (per
+  `futarchy-indexers/proposals-candles/checkpoint/src/schema.gql`).
+  Algebra prices are stored as raw integers but Checkpoint's
+  String type lets handlers emit decimal strings.
+  `parseFloat()` tolerates either format.
+
+- **Smoke fixture extension**: 6 new options
+  (`latestCandleOpen/High/Low/Close/VolumeToken0/VolumeToken1`),
+  each defaulting to a sane decimal string. The first
+  candle in the fixture's response array is populated with
+  the OHLC + volume fields; subsequent rows just have `id`.
+
+- **Smoke test coverage** — 6 new tests:
+  * candleOHLCOrdering happy: defaults satisfy
+    `low ≤ open/close ≤ high`
+  * failure: high < low (impossible OHLC)
+  * failure: close > high (outside [low, high])
+  * vacuously true when 0 candles
+  * candleVolumesNonNegative happy
+  * failure: volume0 < 0 (verifies OHLC invariant STILL
+    passes — distinguishes the two bug classes)
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 39/39 pass (359ms — was
+    33/33)
+  * `npm run scenarios:dry` → exits 0; lists 18 invariants
+    in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: ~90% (20 of ~22 sub-slices total).
+  The harness now has 18 invariants distinguishing
+  many distinct failure modes — existence vs shape vs
+  cross-layer reconciliation. Remaining bot-doable: the
+  cross-layer reconciliations (candlesAggregation
+  Candle-vs-Swap math, chartShape api-vs-indexer shape
+  consistency, probabilityBounds, conservation) and the
+  cross-run monotonicity on rateSanity.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 
