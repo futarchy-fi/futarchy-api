@@ -378,11 +378,43 @@ freshly-generated addresses as recipients; documented in
 
 **Goal:** first "real bug shape" replayable.
 
-- [ ] Scenario capture format decided (JSON snapshot vs full state dump)
-- [ ] First scenario captured: a settled historical proposal (block
-      range + tx list + expected end-state)
-- [ ] Replay framework in orchestrator: feed scenario → drive harness
-      → assert end-state matches
+**Phase 6 slice 1 (scenario format) — DONE:**
+
+- [x] Scenario capture format decided (was originally framed as
+      "JSON snapshot vs full state dump"; the design space turned
+      out broader). Decision: **executable `.scenario.mjs` modules
+      in `auto-qa/harness/scenarios/`** — full ADR at
+      `interface/auto-qa/harness/docs/ADR-002-scenario-format.md`.
+      Reuses the existing fixture vocabulary (mock factories,
+      wallet stub, signing tunnel) instead of porting it into a
+      JSON-interpreting shim. Full-stack snapshot (Option D)
+      deferred to Phase 7 chaos work.
+- [x] `auto-qa/harness/scenarios/` directory created with
+      `README.md` documenting the format + naming convention
+      (`<NN>-<short-name>.scenario.mjs`).
+
+**Phase 6 slice 2 (first scenario + runner) — TODO:**
+
+- [ ] First scenario captured: not the original "settled
+      historical proposal (block range + tx list + expected
+      end-state)" — that was full-stack-Option-D framing. Under
+      the chosen format (Option B), slice 2's first scenario is a
+      mocked-API + DOM-assertion bug-shape replay, e.g. the
+      stale-price-but-API-healthy class (PR #64 shape) lifted out
+      of `flows/dom-api-invariant.spec.mjs::4c v3b`.
+- [ ] Wrapper Playwright spec at `flows/scenarios.spec.mjs` that
+      auto-discovers every `*.scenario.mjs`, applies its mocks
+      before navigation, and runs its assertions. One Playwright
+      `test()` per scenario, reported with the scenario's `name`.
+
+**Phase 6 slice 3 (replay framework / catalog) — TODO:**
+
+- [ ] Replay framework: not the original "feed scenario → drive
+      harness → assert end-state" — the wrapper spec from slice 2
+      already does that for the chosen format. Slice 3 instead
+      adds a `scenarios:catalog` script that reads every scenario's
+      `bugShape` and emits a `SCENARIOS.md` index listing the
+      bug-shape coverage (becomes valuable once we have ≥3 scenarios).
 
 ## Phase 7 — Chaos injection + nightly CI
 

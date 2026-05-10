@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 slices 1-3 + 4a + 4b + 4c (v1, v2, v3a, **v3b**) landed on interface side. Latest: **4c v3b — THE CANONICAL PHASE 5 INVARIANT.** Mocked candles GraphQL returns YES=0.42 → flows through 6 layers of real React app code → DOM string "0.4200 SDAI". Phase 5 is now substantively done. 17/17 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase **6 slice 1** landed on interface side (scenario format ADR + structure). Phase 5: 17/17 browser tests green; canonical DOM↔API invariant working end-to-end. Phase 6 slice 1: ADR-002 picks executable `.scenario.mjs` modules over JSON snapshot or full state dump. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -782,7 +782,33 @@ Summary of slice 1:
   reconciliation) — more advanced bug-probe, not Phase 5
   acceptance-critical.
 
-Slice 4c v3b summary (this iteration on the interface side):
+Phase 6 slice 1 summary (this iteration on the interface side):
+
+- Scenario format decided. The original CHECKLIST framing was
+  "JSON snapshot vs full state dump"; the actual design space
+  turned out broader (JSON, executable .scenario.mjs modules,
+  naming conventions, full anvil state dump). Decision: **Option
+  B** — executable `.scenario.mjs` modules in
+  `auto-qa/harness/scenarios/`, exporting a `Scenario` object
+  with `{name, description, bugShape, route, mocks, assertions}`.
+- Rationale: reuses the existing fixture vocabulary
+  (makeGraphqlMockHandler, makeCandlesMockHandler,
+  fakePoolBearingProposal, installWalletStub, setupSigningTunnel)
+  directly. JSON would have required porting all of it into a
+  JSON-interpreting shim. Phase 6's stop-here value ("first real
+  bug shape replayable") is achievable today via mocked-API +
+  DOM assertions. Full-stack snapshot deferred to Phase 7 chaos
+  work.
+- Structure landed: ADR-002 at
+  `interface/auto-qa/harness/docs/ADR-002-scenario-format.md`;
+  `auto-qa/harness/scenarios/` directory with README documenting
+  format + naming convention (<NN>-<short-name>.scenario.mjs).
+- Slice 2 (next) lands the first scenario (likely the
+  stale-price-but-API-healthy class lifted from slice 4c v3b)
+  + a wrapper Playwright spec that auto-discovers + runs every
+  *.scenario.mjs file.
+
+Slice 4c v3b summary (previous iteration on the interface side):
 
 - Built directly on v3a's plumbing. Same two-endpoint mock
   setup, but candles now returns a known YES price (0.42), and
