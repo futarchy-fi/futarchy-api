@@ -32,6 +32,16 @@ function startFixture({
     healthOk = true,
     registryTypename = 'Query',
     candlesTypename = 'Query',
+    // Direct-indexer probes (slice 4d-scenarios-more) hit /registry-direct/graphql
+    // and /candles-direct/graphql so we can distinguish "via api" from
+    // "direct" in the same fixture.
+    registryDirectTypename = 'Query',
+    candlesDirectTypename = 'Query',
+    // Set to true to make the direct-indexer paths return 502, simulating
+    // an indexer that's down even though the api passthrough still works
+    // (e.g., api is caching).
+    registryDirectDown = false,
+    candlesDirectDown = false,
 } = {}) {
     return new Promise((res) => {
         const server = createServer((req, response) => {
@@ -53,6 +63,18 @@ function startFixture({
                     response.end(JSON.stringify({ data: { __typename: candlesTypename } }));
                     return;
                 }
+                if (req.url === '/registry-direct/graphql' && req.method === 'POST') {
+                    if (registryDirectDown) { response.statusCode = 502; response.end('indexer down'); return; }
+                    response.setHeader('content-type', 'application/json');
+                    response.end(JSON.stringify({ data: { __typename: registryDirectTypename } }));
+                    return;
+                }
+                if (req.url === '/candles-direct/graphql' && req.method === 'POST') {
+                    if (candlesDirectDown) { response.statusCode = 502; response.end('indexer down'); return; }
+                    response.setHeader('content-type', 'application/json');
+                    response.end(JSON.stringify({ data: { __typename: candlesDirectTypename } }));
+                    return;
+                }
                 response.statusCode = 404;
                 response.end('not found');
             });
@@ -62,6 +84,17 @@ function startFixture({
             res({ url: `http://127.0.0.1:${port}`, stop: () => new Promise((r) => server.close(r)) });
         });
     });
+}
+
+// Helper: build a ctx that wires the direct-probe URLs to the fixture's
+// distinguished paths. Use for any test that wants the registryDirect /
+// candlesDirect invariants to find real endpoints.
+function fullCtx(fxUrl) {
+    return {
+        apiUrl: fxUrl,
+        registryUrl: `${fxUrl}/registry-direct/graphql`,
+        candlesUrl: `${fxUrl}/candles-direct/graphql`,
+    };
 }
 
 // ─── tests ──────────────────────────────────────────────────────────
@@ -77,10 +110,10 @@ test('INVARIANTS array shape (slice 4d-scenarios scaffold)', () => {
     }
 });
 
-test('runAllInvariants — happy path: both invariants pass', async () => {
+test('runAllInvariants — happy path: all invariants pass', async () => {
     const fx = await startFixture();
     try {
-        const { pass, results } = await runAllInvariants({ apiUrl: fx.url });
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
         assert.equal(pass, true, 'overall pass');
         assert.equal(results.length, INVARIANTS.length);
         for (const r of results) {
@@ -94,7 +127,7 @@ test('runAllInvariants — happy path: both invariants pass', async () => {
 test('runAllInvariants — failure: api /health is 503', async () => {
     const fx = await startFixture({ healthOk: false });
     try {
-        const { pass, results } = await runAllInvariants({ apiUrl: fx.url });
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
         assert.equal(pass, false, 'overall fail');
         const health = results.find((r) => r.name === 'apiHealth');
         assert.equal(health.ok, false);
@@ -110,7 +143,7 @@ test('runAllInvariants — failure: api /health is 503', async () => {
 test('runAllInvariants — failure: registry typename wrong', async () => {
     const fx = await startFixture({ registryTypename: 'NotQuery' });
     try {
-        const { pass, results } = await runAllInvariants({ apiUrl: fx.url });
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
         assert.equal(pass, false);
         const reg = results.find((r) => r.name === 'apiCanReachRegistry');
         assert.equal(reg.ok, false);
@@ -123,7 +156,7 @@ test('runAllInvariants — failure: registry typename wrong', async () => {
 test('runAllInvariants — failure: candles typename wrong (slice 4d-scenarios-more)', async () => {
     const fx = await startFixture({ candlesTypename: 'WrongType' });
     try {
-        const { pass, results } = await runAllInvariants({ apiUrl: fx.url });
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
         assert.equal(pass, false);
         const candles = results.find((r) => r.name === 'apiCanReachCandles');
         assert.equal(candles.ok, false);
@@ -133,6 +166,40 @@ test('runAllInvariants — failure: candles typename wrong (slice 4d-scenarios-m
         assert.equal(health.ok, true);
         const reg = results.find((r) => r.name === 'apiCanReachRegistry');
         assert.equal(reg.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: registry direct probe down', async () => {
+    const fx = await startFixture({ registryDirectDown: true });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const direct = results.find((r) => r.name === 'registryDirect');
+        assert.equal(direct.ok, false);
+        assert.match(direct.error, /HTTP 502|502/);
+        // Api-passthrough invariants still pass — useful debug signal
+        // (api can reach registry by some other route than orchestrator
+        // can; likely caching or a stale connection)
+        const apiReg = results.find((r) => r.name === 'apiCanReachRegistry');
+        assert.equal(apiReg.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candles direct probe down', async () => {
+    const fx = await startFixture({ candlesDirectDown: true });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const direct = results.find((r) => r.name === 'candlesDirect');
+        assert.equal(direct.ok, false);
+        assert.match(direct.error, /HTTP 502|502/);
+        // Both api-passthrough invariants still pass
+        const apiCandles = results.find((r) => r.name === 'apiCanReachCandles');
+        assert.equal(apiCandles.ok, true);
     } finally {
         await fx.stop();
     }
@@ -152,6 +219,8 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /apiHealth/);
     assert.match(r.stdout, /apiCanReachRegistry/);
     assert.match(r.stdout, /apiCanReachCandles/);
+    assert.match(r.stdout, /registryDirect/);
+    assert.match(r.stdout, /candlesDirect/);
 });
 
 test('scenario-runner CLI — native mode exits 2 with guidance', () => {

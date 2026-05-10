@@ -103,6 +103,46 @@ export const INVARIANTS = [
             return { ok: true, detail: 'candles returned __typename=Query via api passthrough' };
         },
     },
+    // ── Direct-indexer probes ───────────────────────────────────────
+    // The two below bypass the api and hit the indexer GraphQL
+    // endpoints directly. They validate that the orchestrator
+    // container can reach the indexers over harness-net (the
+    // dual-homing from slice 4b-network-wire). If the api↔* invariants
+    // pass but these fail, the api is somehow reaching the indexers
+    // by a different route than the orchestrator can — useful debug
+    // signal.
+    {
+        name: 'registryDirect',
+        description: 'registry-checkpoint GraphQL responds to __typename without going through api',
+        layer: 'orchestrator↔registry',
+        check: async (ctx) => {
+            const j = await fetchJson(ctx.registryUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: PROBE_QUERY }),
+            });
+            if (j?.data?.__typename !== 'Query') {
+                throw new Error(`unexpected __typename response: ${JSON.stringify(j)}`);
+            }
+            return { ok: true, detail: `direct registry returned __typename=Query (${ctx.registryUrl})` };
+        },
+    },
+    {
+        name: 'candlesDirect',
+        description: 'candles-checkpoint GraphQL responds to __typename without going through api',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: PROBE_QUERY }),
+            });
+            if (j?.data?.__typename !== 'Query') {
+                throw new Error(`unexpected __typename response: ${JSON.stringify(j)}`);
+            }
+            return { ok: true, detail: `direct candles returned __typename=Query (${ctx.candlesUrl})` };
+        },
+    },
 ];
 
 /**

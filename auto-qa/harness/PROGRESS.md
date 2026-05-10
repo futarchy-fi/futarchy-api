@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 3 invariants: apiHealth + apiCanReachRegistry + apiCanReachCandles). 30/30 browser tests green. Phase 3 25+7 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 5 invariants — 3 api-passthrough + 2 direct-probe; 9 smoke tests green). 30/30 browser tests green. Phase 3 25+9 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -1844,6 +1844,65 @@ Phase 7 slice 4d-scenarios-more (apiCanReachCandles) summary (this iteration on 
   individually reachable from the orchestrator container,
   which validates the network bridging from slice
   4b-network-wire is correct).
+
+Phase 7 slice 4d-scenarios-more (registryDirect + candlesDirect) summary (this iteration on the api side):
+
+- **Two new invariants in one iteration** — both small,
+  symmetrical, naturally paired:
+  * `registryDirect` (orchestrator↔registry layer) — POST
+    `__typename` to `ctx.registryUrl` directly, bypasses
+    api passthrough entirely
+  * `candlesDirect` (orchestrator↔candles layer) — same
+    pattern against `ctx.candlesUrl`
+
+- **Why these matter as a pair with the api-passthrough
+  invariants**: if api↔registry passes but registryDirect
+  fails (or vice versa), it's a useful debug signal — the
+  api is reaching the indexer by some route the
+  orchestrator can't (e.g., DNS cache, connection pool,
+  cached response). The compose stack expects both routes
+  to work; divergence is a regression.
+
+- **Validates slice 4b-network-wire end-to-end** (or will,
+  once the daemon-required smoke is human-run): the
+  orchestrator container is single-homed on harness-net,
+  but the indexers are dual-homed (registry-net +
+  harness-net via the per-service `extends:` blocks).
+  These two invariants are the first that EXERCISE the
+  bridging — apiHealth + apiCanReachRegistry/Candles only
+  test api-internal paths (api is also single-homed on
+  harness-net; api↔indexer goes service-name → bridge).
+
+- **What landed**:
+  * `auto-qa/harness/orchestrator/invariants.mjs` — added
+    `registryDirect` + `candlesDirect` after
+    `apiCanReachCandles`. Both follow the now-stable
+    invariant shape; both use `ctx.registryUrl` /
+    `ctx.candlesUrl` directly (no derived path
+    construction).
+  * `auto-qa/harness/tests/smoke-scenario-runner.test.mjs`
+    — fixture extended with `/registry-direct/graphql` +
+    `/candles-direct/graphql` paths (distinguished from
+    the api-passthrough versions to test them
+    independently); new `fullCtx(fxUrl)` helper bundles
+    the URLs cleanly; existing happy-path test renamed
+    from "both invariants pass" to "all invariants pass"
+    (5 of them now); two new failure-path tests verify
+    direct-probe failures don't short-circuit the
+    api-passthrough ones (and vice versa); CLI dry-run
+    test extended to assert all 5 invariants appear in
+    stdout.
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 9/9 pass (167ms)
+  * `npm run scenarios:dry` → exits 0; lists all 5
+    invariants in catalog (3 api-passthrough + 2 direct)
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: ~80% done (13 of ~16+ sub-slices total
+  — slice 4d-scenarios-more is roughly half-way through
+  the planned per-invariant additions).
 
 Slice 4c v3b summary (previous iteration on the interface side):
 
