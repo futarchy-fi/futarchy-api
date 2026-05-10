@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent + anvilSnapshotCapabilityPresent + swapAmountsAllRowsPositive + apiHealthBodyShape + anvilTimeWarpCapabilityPresent + apiWarmerBodyShape + candlesIndexerSchemaHasRequiredTypes + registryIndexerSchemaHasRequiredTypes + candleVolumesAllRowsNonNegative + candleOHLCAllRowsConsistent)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **55 invariants** — 14 api-internal + 31 indexer + 10 chain-layer; iterate-all-rows pattern now covers ALL THREE main accumulator entities (swap amounts + candle volumes + candle OHLC); 188 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent + anvilSnapshotCapabilityPresent + swapAmountsAllRowsPositive + apiHealthBodyShape + anvilTimeWarpCapabilityPresent + apiWarmerBodyShape + candlesIndexerSchemaHasRequiredTypes + registryIndexerSchemaHasRequiredTypes + candleVolumesAllRowsNonNegative + candleOHLCAllRowsConsistent)** on api side + Phase 7 slice **4d-by-layer-script** (`npm run scenarios:by-layer` prints summary table + per-layer detail — catalog ergonomics for navigating 55 invariants at a glance) (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **55 invariants** (10 api + 4 api↔candles + 2 api↔registry + 21 orchestrator↔candles + 8 orchestrator↔registry + 10 orchestrator↔chain — per `scenarios:by-layer`); 189 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,64 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (candleOHLCAllRowsConsistent) summary (this iteration on the api side):
+Phase 7 slice 4d-by-layer-script (catalog ergonomics) summary (this iteration on the api side):
+
+- **Tooling slice** (no new invariant). At 55 invariants
+  the dry-run flat catalog is hard to scan. Adds
+  `npm run scenarios:by-layer` that prints invariants
+  grouped by layer, with both a summary table (layer +
+  count + bar-chart) AND a per-layer detail block.
+
+- **What it answers at a glance**:
+  * "What does the chain layer cover?" → scroll to the
+    `── orchestrator↔chain ──` block; 10 names listed.
+  * "Which probes cross to the candles indexer?" →
+    `── api↔candles ──` block; 4 names.
+  * "Where's the catalog growing fastest?" → summary
+    table's bar-chart shows orchestrator↔candles is
+    the densest at 21 invariants.
+
+- **Authoritative layer breakdown surfaced**:
+  ```
+  api                    10
+  api↔candles             4
+  api↔registry            2
+  orchestrator↔candles   21
+  orchestrator↔chain     10
+  orchestrator↔registry   8
+                       ----
+                         55
+  ```
+  This corrects an earlier inconsistency in the status
+  line where api-touching invariants (api + api↔X) were
+  variously bucketed; the source of truth is now this
+  script's grouping.
+
+- **Implementation**: 35-line `scripts/scenarios-by-layer.mjs`
+  imports INVARIANTS, groups by `layer` field, prints
+  text. No flags, no colors, deliberately scriptable
+  (pipe into grep/awk for filtering). Same import style
+  as the existing dry-run output but reorganized.
+
+- **Smoke test**: 1 new (asserts header line, summary
+  table format, per-layer detail sections, sanity-check
+  that the chain-CAPABILITY trio names appear under the
+  chain layer block). 189/189 pass (was 188).
+
+- **Why a tooling slice**: at 55 invariants and growing,
+  the catalog needs navigation. New contributors asking
+  "what's covered for the chain layer?" can now run one
+  command instead of grepping invariants.mjs. Same
+  rationale as the existing `scenarios:catalog` script
+  on the interface side.
+
+- **Slice 4 progress: ~99% (42+ of ~30 sub-slices)**.
+  Catalog ergonomics meets the catalog-size milestone.
+  Still to add (per CHECKLIST): candlesAggregation,
+  conservation, TWAP monotonicity, cross-run rate
+  monotonicity.
+
+Phase 7 slice 4d-scenarios-more (candleOHLCAllRowsConsistent) summary (previous iteration on the api side):
 
 - **Third iterate-all-rows extension** — completes the
   iterate-all-rows TRIAD on the indexer's main accumulator

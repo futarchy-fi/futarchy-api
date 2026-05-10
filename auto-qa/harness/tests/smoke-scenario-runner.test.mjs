@@ -4002,3 +4002,26 @@ test('scenario-runner CLI — native mode exits 2 with guidance', () => {
     assert.equal(r.status, 2);
     assert.match(r.stderr, /native mode not yet supported/);
 });
+
+test('scenarios-by-layer CLI — prints summary table + per-layer detail (slice 4d-scenarios-more catalog ergonomics)', () => {
+    // The script imports INVARIANTS at module load and prints them
+    // grouped by layer. No network, no fixtures.
+    const BY_LAYER = resolve(__dirname, '..', 'scripts', 'scenarios-by-layer.mjs');
+    const r = spawnSync('node', [BY_LAYER], { encoding: 'utf8' });
+    assert.equal(r.status, 0, `exit status: ${r.status}, stderr: ${r.stderr}`);
+    // Header line: total + layer count
+    assert.match(r.stdout, /invariant catalog: \d+ total across \d+ layers/);
+    // Summary table (each layer line has a count + bar)
+    assert.match(r.stdout, /summary by layer:/);
+    assert.match(r.stdout, /api +\d+ +#+/);
+    assert.match(r.stdout, /api↔candles +\d+ +#+/);
+    assert.match(r.stdout, /orchestrator↔chain +\d+ +#+/);
+    // Per-layer detail sections
+    assert.match(r.stdout, /── api \(\d+\) ──/);
+    assert.match(r.stdout, /── orchestrator↔chain \(\d+\) ──/);
+    // Sanity: at least the chain-CAPABILITY trio appears under
+    // the chain layer detail block
+    assert.match(r.stdout, /anvilImpersonationCapabilityPresent/);
+    assert.match(r.stdout, /anvilSnapshotCapabilityPresent/);
+    assert.match(r.stdout, /anvilTimeWarpCapabilityPresent/);
+});

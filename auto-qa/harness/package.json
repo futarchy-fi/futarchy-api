@@ -25,6 +25,7 @@
         "indexers:stop": "node scripts/start-indexers.mjs --stop",
         "scenarios:dry": "HARNESS_COMPOSE=1 HARNESS_DRY_RUN=1 node orchestrator/scenario-runner.mjs",
         "scenarios:run": "HARNESS_COMPOSE=1 node orchestrator/scenario-runner.mjs",
+        "scenarios:by-layer": "node scripts/scenarios-by-layer.mjs",
         "replay": "echo 'TODO Phase 6 — scenario replay runner' && exit 1",
         "test": "node --test 'tests/**/*.test.mjs'"
     },
