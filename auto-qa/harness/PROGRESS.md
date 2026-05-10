@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **44 invariants** — 12 api-internal + 26 indexer + 6 chain-layer; X-Cache-TTL header now probed unconditionally on both HIT + MISS paths; 144 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **45 invariants** — 12 api-internal + 26 indexer + 7 chain-layer; chain-RPC-CONSISTENCY check landed (net_version ↔ eth_chainId); 149 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,61 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (apiUnifiedChartXCacheTtlPresent) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (anvilNetworkVersionMatchesChainId) summary (this iteration on the api side):
+
+- **Chain-RPC-CONSISTENCY check** — seventh chain-layer
+  invariant. Asserts net_version (decimal string) and
+  eth_chainId (hex) numerically agree. The two methods
+  should report the same chain ID by spec (net_version
+  is the legacy method; eth_chainId is the EIP-695 modern
+  method). Divergence between them silently breaks any
+  consumer that picks one or the other.
+
+- **45-invariant milestone**. Layer breakdown: 12 api-
+  internal + 26 indexer + 7 chain-layer (was 6).
+
+- **Orthogonal to anvilChainId**: anvilChainId asserts
+  eth_chainId === 0x64 (the EXPECTED Gnosis value). This
+  one asserts net_version === eth_chainId (CONSISTENCY
+  regardless of WHAT they equal). Both pass independently:
+  * anvilChainId → "right network"
+  * this → "RPC layer agrees with itself"
+  Demonstrated by the bare-anvil-31337 test: both methods
+  report 31337, this passes (consistency intact),
+  anvilChainId fails (wrong network).
+
+- **Bug shapes caught (NOT caught by anvilChainId alone)**:
+  * RPC handler ships eth_chainId fix but forgets to
+    update net_version (or vice versa) on a fork rebase
+  * Mock fixture hardcodes one but not the other
+  * Anvil version regression where one method reads from
+    a stale cached config and the other from live state
+  * Reverse-proxy misconfig that routes net_version
+    and eth_chainId to different upstreams (a genuinely
+    seen bug pattern in multi-chain RPC gateways)
+
+- **Smoke tests**: 5 new (default 0x64↔100 happy;
+  bare-anvil-31337 demonstrates orthogonality —
+  consistency passes, anvilChainId fails; off-by-one
+  divergence 0x64↔101 — anvilChainId STILL passes
+  (right value), only consistency catches it; non-
+  numeric net_version='abc'; null net_version handler
+  regression). 1 new fixture knob (netVersion). 1 new
+  RPC dispatch case (net_version). 149/149 pass (was 144).
+
+- Slice 4 progress: ~98% (31+ of ~30 sub-slices). Chain
+  layer now has SEVEN coverage points: existence
+  (anvilBlockNumber), identity-network-expected
+  (anvilChainId), identity-client (anvilClientVersionMentionsAnvil),
+  block shape (anvilLatestBlockSensible), fee market
+  (anvilGasPricePresent), RPC-method-consistency
+  (anvilNetworkVersionMatchesChainId — NEW), economic
+  anchor (rateSanity). Defense-in-depth ring around the
+  chain layer that scenarios depend on. Still to add
+  (per CHECKLIST): candlesAggregation, conservation,
+  TWAP monotonicity, cross-run rate monotonicity.
+
+Phase 7 slice 4d-scenarios-more (apiUnifiedChartXCacheTtlPresent) summary (previous iteration on the api side):
 
 - **Second response-HEADER probe** in the catalog. Sister
   to apiUnifiedChartHasObservabilityHeaders (X-Cache +

@@ -206,6 +206,12 @@ function startFixture({
     // to null (EIP-1559-only mode), '0x0' (broken fee market), or a
     // non-string (RPC-layer regression).
     gasPriceHex = '0x12a05f200',
+    // net_version response for anvilNetworkVersionMatchesChainId
+    // (slice 4d-scenarios-more). Default '100' = matches the
+    // chainIdHex default of '0x64' (Gnosis). Tests override to
+    // '101' (mismatch — silent divergence bug), 'abc' (non-numeric
+    // — legacy-format violation), or null (handler regression).
+    netVersion = '100',
 } = {}) {
     // ── shared row builders ──────────────────────────────────────────
     // Pulled out of the per-route handlers so the api passthrough
@@ -470,6 +476,8 @@ function startFixture({
                             return replyResult(clientVersion);
                         case 'eth_gasPrice':
                             return replyResult(gasPriceHex);
+                        case 'net_version':
+                            return replyResult(netVersion);
                         default:
                             response.end(JSON.stringify({
                                 jsonrpc: '2.0', id: parsed.id ?? 1,
@@ -1098,6 +1106,99 @@ test('runAllInvariants — failure: anvilGasPricePresent non-hex response (numbe
         const inv = results.find((r) => r.name === 'anvilGasPricePresent');
         assert.equal(inv.ok, false);
         assert.match(inv.error, /returned non-hex-string.*RPC-layer regression/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — anvilNetworkVersionMatchesChainId happy: net_version="100" matches eth_chainId="0x64"', async () => {
+    const fx = await startFixture();  // defaults: chainIdHex='0x64', netVersion='100'
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'anvilNetworkVersionMatchesChainId');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /eth_chainId=0x64.*net_version=100.*consistent/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — anvilNetworkVersionMatchesChainId happy: both methods agree on a non-Gnosis chain (regardless of WHAT they equal)', async () => {
+    // The invariant checks CONSISTENCY between the two methods,
+    // independent of the EXPECTED chain. So if both report bare
+    // anvil 31337, this passes (and anvilChainId fails — distinct
+    // domain). Demonstrates the orthogonality of the two checks.
+    const fx = await startFixture({
+        chainIdHex: '0x7a69',  // 31337 = bare anvil
+        netVersion: '31337',
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);  // anvilChainId fails (wrong network)
+        const inv = results.find((r) => r.name === 'anvilNetworkVersionMatchesChainId');
+        assert.equal(inv.ok, true);  // ...but net/chain are CONSISTENT
+        assert.match(inv.detail, /eth_chainId=0x7a69.*net_version=31337.*consistent/);
+        const chain = results.find((r) => r.name === 'anvilChainId');
+        assert.equal(chain.ok, false);  // anvilChainId still rejects bare anvil
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilNetworkVersionMatchesChainId methods diverge silently (RPC layer disagreement)', async () => {
+    // Reverse-proxy misconfig that routes net_version and eth_chainId
+    // to different upstreams; or fork-rebase where one method got
+    // updated and the other didn't. Both pass type checks (right
+    // shape) but report different chain IDs. Catastrophic for any
+    // multi-method consumer.
+    const fx = await startFixture({
+        chainIdHex: '0x64',
+        netVersion: '101',  // off-by-one — looks plausible but wrong
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilNetworkVersionMatchesChainId');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /net_version="101" \(= 101\) ≠ eth_chainId="0x64" \(= 100\).*RPC layer disagrees with itself/);
+        // anvilChainId STILL passes (eth_chainId is the right value);
+        // only the cross-method consistency check catches this. That's
+        // the value-add over anvilChainId alone.
+        const chain = results.find((r) => r.name === 'anvilChainId');
+        assert.equal(chain.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilNetworkVersionMatchesChainId net_version non-numeric', async () => {
+    // Legacy-format violation: net_version is required to be a
+    // decimal integer string by the spec. A non-numeric value
+    // breaks parseInt() consumers entirely.
+    const fx = await startFixture({ netVersion: 'abc' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilNetworkVersionMatchesChainId');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /net_version expected decimal integer string, got "abc"/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilNetworkVersionMatchesChainId net_version null (handler regression)', async () => {
+    // RPC handler doesn't respond to net_version at all (returns
+    // null result). Tools depending on the legacy method silently
+    // break.
+    const fx = await startFixture({ netVersion: null });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilNetworkVersionMatchesChainId');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /net_version returned non-string.*null/);
     } finally {
         await fx.stop();
     }

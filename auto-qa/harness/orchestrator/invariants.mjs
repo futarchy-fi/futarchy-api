@@ -2002,6 +2002,63 @@ export const INVARIANTS = [
             return { ok: true, detail: `gas price ${gasPrice} wei` };
         },
     },
+    {
+        name: 'anvilNetworkVersionMatchesChainId',
+        description: 'net_version (decimal string) numerically equals eth_chainId (hex). Catches RPC handler regressions where the two methods diverge — silently breaks consumers that pick one or the other',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            // Consistency check across two JSON-RPC methods that
+            // SHOULD agree:
+            //   * eth_chainId → '0x64' (hex; standard since EIP-695)
+            //   * net_version → '100'  (decimal string; legacy)
+            //
+            // Both name the same chain. Old tooling uses net_version;
+            // newer uses eth_chainId. They diverging means one of them
+            // is reporting a stale or wrong value, which silently
+            // breaks consumers depending on which method they pick.
+            //
+            // Bug shapes caught (NOT caught by anvilChainId alone):
+            //   * RPC handler ships eth_chainId fix but forgets to
+            //     update net_version (or vice versa) on a fork rebase
+            //   * Mock fixture hardcodes one but not the other
+            //   * Anvil version regression where one method reads
+            //     from a stale cached config and the other from
+            //     the live chain state
+            //   * Reverse-proxy misconfig that routes net_version
+            //     and eth_chainId to different upstreams (a
+            //     genuinely seen bug pattern in multi-chain RPC
+            //     gateways)
+            //
+            // Why a separate invariant: anvilChainId asserts
+            // eth_chainId === 0x64 (the EXPECTED value). This one
+            // asserts net_version === eth_chainId (CONSISTENCY).
+            // Both could pass independently:
+            //   * anvilChainId passes if eth_chainId returns 0x64
+            //   * this passes if net_version === eth_chainId
+            //     (regardless of WHAT they both equal)
+            // anvilChainId catches "wrong chain"; this catches
+            // "RPC layer disagrees with itself".
+            const [chainIdHex, netVersion] = await Promise.all([
+                rpcRequest(ctx.rpcUrl, 'eth_chainId', []),
+                rpcRequest(ctx.rpcUrl, 'net_version', []),
+            ]);
+            if (typeof chainIdHex !== 'string' || !chainIdHex.startsWith('0x')) {
+                throw new Error(`eth_chainId returned non-hex-string: ${JSON.stringify(chainIdHex)}`);
+            }
+            if (typeof netVersion !== 'string') {
+                throw new Error(`net_version returned non-string: ${JSON.stringify(netVersion)?.slice(0, 60)}`);
+            }
+            if (!/^\d+$/.test(netVersion)) {
+                throw new Error(`net_version expected decimal integer string, got ${JSON.stringify(netVersion)} (legacy format requirement — consumers parseInt() will get a wrong value or NaN)`);
+            }
+            const chainIdNum = BigInt(chainIdHex);
+            const netVersionNum = BigInt(netVersion);
+            if (chainIdNum !== netVersionNum) {
+                throw new Error(`net_version="${netVersion}" (= ${netVersionNum}) ≠ eth_chainId="${chainIdHex}" (= ${chainIdNum}) — RPC layer disagrees with itself; consumers picking one method or the other get inconsistent answers`);
+            }
+            return { ok: true, detail: `eth_chainId=${chainIdHex} ↔ net_version=${netVersion} (consistent)` };
+        },
+    },
     // ── Economic invariants ─────────────────────────────────────────
     // Always-on truth properties from PROGRESS.md's "Economic
     // invariants" table. Each one validates a single chain-level

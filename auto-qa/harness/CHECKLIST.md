@@ -774,10 +774,26 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). **Now 44 invariants**:
-      12 api-internal + 26 indexer probes + 6 chain-layer.
-      144 smoke tests green.
-      `apiUnifiedChartXCacheTtlPresent` added this slice
+      PROGRESS.md's invariant tables). **Now 45 invariants**:
+      12 api-internal + 26 indexer probes + 7 chain-layer.
+      149 smoke tests green.
+      `anvilNetworkVersionMatchesChainId` added this slice —
+      seventh chain-layer invariant; chain-RPC-CONSISTENCY
+      check. Asserts net_version (decimal string) and
+      eth_chainId (hex) numerically agree. Orthogonal to
+      anvilChainId: that asserts eth_chainId === 0x64 (the
+      EXPECTED value); this asserts net_version ===
+      eth_chainId (CONSISTENCY regardless of what they
+      equal). Catches RPC handler regressions where the
+      two methods diverge — e.g., fork rebase updates
+      one but not the other; reverse-proxy misconfig
+      routes them to different upstreams; mock fixture
+      hardcodes one but not the other. anvilChainId
+      STILL passes for the off-by-one divergence test
+      (eth_chainId is right) — only the consistency
+      check catches it.
+
+      `apiUnifiedChartXCacheTtlPresent` (previous slice)
       — second response-HEADER probe (sister to
       apiUnifiedChartHasObservabilityHeaders which covers
       X-Cache + X-Response-Time; this covers X-Cache-TTL).
