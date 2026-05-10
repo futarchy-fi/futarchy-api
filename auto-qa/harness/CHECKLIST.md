@@ -74,11 +74,24 @@ agreed-upon, without installing heavy deps or running real services.
 
 **Goal:** first cross-layer assertion working end-to-end.
 
-- [ ] Local futarchy-api launchable with `RPC_URL` pointed at the
-      harness anvil
-- [ ] Orchestrator can hit BOTH the api endpoint AND anvil directly
-      and compare a single number (e.g. block height)
-- [ ] First invariant landed: `chainBlockNumber === api.healthBlock`
+**Reframed during Phase 2 slice 1:** the api consumes a Checkpoint
+indexer GraphQL endpoint (not RPC directly), so a literal
+`anvil.blockNumber === api.somethingBlock` comparison defers to
+Phase 3 when the local indexer joins. Phase 2's foundational
+deliverable is **dual-source liveness** — orchestrator can drive
+both layers in parallel and probe each via its native protocol.
+
+- [x] Local futarchy-api launchable from the orchestrator
+      (`startLocalApi` in `orchestrator/services.mjs`; spawns
+      `node src/index.js` from repo root, awaits `/health` 200)
+- [x] Orchestrator can hit BOTH the api endpoint AND anvil directly
+      and compare values (api `/health` + `/warmer`; anvil
+      `eth_chainId` + `eth_blockNumber` — see
+      `tests/smoke-api-health.test.mjs`)
+- [ ] First **literal** cross-layer block invariant
+      `chainBlockNumber === indexerHead` — defers to Phase 3.
+      Placeholder logged in `smoke-api-health.test.mjs` so the
+      Phase 3 wiring point is obvious.
 
 ## Phase 3 — Local Checkpoint indexer in-loop
 

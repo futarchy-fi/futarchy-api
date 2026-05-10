@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 1 — slices 1-4 landed. 4 smoke tests pass against a real Gnosis fork (start-fork+block-clock, setNextTimestamp, setBalance, impersonateAccount+sendTransaction). 6/6 CHECKLIST items ticked (compose item with caveat — daemon-down skip). Ready for Phase 2 entry. |
+| Phase | 2 — slice 1 landed (orchestrator scaffold + dual-source liveness smoke). 5 harness smoke tests now pass; 2/3 Phase 2 CHECKLIST items ticked, 3rd reframed (api is indexer-backed; literal block-comparison defers to Phase 3). |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -255,10 +255,57 @@ Phase 1 slice 4 — impersonateAccount            ✓ ~3s
 Phase 1 slice 2 — compose smoke                  ⊘ skipped (daemon down)
 ```
 
-**Phase 2 entry criteria (from CHECKLIST):**
+### Phase 2 — Chain ↔ api agreement
 
-- [ ] Local futarchy-api launchable with `RPC_URL` pointed at the
-      harness anvil
-- [ ] Orchestrator can hit BOTH the api endpoint AND anvil directly
-      and compare a single number (e.g. block height)
-- [ ] First invariant landed: `chainBlockNumber === api.healthBlock`
+**Reframe (slice 1, this iteration):** the api consumes a Checkpoint
+indexer GraphQL endpoint (not RPC directly — `src/index.js` imports
+no RPC client at the top level; `rate-provider.js` uses hardcoded
+chain RPCs internally). So the literal CHECKLIST item
+`chainBlockNumber === api.healthBlock` doesn't map to anything that
+exists today: `/health` returns `{status, timestamp}` only. The real
+literal block invariant defers to Phase 3 once a local Checkpoint
+indexer joins the loop. Phase 2's foundational deliverable is
+**dual-source liveness** — orchestrator drives both layers and
+probes each via its native protocol.
+
+- **slice 1** — `auto-qa/harness/orchestrator/services.mjs` (new):
+  process-level helpers exposing `startAnvilFork({port, forkUrl,
+  chainId})`, `startLocalApi({port, env})`, `stopAll(handles)`. Both
+  start helpers spawn a child process, await readiness via the
+  appropriate probe (anvil: parse "READY <port>" on stdout; api:
+  poll `/health` for HTTP 200), and return a `{url, child, stop()}`
+  handle. `stop()` SIGTERMs and waits for clean exit. `pollHttp`
+  helper handles the polling loop. NOTE pinned: src/index.js
+  hardcodes PORT=3031 (does NOT read PORT env), so the helper port
+  param is a probe target, not an override.
+
+- **slice 1** — `tests/smoke-api-health.test.mjs` (new): first
+  cross-layer smoke. Brings up anvil + api in PARALLEL via
+  `Promise.all`, then queries each via different codepaths:
+  - anvil: `eth_chainId` (== 100), `eth_blockNumber` (>0)
+  - api: `GET /health` (status==ok, timestamp ISO), `GET /warmer`
+    (returns object)
+  Logs a [Phase 3 placeholder] diagnostic noting where the literal
+  block-comparison invariant will plug in. **Validated 2026-05-10:
+  both services up after 3.4s, all assertions pass.**
+
+- **slice 1** — npm scripts: `smoke:api` in harness package.json,
+  `auto-qa:e2e:smoke:api` in root package.json.
+
+- **slice 1** — CHECKLIST.md Phase 2 reframed and 2/3 items ticked
+  (the 3rd, literal block invariant, defers to Phase 3 with an
+  explicit note).
+
+**Phase 2 wrap-up — remaining (queued for next iterations):**
+
+- slice 2 — Add a second Phase 2 invariant that DOESN'T need the
+  indexer: orchestrator probes one of the api passthrough endpoints
+  (`/registry/graphql` is structured + returns deterministic
+  shape) and asserts the response envelope matches the documented
+  contract.
+- slice 3 — Document an "ethers v6 contract read via anvil RPC"
+  helper in `orchestrator/contracts.mjs` so Phase 4 (synthetic
+  swaps) inherits a clean contract-call surface.
+- slice 4 — Stress: spawn anvil + api 5 times in a row and confirm
+  no port leaks / no orphaned processes (catches handle-leak bugs
+  in `services.mjs`).
