@@ -9,7 +9,7 @@ is never modified — only tests on the `auto-qa` branch.
 | Field | Value |
 |---|---|
 | Branch | `auto-qa` (off `origin/main`) |
-| Iterations completed | 8 |
+| Iterations completed | 9 |
 | PRs catalogued | 9 / 9 (full history) |
 | PRs classified | 9 |
 | Tests added | 26 (2 path-prefix + 7 passthrough-contract + 4 unified-chart + 3 multi-proposal-smoke + 3 spot-candles + 3 indexer-freshness + 4 registry-org-shape — 25 passing, 1 skipped) |
