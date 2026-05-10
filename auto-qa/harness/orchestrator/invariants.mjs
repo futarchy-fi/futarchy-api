@@ -722,6 +722,75 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'candleSwapTimeWindowConsistency',
+        description: 'latest swap.timestamp ≥ latest candle.time (catches future-period candle creation, stale swap data, time-field misalignment)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // First cross-entity TIME-COHERENCE check in the catalog.
+            // The relationship: candles aggregate swaps. The latest
+            // candle's `time` represents the START of its (period-
+            // bucketed) window; the latest swap's `timestamp` is the
+            // moment of the most recent trade. These two should be
+            // CONSISTENT — specifically, the latest swap's timestamp
+            // must be >= the latest candle's time, because:
+            //
+            //   * Swaps create candles. A swap at time T causes a
+            //     candle at floor(T/period)*period.
+            //   * If latestSwap.timestamp < latestCandle.time, then
+            //     a candle exists for a period that has no contained
+            //     swap — clock skew, future-bucketing bug, or the
+            //     period-aggregator using the wrong time source.
+            //
+            // Distinct failure mode from the per-row time-shape
+            // probes (swapTimestampSensible / candleTimeMonotonic):
+            // those validate each entity's time field on its own
+            // terms; this validates that the two entities' time
+            // fields are MUTUALLY consistent.
+            //
+            // Bug shapes caught:
+            //   * Candle creation in future periods (clock-skew bug,
+            //     setTimeout loop with wrong delta, etc.)
+            //   * Stale swap stream (indexer dropped recent swaps
+            //     while period-aggregator kept producing buckets)
+            //   * Period-aggregator pulls time from a different
+            //     source than swap-handler (different RPC, different
+            //     block context)
+            //
+            // Vacuous when EITHER side is empty — without both
+            // entities populated, there's nothing to compare.
+            // (Existence is candlesHasSwaps + candlesHasCandles's
+            // concern; this is purely about cross-entity time
+            // coherence when both exist.)
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ swaps(first: 1, orderBy: timestamp, orderDirection: desc) { id timestamp } candles(first: 1, orderBy: time, orderDirection: desc) { id time } }',
+                }),
+            });
+            const swaps = j?.data?.swaps;
+            const candles = j?.data?.candles;
+            if (!Array.isArray(swaps) || !Array.isArray(candles)) {
+                throw new Error(`unexpected response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (swaps.length === 0 || candles.length === 0) {
+                return { ok: true, detail: `vacuous (swaps=${swaps.length}, candles=${candles.length})` };
+            }
+            const swap = swaps[0];
+            const candle = candles[0];
+            const swapTs = Number(swap.timestamp);
+            const candleTime = Number(candle.time);
+            if (!Number.isFinite(swapTs) || !Number.isFinite(candleTime)) {
+                throw new Error(`finite-number check: swap.timestamp=${swap.timestamp}, candle.time=${candle.time}`);
+            }
+            if (swapTs < candleTime) {
+                const diff = candleTime - swapTs;
+                throw new Error(`latest swap ${swap.id} timestamp=${swapTs} < latest candle ${candle.id} time=${candleTime} (diff=${diff}s; candle is in the FUTURE relative to most recent swap — aggregator clock-skew or stale swap stream)`);
+            }
+            return { ok: true, detail: `latest swap ${swap.id} (ts=${swapTs}) ≥ latest candle ${candle.id} (time=${candleTime}); diff=${swapTs - candleTime}s` };
+        },
+    },
+    {
         name: 'candlePoolReferentialIntegrity',
         description: 'latest Candle references a Pool that exists in the indexer (catches orphan candle aggregates from FK derivation bugs)',
         layer: 'orchestrator↔candles',

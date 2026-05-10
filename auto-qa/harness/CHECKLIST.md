@@ -750,25 +750,29 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 26 invariants:
-      5 api-internal + 18 indexer probes (2 `__typename`
+      PROGRESS.md's invariant tables). Now 27 invariants:
+      5 api-internal + 19 indexer probes (2 `__typename`
       liveness + 6 data-aware coverage + 4 single-row
       data-SHAPE + 2 multi-row data-SHAPE + 2 cross-layer
-      MATCH + 2 CROSS-ENTITY FK: `swapPoolReferentialIntegrity`
-      (previous slice) + `candlePoolReferentialIntegrity`
-      added this slice — same FK pattern but for Candle
-      entity. The two checks together pin the FK contract
-      on BOTH entity-emit paths: per-event from swap
-      handler AND per-bucket from period-aggregator. An
-      indexer with correct swap-handler FK derivation but
-      broken period-aggregator FK derivation passes the
-      first and fails the second) + 3 chain-layer probes.
-      69 smoke tests green. Still to add: probabilityBounds,
-      candlesAggregation (Candle.volume = sum of contained
-      Swap amounts within period — combines cross-entity
-      FK with quantitative reconciliation), chartShape
-      (api unified-chart vs indexer raw), conservation,
-      cross-run monotonicity on rateSanity.
+      MATCH + 2 cross-entity FK + 1 CROSS-ENTITY TIME-
+      COHERENCE: `candleSwapTimeWindowConsistency` added
+      this slice — first invariant where both candle and
+      swap entities are checked against EACH OTHER (not
+      just per-row); asserts latestSwap.timestamp ≥
+      latestCandle.time. Catches future-period candle
+      creation from clock-skew, stale swap stream, time-
+      field misalignment between aggregator + handler.
+      Distinct from per-row time-shape probes which only
+      validate each entity's time field on its own terms;
+      this validates that the two entities' time fields
+      are MUTUALLY consistent. Establishes the multi-
+      entity-in-one-query pattern that candlesAggregation
+      will reuse with sum reconciliation) + 3 chain-layer
+      probes. 73 smoke tests green. Still to add:
+      probabilityBounds, candlesAggregation (Candle.volume
+      = sum of contained Swap amounts within period),
+      chartShape (api unified-chart vs indexer raw),
+      conservation, cross-run monotonicity on rateSanity.
 - [x] **4d-activate — orchestrator block UNCOMMENTED.**
       Replaced the `tail -f /dev/null` placeholder with
       `node orchestrator/scenario-runner.mjs`. Dropped the

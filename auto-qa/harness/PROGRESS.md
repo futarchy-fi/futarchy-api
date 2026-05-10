@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 26 invariants — 5 api-internal + 18 indexer + 3 chain-layer; both swap + candle FK checks landed (full per-entity-emit-path FK coverage); 69 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 27 invariants — 5 api-internal + 19 indexer + 3 chain-layer; first cross-entity TIME-COHERENCE check landed; 73 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,99 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (candlePoolReferentialIntegrity) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (candleSwapTimeWindowConsistency) summary (this iteration on the api side):
+
+- **First cross-entity TIME-COHERENCE check in the catalog**.
+  Previous cross-entity invariants (FK checks) only
+  validate REFERENTIAL relationships — does the FK
+  resolve? This one validates a QUANTITATIVE
+  relationship between two entities' time fields:
+  * `candleSwapTimeWindowConsistency` — query latest
+    swap (orderBy timestamp desc) AND latest candle
+    (orderBy time desc) in one round-trip; assert
+    `latestSwap.timestamp ≥ latestCandle.time`.
+
+- **Why this is a real invariant**: candles aggregate
+  swaps. A swap at time T causes a candle at
+  floor(T/period)*period. So the latest candle's
+  time should NEVER exceed the latest swap's
+  timestamp — if it does, a candle exists for a
+  period that has no contained swap, which means:
+  * Aggregator clock-skew (time source out of sync
+    with swap-handler's block.timestamp source)
+  * Stale swap stream (indexer dropped recent swaps
+    while period-aggregator kept producing buckets)
+  * Period-aggregator pulls time from a different
+    source than swap-handler
+
+- **Distinct from per-row time-shape probes**: the
+  per-row checks (`swapTimestampSensible`,
+  `candleTimeMonotonic`) validate each entity's time
+  field on its own terms. This validates that the
+  TWO entities' time fields are MUTUALLY consistent.
+  Test 4 demonstrates the distinction — the failure
+  mode (candle 1 day in future) leaves
+  swapTimestampSensible passing because the swap's
+  timestamp itself is fine; only the cross-entity
+  relationship is broken.
+
+- **Multi-entity-in-one-query pattern**: this is the
+  template that `candlesAggregation` will reuse with
+  sum reconciliation (∑ swap amounts in period =
+  candle.volume). The query-shape (multiple
+  collections in one POST), parsing-shape (extract
+  each collection from `data`), and vacuous-handling
+  (when either side empty, can't compare) all
+  generalize.
+
+- **Fixture default change**: `candleTimeAnchor`
+  shifted from `now` to `now - 7200` (2 hours ago).
+  Reason: latestSwapTimestamp default is `now - 3600`
+  (1h ago), and the new invariant requires
+  latestSwap.timestamp ≥ latestCandle.time. With
+  candleTimeAnchor = now, the latest candle would be
+  at `now` (newer than latest swap) — failing the
+  invariant in the default-fixture case. Shifting
+  the anchor 2h back makes the default-fixture
+  satisfy the invariant naturally. All other tests
+  that rely on candle time use either explicit
+  candleTimes arrays (unaffected) or relative
+  comparisons like candleTimeMonotonic
+  (still passes — strict-desc is preserved by any
+  uniform anchor shift).
+
+- **Smoke test coverage** — 4 new tests:
+  * happy: latest swap newer than latest candle
+    (default fixture)
+  * vacuous when no swaps exist
+  * vacuous when no candles exist
+  * failure: candle in future relative to latest swap;
+    verifies swapTimestampSensible STILL passes —
+    distinguishes per-row time-shape from cross-entity
+    time-coherence
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 73/73 pass (713ms — was
+    69/69)
+  * `npm run scenarios:dry` → exits 0; lists 27
+    invariants in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: ~97% (27 of ~28 sub-slices total).
+  27 invariants now: 5 api-internal + 19 indexer (2
+  liveness + 6 data-aware coverage + 4 single-row
+  data-shape + 2 multi-row data-shape + 2 cross-layer
+  match + 2 cross-entity FK + 1 cross-entity time-
+  coherence) + 3 chain-layer. Cross-entity coverage
+  now spans both REFERENTIAL (FK) and QUANTITATIVE
+  (time-window) consistency. Next step: extend the
+  quantitative pattern to candlesAggregation (sum-of-
+  swaps = candle.volume), which is the same multi-
+  entity-in-one-query shape but with a sum
+  reconciliation rather than a min-comparison.
+
+Phase 7 slice 4d-scenarios-more (candlePoolReferentialIntegrity) summary (previous iteration on the api side):
 
 - **Cross-entity FK pattern extends from Swap to Candle**.
   Last iteration shipped `swapPoolReferentialIntegrity`

@@ -124,7 +124,12 @@ function startFixture({
     // (/candles/graphql) and the direct endpoint (/candles-direct/
     // graphql) can return identical data by default. Tests that need
     // drift between the two go through `apiCandlesDriftFn`.
-    const candleTimeAnchor = Math.floor(Date.now() / 1000);
+    // Anchor candle times at "2 hours ago" so
+    // candleSwapTimeWindowConsistency passes by default
+    // (latest swap defaults to "1h ago"; candle.time
+    // must be ≤ swap.timestamp). Tests overriding
+    // candleTimes get full control.
+    const candleTimeAnchor = Math.floor(Date.now() / 1000) - 7200;
     const buildPools = () => Array.from({ length: candlesPoolsCount },
         (_, i) => ({ id: `mock-pool-${i}` }));
     const buildSwaps = () => Array.from({ length: candlesSwapsCount }, (_, i) => {
@@ -1287,6 +1292,73 @@ test('runAllInvariants — failure: candlePoolReferentialIntegrity all pools del
     }
 });
 
+test('runAllInvariants — candleSwapTimeWindowConsistency happy: latest swap newer than latest candle (default fixture)', async () => {
+    // Defaults: latestCandleTime ≈ 2h ago; latestSwapTimestamp ≈ 1h ago.
+    // Latest swap > latest candle → invariant passes.
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'candleSwapTimeWindowConsistency');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /latest swap mock-swap-0.*latest candle mock-candle-0.*diff=\d+s/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — candleSwapTimeWindowConsistency vacuous: no swaps', async () => {
+    const fx = await startFixture({ candlesSwapsCount: 0 });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'candleSwapTimeWindowConsistency');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /vacuous \(swaps=0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — candleSwapTimeWindowConsistency vacuous: no candles', async () => {
+    const fx = await startFixture({ candlesCandlesCount: 0 });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'candleSwapTimeWindowConsistency');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /vacuous .*candles=0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candleSwapTimeWindowConsistency candle in future relative to latest swap (clock-skew bug)', async () => {
+    // Candle exists for a period AHEAD of any observed swap. Bug
+    // shape: aggregator's clock source skewed forward, OR indexer
+    // dropped recent swaps while period-aggregator kept producing
+    // buckets. With explicit candleTimes, the candle's time is
+    // pinned at "1 day from now"; default swap timestamp is "1h
+    // ago" → candle is in the future relative to latest swap.
+    const aDayInTheFuture = Math.floor(Date.now() / 1000) + 86400;
+    const fx = await startFixture({
+        candlesCandlesCount: 1,
+        candleTimes: [aDayInTheFuture],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candleSwapTimeWindowConsistency');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /latest swap.*<.*latest candle.*candle is in the FUTURE|aggregator clock-skew/);
+        // Per-row time-shape probes still pass — distinguishes
+        // "each entity's time field is internally consistent" from
+        // "the entities' time fields are mutually consistent"
+        const swapTs = results.find((r) => r.name === 'swapTimestampSensible');
+        assert.equal(swapTs.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('runAllInvariants — candlesHasPools happy: 1 pool indexed', async () => {
     const fx = await startFixture();  // default candlesPoolsCount=1
     try {
@@ -1409,6 +1481,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /swapTimeMonotonicNonStrict/);
     assert.match(r.stdout, /swapPoolReferentialIntegrity/);
     assert.match(r.stdout, /candlePoolReferentialIntegrity/);
+    assert.match(r.stdout, /candleSwapTimeWindowConsistency/);
     assert.match(r.stdout, /anvilBlockNumber/);
     assert.match(r.stdout, /anvilChainId/);
     assert.match(r.stdout, /rateSanity/);
