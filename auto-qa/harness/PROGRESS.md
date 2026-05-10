@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 done (slice 3 catalog deferred until ≥3 scenarios) + Phase **7 slice 1** landed on interface side. Phase 7 slice 1: first chaos primitive — `02-registry-down.scenario.mjs` mocks REGISTRY GraphQL → 502 and asserts /companies degrades to "No organizations found". Composes with the Phase 6 scenario format with no format change. 19/19 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 done (slice 3 catalog now unblocked) + Phase 7 slices **1+2 (CANDLES branch)** landed on interface side. Phase 7 slice 2: `03-candles-down.scenario.mjs` mocks REGISTRY healthy + CANDLES → 502. Asserts /companies still renders the event but the price degrades to "0.00 SDAI". Discovery: per-pool fallback fetcher hits the SAME endpoint as the bulk prefetcher → CANDLES outage takes BOTH layers down. 20/20 browser tests green (3 scenarios). Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -850,6 +850,29 @@ Phase 7 slice 1 summary (this iteration on the interface side):
   timeout, WALLET RPC failure, mid-flight failure); slice 3 =
   CI nightly cron + artifact upload; slice 4 = full-stack
   docker-compose.
+
+Phase 7 slice 2 (candles branch) summary (this iteration on the interface side):
+
+- scenarios/03-candles-down.scenario.mjs: mocks REGISTRY → success
+  (carousel renders our event card) + CANDLES → 502 (both bulk
+  prefetch AND per-pool fallback fail). Asserts event title
+  visible AND "0.00 SDAI" visible.
+- Discovery: per src/utils/SubgraphPoolFetcher.js, the per-pool
+  fetcher hits the SAME getSubgraphEndpoint → CANDLES URL as the
+  bulk prefetcher. So a CANDLES outage takes BOTH layers down at
+  once; there's no third-tier fallback. The formatter eventually
+  lands on its `prices.yes !== null ? … : '0.00 SDAI'` branch and
+  renders the literal "0.00 SDAI". This is a harness-level
+  architecture finding worth pinning.
+- Negative-companion benefit: 03 tightens the DOM↔API invariant
+  on scenario 01. If someone later adds a silent default-price
+  source ("if candles fails, use X instead"), 01 might still
+  pass spuriously, but 03 fails because "0.00 SDAI" wouldn't
+  appear anymore.
+- 03 alone: 1.4s; all 3 scenarios together: 20.3s wall-clock
+  with cold compile. UI smoke: 29 pass + 0 skip.
+- Phase 6 slice 3 (catalog generator) is now UNBLOCKED — with
+  3 scenarios, the script becomes worth writing.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 

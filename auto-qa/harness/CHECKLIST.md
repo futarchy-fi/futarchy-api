@@ -418,15 +418,16 @@ freshly-generated addresses as recipients; documented in
 - [x] `scenarios/README.md` updated with a "Current scenarios"
       table indexing the captured scenarios.
 
-**Phase 6 slice 3 (catalog generator) — TODO:**
+**Phase 6 slice 3 (catalog generator) — UNBLOCKED (≥3 scenarios now):**
 
 - [ ] `scenarios:catalog` script that reads every scenario's
       `bugShape` field and emits a `SCENARIOS.md` index listing
       the bug-shape coverage. The wrapper spec already handles
       replay (slice 2 closed that part of the original goal);
-      slice 3 is the human-readable catalog. Worth doing once
-      we have ≥3 scenarios — currently 2 (`01-stale-price-shape`,
-      `02-registry-down`).
+      slice 3 is the human-readable catalog. Now have 3
+      scenarios (`01-stale-price-shape`, `02-registry-down`,
+      `03-candles-down`) so the script becomes worth writing
+      next time we hit Phase 6.
 
 ## Phase 7 — Chaos injection + nightly CI
 
@@ -447,11 +448,17 @@ freshly-generated addresses as recipients; documented in
       with no terminal state, raw error envelope leaked to UI,
       silent broken state that fakes success.
 
-**Phase 7 slice 2 — TODO (more chaos primitives):**
+**Phase 7 slice 2 (more chaos primitives) — IN PROGRESS:**
 
-- [ ] CANDLES timeout / network error (assert prefetched-price
-      path falls through to per-pool fetcher OR shows
-      "0.00 SDAI" loading state, NOT a hung spinner)
+- [x] CANDLES network failure — `scenarios/03-candles-down.scenario.mjs`
+      mocks REGISTRY healthy + CANDLES → 502. Asserts the carousel
+      still renders our event but the price formatter degrades
+      to "0.00 SDAI" via the `prices.yes !== null ? … : '0.00 SDAI'`
+      fallback. Discovery while writing this: the per-pool fallback
+      fetcher (`poolFetcher.fetch` inside `useLatestPoolPrices`)
+      hits the SAME `getSubgraphEndpoint` → CANDLES URL as the
+      bulk prefetcher, so a CANDLES outage takes BOTH layers down
+      at once. Test: 1.4s.
 - [ ] WALLET RPC failure (assert wallet section shows error,
       not an undefined account)
 - [ ] Mid-flight failure (succeeds first request, fails second
