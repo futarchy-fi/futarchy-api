@@ -616,38 +616,55 @@ freshly-generated addresses as recipients; documented in
       `include:` block staged (commented out) referencing the
       two sibling indexer compose files — uncommenting is
       slice 4b-include.
-- [ ] **4b-include — uncomment the top-level `include:`
-      block.** Once uncommented, `docker compose config`
-      should report 6 services: anvil + api + registry-
-      checkpoint + registry-postgres + candles-checkpoint +
-      candles-postgres. Will need to be paired with 4b-network-
-      wire because the included files default RPC_URL to real
-      Gnosis (https://rpc.gnosischain.com) and put the
-      indexers on their own networks (registry-net, etc).
-- [ ] **4b-network-wire — point indexers at compose anvil
-      via env override + bridge networks.** The included
-      compose files use `${RPC_URL:-https://rpc.gnosischain.com}`
-      so an env file or compose-level `environment:` override
-      can redirect them at `http://anvil:8545`. Networks
-      need a decision: either add `networks: [registry-net,
-      harness-net]` to the registry-checkpoint service via a
-      `services:` override, or declare registry-net + candles-
-      net as `external:` and let the harness-net be the
-      bridge. Document the choice in PROGRESS.
-- [ ] **4b-api-env — update api service env from
-      `CHECKPOINT_URL` to `REGISTRY_URL` + `CANDLES_URL`.**
-      `src/config/endpoints.js` reads these two specific names
-      (NOT `CHECKPOINT_URL` — Phase 0 stub had it wrong, third
-      port/path bug surfaced by working through compose).
-      Re-add the depends_on on registry-checkpoint + candles-
-      checkpoint at the same time.
-- [ ] **4b-verify — full structural validation.**
-      `docker compose config --services` returns the 6 expected
-      services; `docker compose build api` still succeeds
-      (slice 4a-verify supersession). Daemon-required smoke:
+- [x] **4b-include — top-level `include:` UNCOMMENTED**
+      pulling in both sibling indexer compose files.
+      `docker compose config --services` now returns 6:
+      `anvil`, `api`, `registry-checkpoint`,
+      `registry-postgres`, `checkpoint`, `postgres`.
+      Service-name reality (different from Phase 0 stub
+      assumptions): registry compose uses `registry-checkpoint`
+      + `registry-postgres`, but candles compose uses bare
+      `checkpoint` + `postgres` (no `candles-` prefix on
+      service names; container_names are prefixed but service
+      names aren't). Candles also uses `GNOSIS_RPC_URL` not
+      `RPC_URL` — different env var contract.
+- [x] **4b-api-env — api service env corrected from
+      `CHECKPOINT_URL` to `REGISTRY_URL` + `CANDLES_URL` +
+      `FUTARCHY_MODE: checkpoint`.** Names now match
+      `src/config/endpoints.js`. Wired to compose-internal
+      service names + container port 3000 (the indexers
+      EXPOSE 3000 inside the network; their host ports
+      3001/3003 only matter from the host). The api's
+      depends_on on the indexer services is intentionally
+      NOT added yet — see 4b-network-wire below.
+- [ ] **4b-network-wire — bridge registry-net + checkpoint-net
+      with harness-net + override RPC URLs.** Naive override
+      attempt FAILED: declaring same-name service blocks here
+      to extend included services produces
+      `services.registry-checkpoint conflicts with imported
+      resource`. Compose v2.34's `include:` rejects same-name
+      service definitions in the parent. Three alternatives
+      to evaluate next iteration (documented in compose
+      comment block):
+      (a) Override-list form: `include: - path:
+          [base.yml, overrides.yml]`. Compose merges base +
+          overrides BEFORE include, so name collisions don't
+          happen.
+      (b) Per-service `extends:` + drop `include:`. Each
+          indexer service declared here with `extends:
+          { file: ..., service: ... }` plus harness overrides.
+      (c) Multi-file `docker compose -f base.yml -f
+          overrides.yml`. Rejected: breaks the
+          single-docker-compose.yml acceptance gate.
+      Approach (b) is closest fit for ADR-002's wrapper leg.
+- [ ] **4b-verify — full smoke test.**
+      `docker compose config --services` returns 6 (currently
+      passes); `docker compose build api` still succeeds
+      (4a-verify supersession). Daemon-required smoke:
       `docker compose up -d anvil registry-checkpoint` and
       probe `curl -s http://localhost:3003/graphql` for
-      `{__typename}`.
+      `{__typename}`. Will reveal whether the bridge approach
+      works end-to-end.
 - [ ] **4c — uncomment compose interface-dev block.** Mounts
       sibling interface clone at INTERFACE_PATH. Wires
       NEXT_PUBLIC_RPC_URL → http://anvil:8545 and

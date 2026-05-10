@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan** on api side (compose api block UNCOMMENTED; ADR-002 → Accepted; indexer `include:` block staged; slice 4b expanded into 4b-plan/4b-include/4b-network-wire/4b-api-env/4b-verify). 30/30 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env** on api side (`docker compose config` now returns 6 services; api env corrected to REGISTRY_URL + CANDLES_URL). Slice 4b-network-wire blocked by compose v2 include-conflict; 3 alternatives documented for next iteration. 30/30 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -1263,6 +1263,84 @@ Phase 7 slice 4b-plan summary (this iteration on the api side):
   5). Next bot-doable: slice 4b-include (uncomment include
   block + add cross-network bridging) AND/OR 4b-network-wire
   (RPC_URL override).
+
+Phase 7 slice 4b-include + 4b-api-env summary (this iteration on the api side):
+
+- **4b-include**: uncommented the top-level `include:` block;
+  `docker compose config --services` now returns 6 services:
+  `anvil`, `api`, `registry-checkpoint`, `registry-postgres`,
+  `checkpoint`, `postgres`.
+
+- **Service-name reality vs Phase 0 stub assumptions**:
+  registry compose uses `registry-checkpoint` +
+  `registry-postgres` (prefixed); candles compose uses bare
+  `checkpoint` + `postgres` (NOT `candles-checkpoint` /
+  `candles-postgres` as the Phase 0 stub assumed). The
+  container_names ARE prefixed (`futarchy-candles-checkpoint-1`)
+  but the service names aren't. Also: candles uses
+  `GNOSIS_RPC_URL`, registry uses `RPC_URL` — different env
+  contracts. Both findings documented in the include-block
+  comment.
+
+- **4b-api-env**: api service env corrected from
+  `CHECKPOINT_URL: http://indexer:3001/graphql` to
+  `REGISTRY_URL: http://registry-checkpoint:3000/graphql` +
+  `CANDLES_URL: http://checkpoint:3000/graphql` +
+  `FUTARCHY_MODE: checkpoint`. Names now match
+  `src/config/endpoints.js`. Wired to compose-internal service
+  names + container port 3000 (the indexers `EXPOSE 3000`
+  inside the network; their host ports 3001/3003 only matter
+  from the host).
+
+- **Why depends_on on indexers NOT added yet**: see
+  4b-network-wire below — the indexers and api are on
+  different networks (registry-net / checkpoint-net vs
+  harness-net), so the api can't actually reach them yet via
+  compose-internal name resolution. Adding the depends_on
+  would have compose wait forever for cross-network
+  healthchecks. Slice 4b-network-wire fixes this; only then
+  can the depends_on be added.
+
+- **4b-network-wire BLOCKED**: naive override attempt failed.
+  Tried declaring same-name service blocks
+  (`registry-checkpoint:`, `checkpoint:`) in the parent compose
+  to extend the included services with `networks:
+  [registry-net, harness-net]` + RPC env override. Compose
+  rejected: `services.registry-checkpoint conflicts with
+  imported resource`. Compose v2.34's `include:` does NOT
+  allow same-name service redefinition in the parent file
+  (different from `extends:` semantics). Three alternatives
+  surfaced + documented:
+  (a) Override-list form: `include: - path: [base.yml,
+      overrides.yml]`. Compose merges base + overrides BEFORE
+      include, so name collisions don't happen.
+  (b) Per-service `extends:` (drop `include:`). Each indexer
+      service declared here with `extends: { file: ...,
+      service: ... }` plus harness overrides. ~4 service
+      blocks, but no include conflict. Closest fit for
+      ADR-002's wrapper leg.
+  (c) Multi-file `docker compose -f base.yml -f
+      overrides.yml`. Rejected: breaks the
+      single-docker-compose.yml acceptance gate.
+  Decision deferred to slice 4b-network-wire next iteration;
+  approach (b) is the lead candidate.
+
+- **What was learned (and pinned to memory via PROGRESS)**:
+  compose v2's `include:` is for IMPORTING, not OVERRIDING.
+  The conflict error is structurally equivalent to a TypeScript
+  "duplicate identifier" error — there's no compose-level
+  "override modifier" for included services.
+
+- **Validation**: `docker compose config --quiet` succeeds;
+  `--services` returns 6 (anvil + api + 4 indexer); api env
+  shows REGISTRY_URL/CANDLES_URL/FUTARCHY_MODE in the merged
+  output. The api's env contract is correct even though it
+  can't actually reach the indexers across the network gap.
+
+- Slice 4 progress: ~33% done (4a-prep + 4a + 4b-plan +
+  4b-include + 4b-api-env / ~12 sub-slices total). Still 5
+  bot-doable sub-slices to go in slice 4b alone before the
+  full stack works.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 
