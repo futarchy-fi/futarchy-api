@@ -289,35 +289,35 @@ services:
     # node_modules wouldn't have the right Linux binaries; mounting
     # them in would shadow valid Linux installs).
     # ────────────────────────────────────────────────────────────────
-    # interface-dev:
-    #     image: node:22-alpine
-    #     container_name: harness-interface
-    #     networks: [harness-net]
-    #     depends_on:
-    #         anvil:
-    #             condition: service_healthy
-    #         api:
-    #             condition: service_started
-    #     working_dir: /app
-    #     volumes:
-    #         - ${INTERFACE_PATH:-../../../interface}:/app
-    #         - interface-node-modules:/app/node_modules
-    #     environment:
-    #         NEXT_PUBLIC_RPC_URL: http://anvil:8545
-    #         NEXT_PUBLIC_API_URL: http://api:3031
-    #     command:
-    #         - sh
-    #         - -c
-    #         - |
-    #             if [ ! -d node_modules ] || [ -z "$(ls -A node_modules)" ]; then
-    #                 echo "[interface-dev] installing deps (first run)..."
-    #                 npm install --no-audit --no-fund
-    #             fi
-    #             exec npx next dev --hostname 0.0.0.0 --port 3000
-    #     # ports:
-    #     #     - "3010:3000"   # uncomment for host-side dev server access
-    #     # Compose-internal traffic uses `interface-dev:3000` from
-    #     # other services on harness-net.
+    interface-dev:
+        image: node:22-alpine
+        container_name: harness-interface
+        networks: [harness-net]
+        depends_on:
+            anvil:
+                condition: service_healthy
+            api:
+                condition: service_started
+        working_dir: /app
+        volumes:
+            - ${INTERFACE_PATH:-../../../interface}:/app
+            - interface-node-modules:/app/node_modules
+        environment:
+            NEXT_PUBLIC_RPC_URL: http://anvil:8545
+            NEXT_PUBLIC_API_URL: http://api:3031
+        command:
+            - sh
+            - -c
+            - |
+                if [ ! -d node_modules ] || [ -z "$(ls -A node_modules)" ]; then
+                    echo "[interface-dev] installing deps (first run)..."
+                    npm install --no-audit --no-fund
+                fi
+                exec npx next dev --hostname 0.0.0.0 --port 3000
+        # ports:
+        #     - "3010:3000"   # uncomment for host-side dev server access
+        # Compose-internal traffic uses `interface-dev:3000` from
+        # other services on harness-net.
 
     # ────────────────────────────────────────────────────────────────
     # Phase 4: Orchestrator. Drives anvil's clock, sends synthetic

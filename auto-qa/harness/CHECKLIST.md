@@ -688,13 +688,26 @@ freshly-generated addresses as recipients; documented in
       workflows. Also added a top-level `interface-node-modules`
       named volume to keep Linux node_modules separate from
       the host's macOS-binary tree.
-- [ ] **4c-activate — uncomment the (now-correct)
-      interface-dev service block.** A one-step uncomment;
-      no edits needed thanks to 4c-prep. Activation gate:
-      `INTERFACE_PATH` env var (defaults to
-      `../../../interface` = sibling clone). Adds a 7th
-      service to the stack: `interface-dev`. Doesn't activate
-      anything else (anvil + api + indexers stay as-is).
+- [x] **4c-activate — interface-dev block UNCOMMENTED.**
+      `docker compose config --services` now returns 7
+      (anvil, api, registry-checkpoint, registry-postgres,
+      checkpoint, postgres, interface-dev). Merged config
+      verified: depends_on (anvil healthy + api started),
+      env (NEXT_PUBLIC_RPC_URL → http://anvil:8545,
+      NEXT_PUBLIC_API_URL → http://api:3031), command (sh -c
+      conditional npm install + `next dev --hostname 0.0.0.0
+      --port 3000`), bind mount of sibling interface clone
+      + named-volume isolation for node_modules.
+- [ ] **4c-verify — daemon-required smoke** (human task):
+      `docker compose -f auto-qa/harness/docker-compose.yml
+      up -d interface-dev` (will pull node:22-alpine, run
+      `npm install` of ~1000+ deps on first run — multi-
+      minute), then `curl -s http://localhost:3010` should
+      return the futarchy app HTML once `next dev` finishes
+      compiling. Bind-mount file watching + HMR over the
+      docker network are the most likely sources of
+      surprise; CHOKIDAR_USEPOLLING=true env var is the
+      standard fallback if HMR doesn't fire on host edits.
 - [ ] **4d — orchestrator service** (compose driver for the
       cross-layer assertions).
 - [ ] **4e — single `docker compose up -d`** brings the full

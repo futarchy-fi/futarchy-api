@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep** on api side (interface-dev stub fixed: path, port, anvil dep, install/host-binding command, Node version; activation is now atomic 4c-activate). 30/30 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate** on api side (`docker compose config --services` returns 7; full app stack — anvil + api + 4 indexer services + Next.js dev server — structurally validated). 30/30 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -1486,6 +1486,61 @@ Phase 7 slice 4c-prep summary (this iteration on the api side):
   slice 4c now decomposes into 4c-prep + 4c-activate +
   potentially 4c-verify). Next: 4c-activate (uncomment) OR
   return to slice 4b-verify (daemon-required smoke).
+
+Phase 7 slice 4c-activate summary (this iteration on the api side):
+
+- The interface-dev block is now UNCOMMENTED.
+  `docker compose config --services` returns 7 (anvil, api,
+  registry-checkpoint, registry-postgres, checkpoint, postgres,
+  interface-dev). Atomic one-step uncomment per slice 4c-prep's
+  preparation — no edits needed to the block itself.
+
+- **Merged config verified via `docker compose config`**:
+  * depends_on: anvil (service_healthy) + api (service_started)
+  * environment: NEXT_PUBLIC_RPC_URL=http://anvil:8545,
+    NEXT_PUBLIC_API_URL=http://api:3031
+  * image: node:22-alpine
+  * command: sh -c with conditional `npm install` then
+    `exec npx next dev --hostname 0.0.0.0 --port 3000`
+  * volumes: bind mount of sibling interface clone via
+    `${INTERFACE_PATH:-../../../interface}` + named volume
+    `interface-node-modules` for Linux-isolated node_modules
+  * networks: harness-net (single-homed; api + indexers reach
+    it via the same network)
+
+- **What's still pending in slice 4**:
+  * 4c-verify (Docker daemon required, mostly human): bring
+    up the stack and curl http://localhost:3010 to confirm
+    `next dev` is reachable from the host. CHOKIDAR_USEPOLLING=true
+    if HMR doesn't fire on host edits (bind-mount file
+    watching across the docker FS layer is the most likely
+    surprise).
+  * 4d (orchestrator service): the Phase 0 stub has
+    similar bugs to 4c's stub (Node 20 not 22, wrong path,
+    wrong env vars, wrong port for api), AND a more
+    fundamental scope issue — the orchestrator service is
+    meant to "drive anvil's clock + send synthetic txs +
+    run cross-layer assertions" per ARCHITECTURE.md, but
+    those assertion scripts (auto-qa/harness/orchestrator/
+    invariants.mjs in the architecture plan) don't exist
+    yet. The existing orchestrator/ dir has services.mjs
+    + stub-indexer.mjs. Slice 4d will need both compose
+    wiring AND scenario script development; it's a chunkier
+    sub-slice than 4a/4b/4c were.
+  * 4e (`docker compose up -d` acceptance gate): trivial
+    after 4c-verify + 4d.
+
+- **What's NOT a regression**: this slice doesn't activate
+  anything that wasn't already validated structurally in
+  4c-prep. The Phase 0 stub bugs were fixed in 4c-prep; this
+  slice just removes the comment markers. `docker compose
+  build interface-dev` is implicit (the image is just
+  `node:22-alpine`, no Dockerfile to build).
+
+- Slice 4 progress: ~58% done (8 of ~13+ sub-slices total).
+  Next bot-doable: slice 4d-prep (orchestrator stub fixes,
+  if scope allows) OR 4d-scenarios (build the missing
+  invariants.mjs assertion scripts).
 
 Slice 4c v3b summary (previous iteration on the interface side):
 
