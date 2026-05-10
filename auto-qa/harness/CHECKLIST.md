@@ -774,10 +774,26 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). **Now 48 invariants**:
-      12 api-internal + 27 indexer probes + 9 chain-layer.
-      160 smoke tests green.
-      `swapAmountsAllRowsPositive` added this slice —
+      PROGRESS.md's invariant tables). **Now 49 invariants**:
+      13 api-internal + 27 indexer probes + 9 chain-layer.
+      164 smoke tests green.
+      `apiHealthBodyShape` added this slice — first body-
+      shape probe on /health. STRENGTHENS apiHealth (status-
+      code-only) by validating `{ status: 'ok', timestamp:
+      <ISO 8601> }`. Both fields matter to downstream ops:
+      status='ok' is the load-balancer's string-match
+      "alive" marker; timestamp is what ops dashboards
+      parse for 'last-fresh' age. Catches refactors that
+      keep the endpoint serving 200 but change body shape:
+      string body (not JSON), status renamed/wrong-value
+      (LB silently fails), timestamp dropped (dashboards
+      break), timestamp as Unix epoch number (ISO parsers
+      break). Sister apiHealth probe still passes when
+      status code is 200 — only body-shape catches these.
+      Fixture /health handler now defaults to production
+      shape (was `{ ok: true }`).
+
+      `swapAmountsAllRowsPositive` (previous slice) —
       first iterate-all-rows extension on the swap side.
       Strengthens swapAmountsPositive (latest-only) into
       a per-row check across the first 50 swaps. Catches

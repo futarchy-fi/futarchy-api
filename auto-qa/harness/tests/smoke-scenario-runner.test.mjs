@@ -30,6 +30,15 @@ const RUNNER = resolve(__dirname, '..', 'orchestrator', 'scenario-runner.mjs');
 
 function startFixture({
     healthOk = true,
+    // /health body shape for apiHealthBodyShape (slice 4d-scenarios-more).
+    // Defaults match what src/index.js emits:
+    //   { status: 'ok', timestamp: new Date().toISOString() }
+    // Override healthStatus to a wrong value, set healthTimestamp to a
+    // non-ISO string, or set healthBody directly to override the
+    // entire body for shape-failure tests.
+    healthStatus = 'ok',
+    healthTimestamp = null,  // null → auto-generated ISO at request time
+    healthBody = null,       // null → constructed from healthStatus + healthTimestamp
     // Warmer endpoint (slice 4d-scenarios-more apiWarmer): default 200
     // returns a JSON status object; toggle warmerOk to false for 503.
     warmerOk = true,
@@ -344,7 +353,15 @@ function startFixture({
                 if (req.url === '/health' && req.method === 'GET') {
                     if (!healthOk) { response.statusCode = 503; response.end('down'); return; }
                     response.setHeader('content-type', 'application/json');
-                    response.end(JSON.stringify({ ok: true }));
+                    // Default body matches production src/index.js:
+                    //   { status: 'ok', timestamp: new Date().toISOString() }
+                    // Tests can override healthStatus / healthTimestamp,
+                    // or pass healthBody to override the entire payload.
+                    const body = healthBody ?? JSON.stringify({
+                        status: healthStatus,
+                        timestamp: healthTimestamp ?? new Date().toISOString(),
+                    });
+                    response.end(body);
                     return;
                 }
                 if (req.url === '/warmer' && req.method === 'GET') {
@@ -605,6 +622,73 @@ test('runAllInvariants — failure: api /health is 503', async () => {
         // Other invariants still ran (no short-circuit)
         const reg = results.find((r) => r.name === 'apiCanReachRegistry');
         assert.equal(reg.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiHealthBodyShape happy: status=ok + ISO timestamp (default fixture)', async () => {
+    // Default fixture matches production: { status: 'ok', timestamp: ISO }
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'apiHealthBodyShape');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /status=ok, timestamp=\d{4}-\d{2}-\d{2}T/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiHealthBodyShape status renamed (LB string-match break)', async () => {
+    // Refactor changed status='ok' to status='healthy'. The /health
+    // endpoint still returns 200 (apiHealth STILL passes), but
+    // load-balancers that string-match on 'ok' silently fail.
+    const fx = await startFixture({ healthStatus: 'healthy' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiHealthBodyShape');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /expected status="ok", got status="healthy".*LB string-match/);
+        // Sister apiHealth probe STILL passes (status code is 200)
+        const sister = results.find((r) => r.name === 'apiHealth');
+        assert.equal(sister.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiHealthBodyShape timestamp dropped', async () => {
+    // Refactor removed the timestamp field. Ops dashboards parsing
+    // 'last-fresh' age silently break.
+    const fx = await startFixture({
+        healthBody: JSON.stringify({ status: 'ok' }),  // missing timestamp
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiHealthBodyShape');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /expected timestamp string, got undefined/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiHealthBodyShape timestamp emitted as Unix epoch number', async () => {
+    // Refactor changed timestamp from ISO 8601 to Unix epoch number.
+    // Common bug — looks "more efficient" but breaks every ISO parser.
+    const fx = await startFixture({
+        healthBody: JSON.stringify({ status: 'ok', timestamp: 1700000000 }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiHealthBodyShape');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /expected timestamp string, got number.*ops dashboards.*silently break/);
     } finally {
         await fx.stop();
     }

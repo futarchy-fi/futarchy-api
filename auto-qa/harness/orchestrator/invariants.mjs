@@ -104,6 +104,70 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'apiHealthBodyShape',
+        description: 'api /health body is JSON {status: "ok", timestamp: <ISO 8601>} (catches refactor that drops fields, renames status, or changes timestamp format that ops dashboards parse)',
+        layer: 'api',
+        check: async (ctx) => {
+            // STRENGTHENS apiHealth (status-code-only). Production
+            // /health (src/index.js line 54) emits:
+            //   { status: 'ok', timestamp: new Date().toISOString() }
+            //
+            // Both fields matter to ops:
+            //   * status: 'ok' is the load-balancer's "alive" marker.
+            //     A regression that returns 'OK', 'healthy', or
+            //     anything else silently disables LB health checks
+            //     that string-match.
+            //   * timestamp: ops dashboards parse this to compute
+            //     "last-known-fresh" age. Format change (ISO 8601 →
+            //     unix epoch, missing field, malformed) silently
+            //     breaks the dashboard.
+            //
+            // Bug shapes caught (NOT caught by apiHealth):
+            //   * Refactor returns just `'ok'` (string body, not JSON)
+            //   * status field renamed to 'state'
+            //   * status value changed ('healthy' instead of 'ok')
+            //   * timestamp dropped entirely
+            //   * timestamp emitted as Unix epoch number instead of
+            //     ISO 8601 string
+            //   * timestamp is a string but malformed (e.g.,
+            //     '2024-13-45T99:99:99Z')
+            //
+            // ISO 8601 validation: we use Date.parse() — robust enough
+            // to accept the canonical `new Date().toISOString()` format
+            // and reject typical malformed inputs. Stricter regex would
+            // be brittle (variant ISO formats are valid).
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/health`, { signal: ctrl.signal });
+                if (!r.ok) throw new Error(`/health → HTTP ${r.status} (apiHealth's domain)`);
+                const ct = r.headers.get('content-type') || '';
+                if (!ct.includes('json')) {
+                    throw new Error(`expected JSON content-type, got "${ct}" (refactor returning string body?)`);
+                }
+                let body;
+                try {
+                    body = await r.json();
+                } catch (e) {
+                    throw new Error(`response not parseable as JSON: ${e?.message || e}`);
+                }
+                if (body?.status !== 'ok') {
+                    throw new Error(`expected status="ok", got status=${JSON.stringify(body?.status)} (LB string-match health checks will fail)`);
+                }
+                if (typeof body.timestamp !== 'string') {
+                    throw new Error(`expected timestamp string, got ${typeof body.timestamp} (${JSON.stringify(body.timestamp)?.slice(0, 60)}) — ops dashboards parsing 'last-fresh' age silently break`);
+                }
+                const parsed = Date.parse(body.timestamp);
+                if (!Number.isFinite(parsed)) {
+                    throw new Error(`timestamp ${JSON.stringify(body.timestamp)} not parseable as a date (Date.parse → NaN; expected ISO 8601 like "2024-01-15T12:34:56.789Z")`);
+                }
+                return { ok: true, detail: `status=ok, timestamp=${body.timestamp}` };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
         name: 'apiWarmer',
         description: 'api /warmer returns 200 + JSON (warmer-status endpoint reachable)',
         layer: 'api',
