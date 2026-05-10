@@ -566,10 +566,43 @@ freshly-generated addresses as recipients; documented in
       green runs with no artifacts. Promotes together with
       slice 3c (same staged file).
 
-**Phase 7 slice 4 — TODO (full-stack):**
+**Phase 7 slice 4 — IN PROGRESS (full-stack):**
 
-- [ ] Single docker-compose `up -d` brings the full 5-service
-      stack cleanly on a fresh checkout
+- [x] **4a-prep — futarchy-api Dockerfile + .dockerignore
+      tracked.** Both files were sitting untracked in the api
+      repo root (created in a prior iteration). Now committed
+      so the compose api block can reference them. Dockerfile
+      uses `node:22-alpine` + `npm ci --omit=dev` +
+      `EXPOSE 3031` + `CMD ["node", "src/index.js"]`.
+      .dockerignore excludes node_modules, .env*, test-*.js,
+      docs, lambda-deploy, test-checkpoint-vs-graph-node.
+      Compose api block updated: PORT env documented as
+      informational (src/index.js:25 hardcodes `const PORT =
+      3031` and does NOT read process.env.PORT), and the
+      commented `ports:` mapping changed from `3000:3000` to
+      `3031:3031` to match Dockerfile EXPOSE + actual bind.
+      Block remains commented; activating it is slice 4a.
+- [ ] **4a — uncomment compose api block + verify
+      `docker compose build api` succeeds.** Activates the
+      futarchy-api service in the local stack. Doesn't need
+      indexer to BUILD (only at runtime), so 4a is doable
+      before the indexer service is added in 4b.
+- [ ] **4b — add Phase 3 indexer service** to compose. Has to
+      decide between published Checkpoint image vs build-from-
+      source; the SQLite migration cold-start is the biggest
+      risk. (Per Phase 3 effort estimate: 3 wks; this
+      sub-slice is just the compose wiring, not the indexer
+      development itself.)
+- [ ] **4c — uncomment compose interface-dev block.** Mounts
+      sibling interface clone at INTERFACE_PATH. Wires
+      NEXT_PUBLIC_RPC_URL → http://anvil:8545 and
+      NEXT_PUBLIC_API_URL → http://api:3031 (note the port
+      change from the original compose comment).
+- [ ] **4d — orchestrator service** (compose driver for the
+      cross-layer assertions).
+- [ ] **4e — single `docker compose up -d`** brings the full
+      stack cleanly on a fresh checkout. The slice 4 acceptance
+      gate.
 
 ## Acceptance gates (cross-cutting)
 

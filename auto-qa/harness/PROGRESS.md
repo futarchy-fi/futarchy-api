@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices **3a + 3c + 3d** STAGED on interface side. `auto-qa/harness/ci/auto-qa-harness.yml.staged` (drift check, fast) + `auto-qa-harness-scenarios.yml.staged` (full Playwright scenarios suite + on-failure artifact upload via `actions/upload-artifact@v4`) both await maintainer promotion to `.github/workflows/` (the bot's OAuth token lacks `workflow` scope). 30/30 browser tests green; drift check <1 min, scenarios suite ~5-10 min cold. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice **4a-prep** (api Dockerfile + .dockerignore tracked; compose api block port corrected) on api side. CI workflows still await maintainer promotion. 30/30 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -1103,6 +1103,54 @@ Phase 7 slice 3d summary (this iteration on the interface side):
   bot-doable sub-slice (and it's gated on slice 3a being
   smoke-tested live first). Then slice 4 — full-stack
   docker-compose.
+
+Phase 7 slice 4a-prep summary (this iteration on the api side):
+
+- Slice 4 (full-stack docker-compose) starts with prep work
+  laying the groundwork for activating the futarchy-api service
+  in `auto-qa/harness/docker-compose.yml`. The compose file has
+  had an api block stubbed (commented out) since Phase 0 slice
+  2; this iteration tracks the prerequisites so the block can
+  be uncommented in slice 4a proper.
+- What landed:
+  * `Dockerfile` (NEW, tracked) — 12-line node:22-alpine
+    image, runs `npm ci --omit=dev`, `EXPOSE 3031`, `CMD
+    ["node", "src/index.js"]`. File was sitting untracked at
+    api repo root from a prior iteration; this commit just
+    tracks it.
+  * `.dockerignore` (NEW, tracked) — excludes node_modules,
+    .env*, test-*.js + test-*.mjs, example-test-*.js, docs,
+    *.md, lambda-deploy, test-checkpoint-vs-graph-node. Same
+    "untracked → tracked" story as Dockerfile.
+  * `auto-qa/harness/docker-compose.yml` (modified) — api
+    block's port assumptions corrected. Was: `PORT: 3000` env
+    + commented `ports: - "3000:3000"`. Now: `PORT: 3031`
+    (informational only) + commented `ports: - "3031:3031"`.
+  * Comment block above the api service expanded with a note
+    explaining the port discovery (see below).
+- **Real bug surfaced**: `src/index.js:25` hardcodes
+  `const PORT = 3031` and never reads `process.env.PORT`. The
+  original compose comment block expected `PORT: 3000` to be
+  honored at runtime, but it would have been silently ignored
+  (the api would still bind to 3031 inside the container,
+  the compose's `ports: - "3000:3000"` would map to nothing,
+  and a "why isn't the api responding?" debugging session
+  would follow). Compose comment now documents the constraint
+  so future contributors see it before activating the block.
+- **Why fix the compose, not src/index.js**: the cross-cutting
+  acceptance gate says "Production code in `src/` (both repos)
+  is NEVER modified by harness work". src/index.js IS
+  production code. The harness adapts to its reality, not the
+  other way around.
+- Block REMAINS COMMENTED OUT — uncommenting + verifying
+  `docker compose build api` is slice 4a proper, not 4a-prep.
+  This iteration is just the prerequisite tracking.
+- CHECKLIST slice 4 expanded: 4a-prep DONE; 4a (uncomment +
+  build), 4b (indexer), 4c (interface-dev mount), 4d
+  (orchestrator), 4e (full `up -d` acceptance gate) sketched.
+- Validation: `npx js-yaml@4 auto-qa/harness/docker-compose.yml`
+  parses cleanly; the named-service tree shows `anvil` as the
+  only active service (api block stays a YAML comment).
 
 Slice 4c v3b summary (previous iteration on the interface side):
 

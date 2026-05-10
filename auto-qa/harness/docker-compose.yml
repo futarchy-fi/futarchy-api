@@ -99,6 +99,15 @@ services:
 
     # ────────────────────────────────────────────────────────────────
     # Phase 2: futarchy-api pointed at the local indexer + anvil.
+    #
+    # Dockerfile + .dockerignore at the api repo root were tracked in
+    # Phase 7 slice 4a-prep so this block can be activated. The
+    # Dockerfile uses node:22-alpine, runs `npm ci --omit=dev`, and
+    # `EXPOSE 3031`. `src/index.js:25` hardcodes `const PORT = 3031`
+    # (does NOT read process.env.PORT), so PORT here is informational
+    # only — changing it would NOT actually re-bind the api server.
+    # If you need a different external port, change the host side of
+    # the `ports:` mapping below, not the container side.
     # ────────────────────────────────────────────────────────────────
     # api:
     #     build:
@@ -114,9 +123,9 @@ services:
     #     environment:
     #         RPC_URL: http://anvil:8545
     #         CHECKPOINT_URL: http://indexer:3001/graphql
-    #         PORT: 3000
+    #         PORT: 3031   # informational — src/index.js hardcodes 3031
     #     # ports:
-    #     #     - "3000:3000"
+    #     #     - "3031:3031"   # api — host:container both 3031
 
     # ────────────────────────────────────────────────────────────────
     # Phase 5: Next.js dev server from the sibling interface repo,
