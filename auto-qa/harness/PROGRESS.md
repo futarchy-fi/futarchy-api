@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 (3 chaos scenarios: registry-down, candles-down, **candles-partial**) landed on interface side. Latest: `04-candles-partial.scenario.mjs` mocks 2 events but CANDLES returns prices for only 1 — asserts the priced card renders "0.4200 SDAI" while the unpriced card falls back to "0.00 SDAI". 21/21 browser tests green (4 scenarios + 17 prior). Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase **7 slice 3a** (first CI workflow) landed on interface side. `.github/workflows/auto-qa-harness.yml` (FIRST workflow file in interface repo) runs the scenarios catalog drift check on `workflow_dispatch`. Schedule + scoped PR triggers stage as slice 3b after smoke-test. 21/21 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -923,6 +923,29 @@ Phase 7 slice 2 (partial branch) summary (this iteration on the interface side):
   "Playwright Test did not expect test.describe()" — turned out
   to be a stale dev-server / test-results interaction, fixed by
   killing port 3000 and clearing test-results/.
+
+Phase 7 slice 3a summary (this iteration on the interface side):
+
+- First GitHub Actions workflow file landed in the interface
+  repo: `.github/workflows/auto-qa-harness.yml`. Trigger is
+  `workflow_dispatch` ONLY for v1 (manual fire from GitHub
+  Actions UI) — landing the first workflow file can't
+  unexpectedly red-light unrelated PRs. Job runs the
+  scenarios:catalog drift check (`npm ci` in harness, regenerate
+  SCENARIOS.md, `git diff --exit-code`). Total expected runtime
+  <1 min — no browser, no Next.js dev server.
+- Local validation matched what CI will do: `npm ci` in
+  auto-qa/harness/ succeeded; catalog regenerated cleanly;
+  `git diff --exit-code` returned 0.
+- This single CI step ensures any PR adding/changing a scenario
+  also re-runs the catalog generator. Without it, SCENARIOS.md
+  silently drifts out of date.
+- Slice 3b (next): promote triggers to `schedule: '0 4 * * *'`
+  (nightly drift sweep) + `pull_request: paths:
+  ['auto-qa/harness/**']` (gate harness-touching PRs without
+  noise on unrelated PRs). Slice 3c: separate job that runs the
+  Playwright scenarios suite. Slice 3d: per-failure artifact
+  upload via actions/upload-artifact@v4.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 
