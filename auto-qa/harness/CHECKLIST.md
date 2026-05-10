@@ -175,6 +175,26 @@ both layers in parallel and probe each via its native protocol.
       but cross-layer indexer↔api reconciliation pending Phase 3's
       indexer up + Docker Desktop.
 
+**Phase 4 BONUS items (slice 2 — contract-call surface):**
+
+- [x] `scripts/contracts.mjs` — viem-based helpers: `readContract`,
+      `writeContract`, `getReceipt`, `parseEventLogs`, `publicClient`.
+      ABI fragments for ERC20, WXDAI (WETH9 pattern), RATE_PROVIDER.
+      Address constants for sDAI, sDAI_RATE_PROVIDER, WXDAI sourced
+      from production code.
+- [x] `tests/smoke-contract-calls.test.mjs` — exercises real Gnosis
+      contracts on the fork: reads sDAI symbol/decimals/totalSupply
+      (62.4M sDAI live state) + sDAI rate provider getRate (1.239
+      live), writes WXDAI.deposit(1 ETH), parses Deposit event, and
+      asserts +1 WXDAI on the wallet. Validates the full read+write+
+      event-decode surface needed for Phase 6 scenarios.
+- [x] **Discovery via slice 2**: WXDAI follows the WETH9 pattern —
+      `deposit()` emits `Deposit(dst, wad)`, NOT ERC20 `Transfer`.
+      Topic hash `0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c`
+      = `keccak256("Deposit(address,uint256)")`. Pinned in WXDAI_ABI
+      and the smoke test header. Production code doesn't assume
+      Transfer from WXDAI (verified — no false bug surfaced).
+
 **Phase 4 ANVIL DEV-ACCOUNT QUIRK (resolved in slice 3)**: Anvil's
 "10000 ETH" auto-funding for dev addresses on a fork (0xf39F, 0x7099,
 …) is a LAZY view — the underlying fork state is whatever the address
