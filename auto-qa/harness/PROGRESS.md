@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep** on api side (orchestrator stub fixed: same path/port/env/Node-version pattern as 4c-prep + a deeper scope concern surfaced — assertion scripts don't exist yet, so 4d split into 4d-prep / 4d-scenarios / 4d-activate). 30/30 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold)** on api side (orchestrator/invariants.mjs + scenario-runner.mjs shipped with 2 starter invariants — apiHealth + apiCanReachRegistry; 6 smoke tests green; HARNESS_COMPOSE-gated runner per ADR-002 wrapper leg). 30/30 browser tests green. Phase 3 25+6 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -1629,6 +1629,101 @@ Phase 7 slice 4d-prep summary (this iteration on the api side):
   meaningful new code, not just compose wiring) OR slice 4e
   (which is essentially the acceptance gate, blocked on
   4b-verify + 4c-verify + 4d-activate all being done).
+
+Phase 7 slice 4d-scenarios summary (this iteration on the api side):
+
+- **The first meaningful new code in slice 4** — not just
+  compose wiring or stub fixes. The orchestrator's missing
+  brain (`invariants.mjs` + `scenario-runner.mjs`) ships
+  in scaffold form, with 2 starter invariants + a 6-test
+  smoke suite that runs entirely offline.
+
+- **Path picked: (a) — `HARNESS_COMPOSE=1`-gated unified
+  runner**. Same binary works in both topology modes; the
+  env flag selects the behavior. Compose mode hits already-
+  running endpoints; native mode (not yet implemented here)
+  will eventually delegate to `scripts/start-fork.mjs` +
+  `scripts/start-indexers.mjs` via `services.mjs`. ADR-002's
+  "wrapper service that delegates" leg.
+
+- **What landed**:
+  * `auto-qa/harness/orchestrator/invariants.mjs` (NEW) —
+    the assertion library. Exports `INVARIANTS` array of
+    `{ name, description, layer, check }` records and
+    `runAllInvariants(ctx)` aggregator. Each `check(ctx)`
+    is an async predicate that resolves with detail or
+    throws. The aggregator runs all of them sequentially
+    without short-circuiting (so a single broken layer
+    doesn't hide downstream failures). Two starter
+    invariants:
+    - `apiHealth` (single-layer) — api `/health` returns
+      HTTP 200
+    - `apiCanReachRegistry` (api↔registry cross-layer) —
+      api `/registry/graphql` proxies the `__typename`
+      probe to the registry checkpoint and returns
+      `{data: {__typename: "Query"}}`
+  * `auto-qa/harness/orchestrator/scenario-runner.mjs`
+    (NEW) — CLI entry point. Reads service URLs from env
+    (`API_URL`, `REGISTRY_URL`, `CANDLES_URL`, `RPC_URL`),
+    gates on `HARNESS_COMPOSE=1` (exits 2 with guidance
+    pointing at start-indexers.mjs + tests/ in native
+    mode), supports `HARNESS_DRY_RUN=1` for offline
+    catalog dump. Exits 0 on all-pass, 1 on any-fail.
+  * `auto-qa/harness/tests/smoke-scenario-runner.test.mjs`
+    (NEW) — 6 tests. Brings up an in-process node:http
+    fixture mimicking the api's `/health` + `/registry/graphql`
+    response shapes, then exercises:
+    - INVARIANTS array shape (typecheck-style assertion)
+    - happy path: both invariants pass
+    - failure path 1: api /health is 503 → apiHealth fails,
+      apiCanReachRegistry STILL RUNS (no short-circuit)
+    - failure path 2: registry typename wrong →
+      apiCanReachRegistry fails with descriptive error
+    - CLI dry-run exits 0 with catalog visible in stdout
+    - CLI native mode exits 2 with clear error message
+  * `auto-qa/harness/package.json` — 3 new scripts:
+    `scenarios:dry` (dry-run; no network), `scenarios:run`
+    (real run; needs compose stack up), `smoke:scenarios`
+    (the smoke test).
+
+- **What's deliberately deferred**:
+  * Native mode in scenario-runner. Compose mode first
+    because that's the slice 4 acceptance gate; native
+    mode is a follow-up slice (4d-native or similar).
+  * The other 5+ invariants per PROGRESS.md's invariant
+    tables (apiCanReachCandles, rateSanity,
+    probabilityBounds, candlesAggregation, chartShape,
+    conservation). Each is a small additive slice on the
+    now-stable INVARIANTS array — slice 4d-scenarios-more
+    (or per-invariant micro-slices).
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 6/6 pass (155ms total)
+  * `npm run scenarios:dry` → exits 0; prints invariant
+    catalog
+  * Native-mode rejection prints clear pointer + exits 2
+  * No new lint/typecheck issues (one stub-related TS
+    warning was fixed in the same iteration)
+  * `docker compose config --quiet` still passes
+    (orchestrator service block still commented; runner
+    is just code)
+
+- **What this enables**:
+  * Slice 4d-activate: replace the placeholder `tail -f
+    /dev/null` command in the orchestrator compose block
+    with `npm run scenarios:run`. Atomic uncomment now
+    that the runner exists.
+  * Future iterations can ADD invariants to the array
+    without touching scenario-runner.mjs — clean separation
+    between the assertion library (data) and the runner
+    (control flow).
+
+- Slice 4 progress: ~67% done (10 of ~15+ sub-slices total
+  — slice 4d-scenarios decomposes further into per-invariant
+  sub-slices over time). Next bot-doable: slice 4d-activate
+  (atomic uncomment + replace placeholder command) OR slice
+  4d-scenarios-more (add the next invariant — probably
+  apiCanReachCandles, mirroring the registry pattern).
 
 Slice 4c v3b summary (previous iteration on the interface side):
 

@@ -730,26 +730,38 @@ freshly-generated addresses as recipients; documented in
       scripts don't exist yet — see 4d-scenarios below).
       Top-level `orchestrator-node-modules` volume declared
       eagerly so 4d-activate stays atomic.
-- [ ] **4d-scenarios — build the missing assertion scripts.**
-      ARCHITECTURE.md envisions `orchestrator/invariants.mjs`
-      (cross-layer assertion library) and a scenario-runner
-      that drives anvil's clock + sends synthetic txs +
-      verifies the per-block invariants. Neither exists yet.
-      The existing `orchestrator/services.mjs` is a process-
-      spawner that ASSUMES native-anvil + script-orchestrated
-      indexers — it would conflict with the compose stack
-      (where anvil + indexers are already up). Two paths
-      forward:
-      (a) Build `orchestrator/scenario-runner.mjs` that
-          gates on `HARNESS_COMPOSE=1`: in compose mode,
-          skip spawning + just hit existing endpoints; in
-          native mode, delegate to services.mjs. Same
-          binary, two topologies.
-      (b) Defer compose orchestrator entirely; treat compose
-          as a "bring up the stack" tool, keep using
-          start-indexers.mjs + tests/ in native mode for
-          actual orchestration work.
-      Decision needed before 4d-activate.
+- [x] **4d-scenarios (slice 1: scaffold + 2 starter
+      invariants)**. Picked path (a): `HARNESS_COMPOSE=1`-
+      gated unified runner. New files:
+      `orchestrator/invariants.mjs` (assertion library —
+      INVARIANTS array + `runAllInvariants(ctx)` aggregator;
+      first two invariants: `apiHealth` → api `/health` 200,
+      `apiCanReachRegistry` → api `/registry/graphql`
+      proxies `__typename` probe to registry checkpoint),
+      `orchestrator/scenario-runner.mjs` (CLI entry point;
+      reads service URLs from env, supports `HARNESS_DRY_RUN=1`
+      for offline catalog dump, exits 2 in native mode with
+      a pointer to start-indexers.mjs + tests/), and
+      `tests/smoke-scenario-runner.test.mjs` (6 tests:
+      INVARIANTS shape; runAllInvariants happy path against
+      in-process node:http fixture; 2 failure paths
+      verifying no short-circuit; CLI dry-run; CLI native-
+      mode rejection). New npm scripts: `scenarios:dry`,
+      `scenarios:run`, `smoke:scenarios`. All 6 tests
+      green; dry-run validated.
+- [ ] **4d-scenarios-more — add remaining invariants** (per
+      PROGRESS.md's invariant tables): apiCanReachCandles,
+      rateSanity (sDAI rate ≥ 1, monotonic), probabilityBounds
+      (price ∈ [0, 1]), candlesAggregation (candle vs raw
+      swaps), chartShape, conservation (∑YES + ∑NO = ∑sDAI).
+      Each is a small additive slice on the now-stable
+      `INVARIANTS` array.
+- [ ] **4d-activate — atomic uncomment** of the orchestrator
+      block. Now that scenario-runner.mjs exists and works,
+      the placeholder `tail -f /dev/null` command in the
+      compose stub can be replaced with `node
+      orchestrator/scenario-runner.mjs` (or
+      `npm run scenarios:run`). Adds 8th service to compose.
 - [ ] **4d-activate — uncomment orchestrator block.** Atomic
       one-step uncomment after 4d-scenarios decision lands.
       Adds 8th service to compose stack.

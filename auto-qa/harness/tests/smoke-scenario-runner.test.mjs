@@ -1,0 +1,136 @@
+/**
+ * smoke-scenario-runner.test.mjs — Phase 7 slice 4d-scenarios.
+ *
+ * Verifies the orchestrator's two starter invariants
+ * (apiHealth + apiCanReachRegistry) against a tiny in-process
+ * HTTP fixture that mimics the api's response shape, and that
+ * the scenario-runner CLI's dry-run flag works without network.
+ *
+ * No docker daemon, no live api, no real indexer — pure offline.
+ * Exercises the `INVARIANTS` array + `runAllInvariants()` against
+ * a node:http server we control.
+ */
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+
+import {
+    INVARIANTS,
+    runAllInvariants,
+} from '../orchestrator/invariants.mjs';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const RUNNER = resolve(__dirname, '..', 'orchestrator', 'scenario-runner.mjs');
+
+// ─── tiny api fixture ───────────────────────────────────────────────
+
+function startFixture({ healthOk = true, registryTypename = 'Query' } = {}) {
+    return new Promise((res) => {
+        const server = createServer((req, response) => {
+            req.on('data', () => {});
+            req.on('end', () => {
+                if (req.url === '/health' && req.method === 'GET') {
+                    if (!healthOk) { response.statusCode = 503; response.end('down'); return; }
+                    response.setHeader('content-type', 'application/json');
+                    response.end(JSON.stringify({ ok: true }));
+                    return;
+                }
+                if (req.url === '/registry/graphql' && req.method === 'POST') {
+                    response.setHeader('content-type', 'application/json');
+                    response.end(JSON.stringify({ data: { __typename: registryTypename } }));
+                    return;
+                }
+                response.statusCode = 404;
+                response.end('not found');
+            });
+        });
+        server.listen(0, '127.0.0.1', () => {
+            const { port } = server.address();
+            res({ url: `http://127.0.0.1:${port}`, stop: () => new Promise((r) => server.close(r)) });
+        });
+    });
+}
+
+// ─── tests ──────────────────────────────────────────────────────────
+
+test('INVARIANTS array shape (slice 4d-scenarios scaffold)', () => {
+    assert.ok(Array.isArray(INVARIANTS), 'INVARIANTS is array');
+    assert.ok(INVARIANTS.length >= 2, 'at least 2 starter invariants');
+    for (const inv of INVARIANTS) {
+        assert.equal(typeof inv.name, 'string');
+        assert.equal(typeof inv.description, 'string');
+        assert.equal(typeof inv.layer, 'string');
+        assert.equal(typeof inv.check, 'function');
+    }
+});
+
+test('runAllInvariants — happy path: both invariants pass', async () => {
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants({ apiUrl: fx.url });
+        assert.equal(pass, true, 'overall pass');
+        assert.equal(results.length, INVARIANTS.length);
+        for (const r of results) {
+            assert.equal(r.ok, true, `invariant ${r.name} ok=${r.ok}, error=${r.error}`);
+        }
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: api /health is 503', async () => {
+    const fx = await startFixture({ healthOk: false });
+    try {
+        const { pass, results } = await runAllInvariants({ apiUrl: fx.url });
+        assert.equal(pass, false, 'overall fail');
+        const health = results.find((r) => r.name === 'apiHealth');
+        assert.equal(health.ok, false);
+        assert.match(health.error, /HTTP 503|503/);
+        // Other invariants still ran (no short-circuit)
+        const reg = results.find((r) => r.name === 'apiCanReachRegistry');
+        assert.equal(reg.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: registry typename wrong', async () => {
+    const fx = await startFixture({ registryTypename: 'NotQuery' });
+    try {
+        const { pass, results } = await runAllInvariants({ apiUrl: fx.url });
+        assert.equal(pass, false);
+        const reg = results.find((r) => r.name === 'apiCanReachRegistry');
+        assert.equal(reg.ok, false);
+        assert.match(reg.error, /unexpected __typename/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('scenario-runner CLI — dry-run exits 0 without network', () => {
+    const r = spawnSync('node', [RUNNER], {
+        env: {
+            ...process.env,
+            HARNESS_COMPOSE: '1',
+            HARNESS_DRY_RUN: '1',
+        },
+        encoding: 'utf8',
+    });
+    assert.equal(r.status, 0, `exit status: ${r.status}, stdout: ${r.stdout}, stderr: ${r.stderr}`);
+    assert.match(r.stdout, /invariants registered: \d+/);
+    assert.match(r.stdout, /apiHealth/);
+    assert.match(r.stdout, /apiCanReachRegistry/);
+});
+
+test('scenario-runner CLI — native mode exits 2 with guidance', () => {
+    const r = spawnSync('node', [RUNNER], {
+        env: { ...process.env, HARNESS_COMPOSE: '', HARNESS_DRY_RUN: '' },
+        encoding: 'utf8',
+    });
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /native mode not yet supported/);
+});
