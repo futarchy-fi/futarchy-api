@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 3 — slices 1+1.5+2+3 landed. bootstrap-start-block now exists (psql injector for `_metadatas.last_indexed_block`). 25 smoke tests pass + 2 skips. Slice 4 (THE roundtrip invariant) next. |
+| Phase | 3 — slices 1+1.5+2+3+4 landed. Orchestration smoke (anvil + registry indexer via docker) shipped; skips cleanly when daemon down. 25 smoke tests pass + 3 skips. Slice 5 (literal roundtrip invariant) requires solving RESET-vs-bootstrap race. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -595,17 +595,87 @@ Phase 2 slice 4 — multi-spawn stress (3 cycles) ✓ ~8.2s
                                        TOTAL: 25 pass + 2 skip
 ```
 
-**Phase 3 wrap-up — remaining:**
+- **slice 4** (this iteration) — `tests/smoke-indexer-orchestration.test.mjs`
+  (new): the FIRST test that exercises start-indexers against a live
+  docker daemon. Brings up native anvil + registry indexer (via
+  docker compose), waits for the indexer's GraphQL to respond to
+  `{__typename}`, asserts return is `"Query"`, then tears down in
+  dependency-aware order (indexer first, anvil second).
 
-- slice 4 — `tests/smoke-indexer-roundtrip.test.mjs` (THE Phase 3
-  invariant): anvil event → wait for indexer → query both indexer
-  GraphQL AND api passthrough → assert agreement. **First true
-  cross-layer block invariant.** Will require docker daemon UP to
-  fully validate; should still ship the test code that runs when
-  daemon comes up.
-- slice 5 — Cold-start optimization: explore pre-warmed postgres
-  image strategy if cold-start exceeds 90s on CI. Per Spike-001 the
-  expected cost is 50-90s per indexer; on CI may be slower.
+  - **Pre-flight skips (3)**: anvil not on PATH, indexer clone not
+    found, or docker daemon down → skip with clear reason.
+  - **Timeout**: ORCH_TIMEOUT_MS default 240s (Docker build dominates
+    cold start; Spike-001 estimated 50-90s per indexer).
+  - **Scope deliberately reduced** from the original "literal
+    roundtrip invariant" planned for this slice. The bootstrap-vs-RESET
+    race condition (see slice 5 below) needs a design pass before
+    we can reliably inject `_metadatas.last_indexed_block` mid-startup.
+    Shipping the orchestration smoke now lets us validate the build
+    + networking end of the stack incrementally.
+  - **Validated NOTHING runtime** — daemon is down on the dev machine
+    today; test skips cleanly. Will go green when Docker Desktop is
+    started.
+
+  - npm script: `smoke:orchestration` in harness;
+    `auto-qa:e2e:smoke:orchestration` at root.
+
+**Smoke summary (post-Phase 3 slice 4):**
+
+```
+[Phase 1]
+  start-fork + block-clock                          ✓ ~3s
+  setNextTimestamp                                  ✓ ~2.5s
+  setBalance                                        ✓ ~2.5s
+  impersonateAccount                                ✓ ~3s
+  compose smoke                                      ⊘ skipped (daemon down)
+[Phase 2]
+  orchestrator dual-source                           ✓ ~3.5s
+  passthrough verbatim                               ✓ ~280ms
+  passthrough 500                                    ✓ ~280ms
+  passthrough 502 unreachable                        ✓ ~270ms
+  multi-spawn stress (3 cycles)                     ✓ ~8.2s
+[Phase 3]
+  detect-indexers (happy)                            ✓ ~25ms
+  detect-indexers (missing-override)                 ✓ ~1ms
+  start-indexers contract (5 cases + 1 skip)        ✓ ~2.3s
+  bootstrap-start-block contract (9 cases)          ✓ ~1s
+  indexer orchestration                              ⊘ skipped (daemon down)
+                                       TOTAL: 25 pass + 3 skip
+```
+
+**Phase 3 remaining work:**
+
+- **slice 5 — Bootstrap-vs-RESET race + literal roundtrip invariant.**
+  Three viable bootstrap-timing designs, ordered by ease:
+
+  **(a) Two-phase compose**: split `up -d` into `up -d postgres` →
+       `await postgres healthy` → run `checkpoint generate` against
+       it → inject `_metadatas` row → `up -d --no-deps registry-checkpoint`.
+       Cleanest, most deterministic. Requires running `checkpoint
+       generate` outside the indexer container (could docker exec
+       into postgres or use a one-shot init container).
+
+  **(b) Wrapper command override**: replace upstream compose's
+       `command:` with a wrapper that does `checkpoint generate &&
+       sleep N && inject-row && npm run dev`. Modifies upstream
+       compose semantics — adds friction but no race.
+
+  **(c) Race after `up -d`**: just inject the row immediately after
+       compose returns and hope we beat the indexer's first scan.
+       Fragile, but might work in practice.
+
+  Once bootstrap is solved, the actual invariant test:
+  - Start anvil at fork block N
+  - Bootstrap registry indexer to start at N
+  - Wait for indexer to reach N (via psql `last_indexed_block` poll)
+  - Mine 5 blocks on anvil → height N+5
+  - Wait for indexer to reach N+5
+  - Cross-layer: query api `/registry/graphql` for the same block
+  - Assert: indexer head == anvil head, api passthrough returns
+    indexer's response verbatim
+
+- **slice 6 — Cold-start optimization** (only if Phase 7 CI wall
+  time becomes problematic). Pre-warmed postgres image strategy.
 
 **Phase 3 risks tracked:**
 
