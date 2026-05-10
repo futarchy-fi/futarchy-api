@@ -774,11 +774,28 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). **Now 53 invariants**:
-      14 api-internal + 29 indexer probes + 10 chain-layer.
-      180 smoke tests green.
-      `registryIndexerSchemaHasRequiredTypes` added this
-      slice — second GraphQL INTROSPECTION probe; sister
+      PROGRESS.md's invariant tables). **Now 54 invariants**:
+      14 api-internal + 30 indexer probes + 10 chain-layer.
+      184 smoke tests green.
+      `candleVolumesAllRowsNonNegative` added this slice —
+      iterate-all-rows extension on the candle side; sister
+      to swapAmountsAllRowsPositive. Symmetrically completes
+      the iterate-all-rows pattern across the two main
+      accumulator entities (swap amounts + candle volumes).
+      Catches bugs affecting SUBSETS of candles without
+      affecting the latest: indexer reorgs, per-period
+      decoder bugs (e.g., aggregator reads token-decimals
+      from CURRENT pool state instead of period snapshot),
+      partial-rewrite bugs, pool-specific aggregator bugs.
+      Sister candleVolumesNonNegative still passes when
+      latest is fine — only iterate-all-rows catches
+      historical corruption. Fixture extended: buildCandles
+      now defaults volumeToken0/1 to '1.0' on every row;
+      per-row overrides via candleVolumeToken0s /
+      candleVolumeToken1s arrays.
+
+      `registryIndexerSchemaHasRequiredTypes` (previous
+      slice) — second GraphQL INTROSPECTION probe; sister
       to candlesIndexerSchemaHasRequiredTypes (just
       shipped) on the registry side. Symmetrically
       completes schema-validation across both indexers.

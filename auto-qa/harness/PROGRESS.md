@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent + anvilSnapshotCapabilityPresent + swapAmountsAllRowsPositive + apiHealthBodyShape + anvilTimeWarpCapabilityPresent + apiWarmerBodyShape + candlesIndexerSchemaHasRequiredTypes + registryIndexerSchemaHasRequiredTypes)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **53 invariants** — 14 api-internal + 29 indexer + 10 chain-layer; introspection coverage now symmetric across BOTH indexers (candles + registry); 180 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent + anvilSnapshotCapabilityPresent + swapAmountsAllRowsPositive + apiHealthBodyShape + anvilTimeWarpCapabilityPresent + apiWarmerBodyShape + candlesIndexerSchemaHasRequiredTypes + registryIndexerSchemaHasRequiredTypes + candleVolumesAllRowsNonNegative)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **54 invariants** — 14 api-internal + 30 indexer + 10 chain-layer; iterate-all-rows pattern now symmetric across the two main accumulator entities (swap amounts + candle volumes); 184 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,56 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (registryIndexerSchemaHasRequiredTypes) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (candleVolumesAllRowsNonNegative) summary (this iteration on the api side):
+
+- **Iterate-all-rows extension on the candle side** —
+  sister to swapAmountsAllRowsPositive (4 slices ago).
+  Symmetrically completes the iterate-all-rows pattern
+  across the two main accumulator-bearing entities:
+  swap amounts + candle volumes.
+
+- **54-invariant milestone**. Layer breakdown: 14 api-
+  internal + 30 indexer (was 29) + 10 chain-layer.
+
+- **Why both candleVolumesNonNegative AND this exist**:
+  * candleVolumesNonNegative (LATEST only) — cheap probe
+    that catches aggregator bugs uniform across all
+    candles. Most regressions land here first.
+  * THIS one (UP-TO-50 rows) — catches bugs affecting
+    SUBSETS of candles without affecting the latest:
+      * Indexer reorg re-processed historical periods
+      * Per-period decoder bug — aggregator reads pool
+        token-decimals from CURRENT pool state instead
+        of period's snapshot, corrupting historical
+        candles from before a decimals change
+      * Partial-rewrite bug — fix re-emitted only candles
+        from a specific period range
+      * Pool-specific aggregator bug — only candles for
+        a particular pool affected; latest happens to be
+        a different pool
+
+- **Fixture extension**: buildCandles now defaults
+  volumeToken0/volumeToken1 to '1.0' for non-zero indices
+  (index 0 still uses latestCandleVolume* for back-compat
+  with single-candle checks). New per-row override knobs:
+  `candleVolumeToken0s`, `candleVolumeToken1s` arrays.
+
+- **Smoke tests**: 4 new (5-candle happy default; vacuous
+  on 0 candles; failure candle[2].volumeToken0=-3.5 partial-
+  rewrite — sister candleVolumesNonNegative STILL passes
+  (latest=index 0 unaffected); failure candle[1].
+  volumeToken1='not-a-number' per-period decoder bug).
+  184/184 pass (was 180).
+
+- **Slice 4 progress: ~99% (40+ of ~30 sub-slices)**. The
+  iterate-all-rows pattern is now SYMMETRIC: swap amounts
+  AND candle volumes both have latest-only + iterate-all-
+  rows coverage. Each pattern catches a distinct bug class
+  (uniform-aggregator vs subset-corruption). Still to add
+  (per CHECKLIST): candlesAggregation, conservation, TWAP
+  monotonicity, cross-run rate monotonicity.
+
+Phase 7 slice 4d-scenarios-more (registryIndexerSchemaHasRequiredTypes) summary (previous iteration on the api side):
 
 - **Second GraphQL INTROSPECTION probe** — sister to
   candlesIndexerSchemaHasRequiredTypes (just shipped),

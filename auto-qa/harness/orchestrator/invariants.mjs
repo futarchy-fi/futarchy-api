@@ -2176,6 +2176,71 @@ export const INVARIANTS = [
             return { ok: true, detail: `candle ${c.id}: volumes=${v0}/${v1} non-negative` };
         },
     },
+    {
+        name: 'candleVolumesAllRowsNonNegative',
+        description: 'every candle (up to first 50) has volumeToken0 ≥ 0 AND volumeToken1 ≥ 0 (catches partial-rewrite or per-period-aggregator bugs that LATEST-only checks miss)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // ITERATE-ALL-ROWS strengthening of candleVolumesNonNegative
+            // (which only checks the latest candle). Sister to
+            // swapAmountsAllRowsPositive (already shipped); together
+            // they cover the iterate-all-rows pattern across the two
+            // main accumulator-bearing entities (swap amounts +
+            // candle volumes).
+            //
+            // Why both invariants exist:
+            //   * candleVolumesNonNegative (LATEST only) — cheap probe
+            //     that catches aggregator bugs uniform across ALL
+            //     candles. Most regressions land here first.
+            //   * THIS one (UP-TO-50 rows) — catches bugs that
+            //     affect SUBSETS of candles without affecting the
+            //     latest:
+            //       * Indexer reorg re-processed historical periods
+            //         and corrupted those candle rows
+            //       * Per-period decoder bug — aggregator reads pool
+            //         token-decimals from CURRENT pool state instead
+            //         of the period's snapshot, so historical
+            //         candles from before a decimals change get
+            //         wrong volumes
+            //       * Partial-rewrite bug — a fix re-emitted only
+            //         candles from a specific period range with the
+            //         corrupted shape
+            //       * Pool-specific aggregator bug — only candles
+            //         for a particular pool get wrong volumes
+            //         (latest happens to be a different pool)
+            //
+            // The 50-row cap: keep the query cheap. Mirror of the
+            // swap-side rationale (SubgraphSwap-style indexers can
+            // emit thousands of candles; sampling 50 is enough
+            // signal without bloating smoke-test runtime).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ candles(first: 50, orderBy: time, orderDirection: desc) { id volumeToken0 volumeToken1 } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.candles)) {
+                throw new Error(`unexpected candles response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.candles.length === 0) {
+                return { ok: true, detail: 'no candles to check (vacuously true)' };
+            }
+            for (const c of j.data.candles) {
+                const v0 = parseFloat(c.volumeToken0);
+                const v1 = parseFloat(c.volumeToken1);
+                for (const [name, val] of [['volumeToken0', v0], ['volumeToken1', v1]]) {
+                    if (!Number.isFinite(val)) {
+                        throw new Error(`candle ${c.id}: ${name}="${c[name]}" parseFloat = ${val} (not finite — partial-rewrite or per-period decoder bug; latest candle is unaffected)`);
+                    }
+                    if (val < 0) {
+                        throw new Error(`candle ${c.id}: ${name}=${val} < 0 (signed-amount aggregator bug; this period was processed with the wrong logic, latest candle is unaffected)`);
+                    }
+                }
+            }
+            return { ok: true, detail: `${j.data.candles.length} candles all have volumeToken0 ≥ 0 AND volumeToken1 ≥ 0` };
+        },
+    },
     // ── Chain-process probes ────────────────────────────────────────
     // Validate the chain process itself before checking contract state.
     // If anvilBlockNumber + anvilChainId pass but rateSanity fails,

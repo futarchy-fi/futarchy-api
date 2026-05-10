@@ -140,6 +140,12 @@ function startFixture({
     latestCandleLow = '0.40',
     latestCandleClose = '0.48',
     latestCandleVolumeToken0 = '100.0',
+    // Per-row candle volume overrides for candleVolumesAllRowsNonNegative
+    // (slice 4d-scenarios-more). When non-null, indexed by row position.
+    // When null, index 0 uses latestCandleVolume*; non-zero indices
+    // default to '1.0' so iterate-all-rows checks see valid volumes.
+    candleVolumeToken0s = null,
+    candleVolumeToken1s = null,
     latestCandleVolumeToken1 = '50.0',
     // Latest-swap field values for amounts + timestamp invariants.
     // Default values satisfy both; override to simulate event-decoder
@@ -357,9 +363,19 @@ function startFixture({
             row.high = latestCandleHigh;
             row.low = latestCandleLow;
             row.close = latestCandleClose;
-            row.volumeToken0 = latestCandleVolumeToken0;
-            row.volumeToken1 = latestCandleVolumeToken1;
         }
+        // volumeToken0 / volumeToken1: per-row override via
+        // candleVolumeToken0s / candleVolumeToken1s arrays (slice
+        // 4d-scenarios-more candleVolumesAllRowsNonNegative); else
+        // index 0 uses latestCandleVolume* (back-compat with single-
+        // candle checks); else default '1.0' so iterate-all-rows
+        // invariants see valid volumes on every row by default.
+        row.volumeToken0 = candleVolumeToken0s
+            ? String(candleVolumeToken0s[i])
+            : (i === 0 ? latestCandleVolumeToken0 : '1.0');
+        row.volumeToken1 = candleVolumeToken1s
+            ? String(candleVolumeToken1s[i])
+            : (i === 0 ? latestCandleVolumeToken1 : '1.0');
         row.time = candleTimes
             ? Number(candleTimes[i])
             : candleTimeAnchor - i * candleTimeStep;
@@ -2772,6 +2788,75 @@ test('runAllInvariants — failure: candle volume0 < 0 (signed-amount aggregator
         // OHLC invariant still passes (only volume is broken)
         const ohlc = results.find((r) => r.name === 'candleOHLCOrdering');
         assert.equal(ohlc.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — candleVolumesAllRowsNonNegative happy: 5 candles all non-negative (default fixture)', async () => {
+    // Default per-row volumes: '1.0' for non-zero indices; index 0
+    // uses latestCandleVolume* (100.0 / 50.0). All 5 rows have
+    // non-negative volumes.
+    const fx = await startFixture({ candlesCandlesCount: 5 });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'candleVolumesAllRowsNonNegative');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /5 candles all have volumeToken0 ≥ 0 AND volumeToken1 ≥ 0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — candleVolumesAllRowsNonNegative vacuously true with no candles', async () => {
+    const fx = await startFixture({ candlesCandlesCount: 0 });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'candleVolumesAllRowsNonNegative');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /vacuously true/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candleVolumesAllRowsNonNegative non-latest candle has negative volume0 (partial-rewrite)', async () => {
+    // Scenario: indexer reorg re-processed historical periods; candle[2]
+    // got volumeToken0=-3.5. Latest candle is fine, so the latest-only
+    // candleVolumesNonNegative STILL passes — this iterate-all-rows
+    // check is what catches the historical corruption.
+    const fx = await startFixture({
+        candlesCandlesCount: 5,
+        candleVolumeToken0s: ['100.0', '1.0', '-3.5', '1.0', '1.0'],   // index 2 corrupted
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candleVolumesAllRowsNonNegative');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /candle mock-candle-2: volumeToken0=-3\.5 < 0.*latest candle is unaffected/);
+        // Sister probe STILL passes (only checks LATEST=index 0=100.0)
+        const sister = results.find((r) => r.name === 'candleVolumesNonNegative');
+        assert.equal(sister.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candleVolumesAllRowsNonNegative non-latest volumeToken1 not finite (per-period decoder bug)', async () => {
+    // Scenario: per-period-context decoder bug — historical candle's
+    // volumeToken1 got serialized as 'NaN' string. Latest is fine.
+    const fx = await startFixture({
+        candlesCandlesCount: 3,
+        candleVolumeToken1s: ['50.0', 'not-a-number', '1.0'],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candleVolumesAllRowsNonNegative');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /candle mock-candle-1: volumeToken1="not-a-number" parseFloat = NaN/);
     } finally {
         await fx.stop();
     }
