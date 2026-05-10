@@ -774,10 +774,25 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). **Now 45 invariants**:
-      12 api-internal + 26 indexer probes + 7 chain-layer.
-      149 smoke tests green.
-      `anvilNetworkVersionMatchesChainId` added this slice —
+      PROGRESS.md's invariant tables). **Now 46 invariants**:
+      12 api-internal + 26 indexer probes + 8 chain-layer.
+      152 smoke tests green.
+      `anvilImpersonationCapabilityPresent` added this slice
+      — eighth chain-layer invariant; first probe that
+      exercises an ANVIL-SPECIFIC RPC method
+      (anvil_impersonateAccount) rather than a standard
+      JSON-RPC method. Asserts the method is actually
+      callable, not just that the client *claims* to be
+      anvil. Distinct from anvilClientVersionMentionsAnvil
+      (which checks the version string only). Catches
+      "hardhat-compatible" forks and patched-anvil builds
+      that emit "anvil" in web3_clientVersion but lack
+      the impersonation extension. Why this matters: every
+      futarchy flow that mutates state requires impersonating
+      an account; without this method, every scenario
+      silently fails to produce state changes.
+
+      `anvilNetworkVersionMatchesChainId` (previous slice) —
       seventh chain-layer invariant; chain-RPC-CONSISTENCY
       check. Asserts net_version (decimal string) and
       eth_chainId (hex) numerically agree. Orthogonal to

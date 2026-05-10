@@ -2059,6 +2059,57 @@ export const INVARIANTS = [
             return { ok: true, detail: `eth_chainId=${chainIdHex} ↔ net_version=${netVersion} (consistent)` };
         },
     },
+    {
+        name: 'anvilImpersonationCapabilityPresent',
+        description: 'anvil_impersonateAccount RPC method works (catches "hardhat-compatible" or wrong-fork clients that identify as anvil in version string but lack the impersonation extension scenarios depend on)',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            // The HARNESS depends on this method to drive scenarios:
+            // every flow that mutates state requires impersonating
+            // an account (so we can call functions as the proposer,
+            // trader, etc., without their private keys).
+            //
+            // anvilClientVersionMentionsAnvil checks the CLIENT says
+            // it's anvil. This invariant verifies the impersonation
+            // METHOD actually works — distinct domain. Several
+            // "hardhat-compatible" forks and patched-anvil builds
+            // exist that emit "anvil" in the version string but
+            // only implement a subset of anvil_* extensions.
+            //
+            // Bug shapes caught (NOT caught by anvilClientVersionMentionsAnvil):
+            //   * Hardhat-compatible third-party RPC that reports
+            //     "anvil/X" version but lacks anvil_impersonateAccount
+            //   * Anvil version regression that removed the method
+            //     (or renamed it)
+            //   * RPC layer with method-allowlisting that
+            //     accidentally excludes anvil_* methods
+            //   * Forked anvil that disabled impersonation for
+            //     "production safety" reasons
+            //
+            // Test address: ZERO_ADDR is universally safe to
+            // impersonate — no real account, no state to mutate.
+            // The invariant doesn't care about the result; it cares
+            // that the method DOESN'T return a "method not found"
+            // or similar error.
+            //
+            // Note: this is a CAPABILITY probe, not an end-to-end
+            // scenario test. Scenarios will exercise the full
+            // impersonate → call → unimpersonate flow; this invariant
+            // catches the "method missing entirely" failure mode
+            // before scenarios get that far.
+            const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
+            try {
+                await rpcRequest(ctx.rpcUrl, 'anvil_impersonateAccount', [ZERO_ADDR]);
+            } catch (err) {
+                const msg = err?.message || String(err);
+                if (/method.*not (found|supported|mocked)|-32601/i.test(msg)) {
+                    throw new Error(`anvil_impersonateAccount unavailable (${msg.slice(0, 100)}) — wrong client or method-allowlisting in the RPC layer; every scenario that mutates state will silently fail`);
+                }
+                throw err;
+            }
+            return { ok: true, detail: `anvil_impersonateAccount(0x0…0) accepted — impersonation extension available` };
+        },
+    },
     // ── Economic invariants ─────────────────────────────────────────
     // Always-on truth properties from PROGRESS.md's "Economic
     // invariants" table. Each one validates a single chain-level

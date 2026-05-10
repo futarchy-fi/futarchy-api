@@ -212,6 +212,14 @@ function startFixture({
     // '101' (mismatch — silent divergence bug), 'abc' (non-numeric
     // — legacy-format violation), or null (handler regression).
     netVersion = '100',
+    // anvil_impersonateAccount support flag for
+    // anvilImpersonationCapabilityPresent (slice 4d-scenarios-more).
+    // Default true (full anvil); set false to simulate a hardhat-
+    // compatible client that emits "anvil" in clientVersion but
+    // lacks the impersonation extension. Set to 'rpc-error' to
+    // simulate the method existing but throwing a non-method-not-
+    // found error (e.g., "internal error").
+    anvilImpersonationSupported = true,
 } = {}) {
     // ── shared row builders ──────────────────────────────────────────
     // Pulled out of the per-route handlers so the api passthrough
@@ -478,6 +486,19 @@ function startFixture({
                             return replyResult(gasPriceHex);
                         case 'net_version':
                             return replyResult(netVersion);
+                        case 'anvil_impersonateAccount':
+                            if (anvilImpersonationSupported === true) return replyResult(null);
+                            if (anvilImpersonationSupported === 'rpc-error') {
+                                return response.end(JSON.stringify({
+                                    jsonrpc: '2.0', id: parsed.id ?? 1,
+                                    error: { code: -32603, message: 'internal error' },
+                                }));
+                            }
+                            // false → simulate method-not-found (hardhat-compatible client)
+                            return response.end(JSON.stringify({
+                                jsonrpc: '2.0', id: parsed.id ?? 1,
+                                error: { code: -32601, message: 'method anvil_impersonateAccount not supported' },
+                            }));
                         default:
                             response.end(JSON.stringify({
                                 jsonrpc: '2.0', id: parsed.id ?? 1,
@@ -1199,6 +1220,60 @@ test('runAllInvariants — failure: anvilNetworkVersionMatchesChainId net_versio
         const inv = results.find((r) => r.name === 'anvilNetworkVersionMatchesChainId');
         assert.equal(inv.ok, false);
         assert.match(inv.error, /net_version returned non-string.*null/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — anvilImpersonationCapabilityPresent happy: anvil_impersonateAccount accepted (default fixture)', async () => {
+    const fx = await startFixture();  // default anvilImpersonationSupported=true
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'anvilImpersonationCapabilityPresent');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /anvil_impersonateAccount.*accepted.*impersonation extension available/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilImpersonationCapabilityPresent method not supported (hardhat-compatible client)', async () => {
+    // Client identifies as anvil in clientVersion (so
+    // anvilClientVersionMentionsAnvil PASSES) but lacks the
+    // impersonation method. Demonstrates the capability-vs-
+    // identity distinction.
+    const fx = await startFixture({ anvilImpersonationSupported: false });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilImpersonationCapabilityPresent');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /anvil_impersonateAccount unavailable.*wrong client or method-allowlisting/);
+        // Sister probe STILL passes — client SAYS it's anvil
+        // (clientVersion default = 'anvil/0.1.0'); only this
+        // capability check catches the missing method.
+        const sister = results.find((r) => r.name === 'anvilClientVersionMentionsAnvil');
+        assert.equal(sister.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilImpersonationCapabilityPresent method exists but errors (RPC layer issue)', async () => {
+    // Method is registered but throws an unexpected error
+    // (-32603 internal error). The invariant only catches
+    // method-not-found errors specially; other RPC errors
+    // propagate as the underlying error message.
+    const fx = await startFixture({ anvilImpersonationSupported: 'rpc-error' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilImpersonationCapabilityPresent');
+        assert.equal(inv.ok, false);
+        // -32603 internal error doesn't match the method-not-found
+        // pattern, so the original RPC error message propagates
+        assert.match(inv.error, /RPC error.*internal error/);
     } finally {
         await fx.stop();
     }

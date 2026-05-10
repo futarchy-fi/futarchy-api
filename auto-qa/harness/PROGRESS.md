@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **45 invariants** — 12 api-internal + 26 indexer + 7 chain-layer; chain-RPC-CONSISTENCY check landed (net_version ↔ eth_chainId); 149 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **46 invariants** — 12 api-internal + 26 indexer + 8 chain-layer; chain-CAPABILITY probe landed (anvil_impersonateAccount actually works, not just clientVersion saying "anvil"); 152 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,72 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (anvilNetworkVersionMatchesChainId) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (anvilImpersonationCapabilityPresent) summary (this iteration on the api side):
+
+- **Chain-CAPABILITY probe** — eighth chain-layer
+  invariant. First invariant that exercises an
+  ANVIL-SPECIFIC RPC method (anvil_impersonateAccount)
+  rather than a standard JSON-RPC method. Asserts the
+  method is actually callable, not just that the client
+  *claims* to be anvil.
+
+- **46-invariant milestone**. Layer breakdown: 12 api-
+  internal + 26 indexer + 8 chain-layer (was 7).
+
+- **Why this matters distinctly from anvilClientVersionMentionsAnvil**:
+  the existing identity probe checks the CLIENT says
+  it's anvil. This probe verifies the impersonation
+  METHOD actually works. Several "hardhat-compatible"
+  forks and patched-anvil builds exist that emit "anvil"
+  in `web3_clientVersion` but only implement a subset
+  of `anvil_*` extensions. Demonstrated by the test:
+  with `anvilImpersonationSupported: false`, the
+  capability probe FAILS while
+  `anvilClientVersionMentionsAnvil` STILL passes.
+
+- **Bug shapes caught (NOT caught by other chain probes)**:
+  * Hardhat-compatible third-party RPC reports "anvil/X"
+    in clientVersion but lacks `anvil_impersonateAccount`
+  * Anvil version regression that removed the method
+    (or renamed it)
+  * RPC layer with method-allowlisting that
+    accidentally excludes `anvil_*` methods
+  * Forked anvil that disabled impersonation for
+    "production safety"
+
+- **Why this matters for scenarios**: every futarchy
+  flow that mutates state requires impersonating an
+  account (to call functions as the proposer, trader,
+  resolver without their private keys). Without
+  impersonation, EVERY scenario silently fails to
+  produce state changes.
+
+- **Smoke tests**: 4 new (default anvil_impersonateAccount
+  accepted; failure method-not-supported demonstrates
+  capability-vs-identity distinction — sister
+  anvilClientVersionMentionsAnvil STILL passes; failure
+  method exists but throws -32603 internal error
+  propagates as RPC error). 1 new fixture knob
+  (anvilImpersonationSupported: true | false |
+  'rpc-error'). 1 new RPC dispatch case
+  (anvil_impersonateAccount). 152/152 pass (was 149).
+
+- Slice 4 progress: ~99% (32+ of ~30 sub-slices). Chain
+  layer now has EIGHT coverage points: existence
+  (anvilBlockNumber), identity-network-expected
+  (anvilChainId), identity-client (anvilClientVersionMentionsAnvil),
+  block shape (anvilLatestBlockSensible), fee market
+  (anvilGasPricePresent), RPC-method-consistency
+  (anvilNetworkVersionMatchesChainId), CAPABILITY
+  (anvilImpersonationCapabilityPresent — NEW),
+  economic anchor (rateSanity). The capability layer
+  is qualitatively new — it tests "does the RPC method
+  WORK" rather than "what does the chain SAY". Still
+  to add (per CHECKLIST): candlesAggregation,
+  conservation, TWAP monotonicity, cross-run rate
+  monotonicity.
+
+Phase 7 slice 4d-scenarios-more (anvilNetworkVersionMatchesChainId) summary (previous iteration on the api side):
 
 - **Chain-RPC-CONSISTENCY check** — seventh chain-layer
   invariant. Asserts net_version (decimal string) and
