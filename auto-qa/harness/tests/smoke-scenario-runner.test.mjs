@@ -47,6 +47,16 @@ function startFixture({
     //   - body: change to break shape (e.g. drop spotCandles field)
     spotCandlesWithTickerStatus = 200,
     spotCandlesWithTickerBody = JSON.stringify({ spotCandles: [] }),
+    // Unified-chart happy-path (slice 4d-scenarios-more
+    // apiUnifiedChartShape): /api/v2/proposals/<id>/chart by
+    // default returns 200 + {candles: {yes:[], no:[], spot:[]},
+    // metadata: {}} — the minimal shape consumers depend on.
+    // Toggle status / body to simulate failures.
+    unifiedChartStatus = 200,
+    unifiedChartBody = JSON.stringify({
+        metadata: {},
+        candles: { yes: [], no: [], spot: [] },
+    }),
     registryTypename = 'Query',
     candlesTypename = 'Query',
     // Direct-indexer probes (slice 4d-scenarios-more) hit /registry-direct/graphql
@@ -246,6 +256,17 @@ function startFixture({
                         response.statusCode = spotCandlesNoTickerStatus;
                         response.end(spotCandlesNoTickerBody);
                     }
+                    return;
+                }
+                if (req.url?.match(/^\/api\/v2\/proposals\/[^/]+\/chart/) && req.method === 'GET') {
+                    // Match /api/v2/proposals/<anything-but-slash>/chart
+                    // (with optional query string). The proposalId is a
+                    // path param so we use a regex; the apiUnifiedChartShape
+                    // invariant uses 'harness-probe-proposal' but tests
+                    // can put any id there.
+                    response.statusCode = unifiedChartStatus;
+                    response.setHeader('content-type', 'application/json');
+                    response.end(unifiedChartBody);
                     return;
                 }
                 if (req.url === '/registry/graphql' && req.method === 'POST') {
@@ -907,6 +928,87 @@ test('runAllInvariants — failure: apiSpotCandlesHappyPath response-shape regre
         const inv = results.find((r) => r.name === 'apiSpotCandlesHappyPath');
         assert.equal(inv.ok, false);
         assert.match(inv.error, /missing spotCandles array|transform regression/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiUnifiedChartShape happy: 200 + empty yes/no/spot arrays', async () => {
+    // Default fixture: 200 + {metadata: {}, candles: {yes:[], no:[], spot:[]}}.
+    // All three arrays empty is a valid happy-path "no candles yet"
+    // case (e.g. fresh proposal, no swaps); shape is still right.
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'apiUnifiedChartShape');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /200 \+ candles\.\{yes,no,spot\} all arrays \(yes=0, no=0, spot=0\)/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiUnifiedChartShape happy: 200 + populated yes/no/spot arrays', async () => {
+    const fx = await startFixture({
+        unifiedChartBody: JSON.stringify({
+            metadata: { trading_contract_id: 'mock-contract' },
+            candles: {
+                yes: [{ time: 1700000000, close: '0.42' }, { time: 1700003600, close: '0.45' }],
+                no: [{ time: 1700000000, close: '0.58' }],
+                spot: [{ time: 1700000000, close: '1.05' }],
+            },
+        }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'apiUnifiedChartShape');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /yes=2, no=1, spot=1/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiUnifiedChartShape data-plane error (500 from resolve/fetch)', async () => {
+    // proposal resolve / pool fetch / response transform errored
+    // and the catch-all returned 500. Other api invariants STILL
+    // pass — distinguishes "this endpoint's data plane broken"
+    // from "api is down".
+    const fx = await startFixture({
+        unifiedChartStatus: 500,
+        unifiedChartBody: JSON.stringify({ error: 'pool fetch failed' }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiUnifiedChartShape');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /expected 200, got 500|data plane broken/);
+        const health = results.find((r) => r.name === 'apiHealth');
+        assert.equal(health.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiUnifiedChartShape missing yes array (refactor that drops a side)', async () => {
+    // Refactor that dropped the YES key (or renamed it) — frontend
+    // crashes destructuring `candles.yes`. Catches a real UI-break
+    // bug class.
+    const fx = await startFixture({
+        unifiedChartBody: JSON.stringify({
+            metadata: {},
+            candles: { no: [], spot: [] },  // missing yes
+        }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiUnifiedChartShape');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /candles\.yes missing or not array|UI consumers crash/);
     } finally {
         await fx.stop();
     }
@@ -1727,6 +1829,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /apiWarmer/);
     assert.match(r.stdout, /apiSpotCandlesValidates/);
     assert.match(r.stdout, /apiSpotCandlesHappyPath/);
+    assert.match(r.stdout, /apiUnifiedChartShape/);
     assert.match(r.stdout, /apiCanReachRegistry/);
     assert.match(r.stdout, /apiCanReachCandles/);
     assert.match(r.stdout, /apiCandlesMatchesDirect/);

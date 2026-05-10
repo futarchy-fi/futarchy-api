@@ -203,6 +203,73 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'apiUnifiedChartShape',
+        description: 'api /api/v2/proposals/:id/chart returns 200 + JSON with candles.{yes,no,spot} all arrays (data-plane reachable through proposal resolve → pool fetch → candle aggregation → response transform)',
+        layer: 'api',
+        check: async (ctx) => {
+            // Sister of apiSpotCandlesHappyPath but for the unified-
+            // chart endpoint, which is a much heavier data path:
+            //   request → proposal resolve (registry adapter) →
+            //   pool fetch (candles adapter) → currency rate lookup
+            //   → parallel YES/NO/SPOT candle fetch → response
+            //   transform with applyRateToCandles → JSON write
+            //
+            // Because the path touches the registry indexer AND the
+            // candles indexer AND the chain layer (rate provider),
+            // a regression anywhere in that chain bubbles up here.
+            // The shape check is conservative — `candles.{yes,no,spot}`
+            // are the only fields the futarchy.fi UI actually
+            // depends on (per a survey of consumers), so a regression
+            // that drops one of those arrays is a hard UI break.
+            //
+            // Bug shapes caught:
+            //   * Proposal resolve returns null pools (yes/no
+            //     missing from candles object — frontend crashes
+            //     destructuring)
+            //   * applyRateToCandles regression that returns the
+            //     wrong shape (e.g., a Promise instead of an array)
+            //   * Refactor that nests candles deeper or renames
+            //     spot to spotCandles (the field name diverged
+            //     once already — see /api/v1/spot-candles which
+            //     uses spotCandles — easy to confuse)
+            //   * Status code regression (endpoint silently returns
+            //     204/202)
+            //   * Cache layer returns stale/wrong-shape object
+            //     (X-Cache: HIT path differs from MISS path)
+            //
+            // First step toward the documented chartShape invariant
+            // (api unified-chart vs indexer raw match) — that
+            // future invariant will reuse the same shape probe and
+            // additionally cross-check candle counts against the
+            // direct candles indexer.
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/api/v2/proposals/harness-probe-proposal/chart`, { signal: ctrl.signal });
+                if (r.status !== 200) {
+                    throw new Error(`expected 200, got ${r.status} (data plane broken: proposal resolve / pool fetch / response transform errored)`);
+                }
+                const ct = r.headers.get('content-type') || '';
+                if (!ct.includes('json')) {
+                    throw new Error(`expected JSON content-type, got "${ct}"`);
+                }
+                const j = await r.json();
+                if (!j?.candles || typeof j.candles !== 'object') {
+                    throw new Error(`response missing candles object (transform regression?); body=${JSON.stringify(j)?.slice(0, 100)}`);
+                }
+                for (const side of ['yes', 'no', 'spot']) {
+                    if (!Array.isArray(j.candles[side])) {
+                        throw new Error(`candles.${side} missing or not array (was ${typeof j.candles[side]}); UI consumers crash without this`);
+                    }
+                }
+                const counts = `yes=${j.candles.yes.length}, no=${j.candles.no.length}, spot=${j.candles.spot.length}`;
+                return { ok: true, detail: `200 + candles.{yes,no,spot} all arrays (${counts})` };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
         name: 'apiCanReachRegistry',
         description: 'api /registry/graphql proxies the __typename probe to registry checkpoint',
         layer: 'api↔registry',
