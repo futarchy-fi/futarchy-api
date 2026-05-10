@@ -2,11 +2,9 @@
 /**
  * start-fork.mjs — anvil fork launcher for the Forked Replay Harness.
  *
- * Phase 0 SCAFFOLD ONLY. This script parses arguments and prints help
- * but does NOT yet launch anvil. The actual subprocess + readiness
- * polling lands in Phase 1.
+ * Phase 1: real subprocess spawn + readiness probe + signal forwarding.
  *
- * Usage (eventual):
+ * Usage:
  *   node scripts/start-fork.mjs \
  *       --fork-url <RPC URL> \
  *       --fork-block <number|"latest"> \
@@ -21,13 +19,26 @@
  *   ANVIL_PORT       default: 8545
  *   ANVIL_CHAIN_ID   default: 100
  *
+ * Behavior:
+ *   - Spawns anvil with the resolved options.
+ *   - Streams anvil's stdout/stderr to this process's stderr (prefixed).
+ *   - Polls eth_blockNumber via JSON-RPC until success or 30s timeout.
+ *   - On success, emits exactly one line on stdout: "READY <port>".
+ *     Orchestrators should await this line to know the fork is up.
+ *   - Forwards SIGINT/SIGTERM to anvil for clean shutdown.
+ *   - Exits with anvil's exit code when anvil exits.
+ *
  * Exit codes:
- *   0 — fork running, ready for connections
+ *   0 — anvil exited cleanly
  *   1 — argument validation failed
  *   2 — anvil binary not found on PATH
- *   3 — fork URL unreachable
- *   4 — readiness probe timed out
+ *   3 — fork URL unreachable / anvil failed to start
+ *   4 — readiness probe timed out (30s)
+ *   <n> — anvil's own exit code if it crashes
  */
+
+import { spawn } from 'node:child_process';
+import { requireAnvil } from './detect-anvil.mjs';
 
 const DEFAULTS = {
     forkUrl: process.env.FORK_URL || 'https://rpc.gnosis.gateway.fm',
@@ -37,6 +48,9 @@ const DEFAULTS = {
     accounts: 10,
     balance: 10_000,
 };
+
+const READINESS_TIMEOUT_MS = 30_000;
+const READINESS_POLL_INTERVAL_MS = 250;
 
 function parseArgs(argv) {
     const out = { ...DEFAULTS };
@@ -66,8 +80,6 @@ function parseArgs(argv) {
 function printHelp() {
     process.stdout.write(`start-fork.mjs — Forked Replay Harness
 
-Phase 0 scaffold; does not launch anvil yet.
-
 Usage:
   node scripts/start-fork.mjs [options]
 
@@ -79,15 +91,58 @@ Options:
   --accounts <n>         Pre-funded test accounts (default ${DEFAULTS.accounts})
   --balance <ETH>        Initial balance per test account (default ${DEFAULTS.balance})
   -h, --help             Show this help and exit
-
-Phase 1 will add:
-  - anvil binary discovery + version check
-  - subprocess launch with the resolved options
-  - readiness probe (cast block-number polling until <30s)
-  - SIGINT/SIGTERM forwarding to clean shutdown
-  - structured stdout: emit "READY <port>\\n" on the parent's stdout
-    once polling succeeds, so the orchestrator can await it
 `);
+}
+
+function buildAnvilArgs(opts) {
+    const args = [
+        '--host', '0.0.0.0',
+        '--port', String(opts.port),
+        '--fork-url', opts.forkUrl,
+        '--chain-id', String(opts.chainId),
+        '--accounts', String(opts.accounts),
+        '--balance', String(opts.balance),
+        '--no-mining',                       // we drive blocks via evm_mine
+    ];
+    if (opts.forkBlock && opts.forkBlock !== 'latest') {
+        args.push('--fork-block-number', String(opts.forkBlock));
+    }
+    return args;
+}
+
+async function probeReady(port) {
+    const url = `http://127.0.0.1:${port}`;
+    const start = Date.now();
+    let lastError = null;
+
+    while (Date.now() - start < READINESS_TIMEOUT_MS) {
+        try {
+            const r = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: 1,
+                    method: 'eth_blockNumber',
+                    params: [],
+                }),
+            });
+            if (r.ok) {
+                const j = await r.json();
+                if (j.result) {
+                    return { ready: true, blockNumber: j.result };
+                }
+            }
+        } catch (err) {
+            lastError = err;
+        }
+        await new Promise(res => setTimeout(res, READINESS_POLL_INTERVAL_MS));
+    }
+    return {
+        ready: false,
+        elapsedMs: Date.now() - start,
+        lastError: lastError?.message || 'no response from anvil',
+    };
 }
 
 const opts = parseArgs(process.argv);
@@ -97,7 +152,69 @@ if (opts.help) {
     process.exit(0);
 }
 
-console.log('[start-fork] Phase 0 scaffold — would launch anvil with:');
-console.log(JSON.stringify(opts, null, 2));
-console.log('[start-fork] TODO Phase 1: actually spawn anvil subprocess.');
-process.exit(0);
+let anvilInfo;
+try {
+    anvilInfo = await requireAnvil();
+} catch (err) {
+    console.error(err.message);
+    process.exit(2);
+}
+
+console.error(
+    `[start-fork] anvil ${anvilInfo.anvil.version} at ${anvilInfo.anvil.path}`,
+);
+console.error(
+    `[start-fork] forking ${opts.forkUrl} @ ${opts.forkBlock} → ` +
+        `localhost:${opts.port} (chain ${opts.chainId})`,
+);
+
+const anvilArgs = buildAnvilArgs(opts);
+const child = spawn(anvilInfo.anvil.path, anvilArgs, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+});
+
+// Stream anvil output through our stderr so the orchestrator's stdout
+// stays clean for the "READY" line.
+child.stdout.on('data', (chunk) => {
+    process.stderr.write(`[anvil] ${chunk}`);
+});
+child.stderr.on('data', (chunk) => {
+    process.stderr.write(`[anvil:err] ${chunk}`);
+});
+
+let shuttingDown = false;
+function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.error(`[start-fork] received ${signal}, forwarding to anvil…`);
+    if (!child.killed) child.kill(signal);
+}
+process.on('SIGINT',  () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+child.on('exit', (code, signal) => {
+    if (signal) {
+        console.error(`[start-fork] anvil exited via ${signal}`);
+        process.exit(0);
+    }
+    console.error(`[start-fork] anvil exited with code ${code}`);
+    process.exit(code ?? 0);
+});
+
+// Probe readiness in parallel with the spawn.
+const probe = await probeReady(opts.port);
+if (!probe.ready) {
+    console.error(
+        `[start-fork] readiness probe FAILED after ${probe.elapsedMs}ms ` +
+            `(${probe.lastError})`,
+    );
+    if (!child.killed) child.kill('SIGTERM');
+    process.exit(4);
+}
+
+console.error(
+    `[start-fork] anvil ready (block ${parseInt(probe.blockNumber, 16)}). ` +
+        `Press Ctrl-C to shut down.`,
+);
+// THE ready signal — orchestrator parses this line.
+process.stdout.write(`READY ${opts.port}\n`);

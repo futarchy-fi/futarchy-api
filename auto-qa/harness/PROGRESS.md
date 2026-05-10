@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 0 — code-complete (slices 1-8 landed). Two human gates remain: ADR review + sister-link verification. |
+| Phase | 1 — slice 1 landed (detect-anvil + start-fork real spawn + block-clock + first smoke test, validated end-to-end against Gnosis fork in ~3s). 5/6 CHECKLIST items ticked. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -173,10 +173,52 @@ Phase 1:
      (the snippet in `ARCHITECTURE.md` is correct as written, but
      hasn't been exercised on a clean machine yet)
 
-**Phase 1 starting work (queued for next iterations):**
+### Phase 1 — Anvil fork + block clock
 
-- Detect `anvil` binary on PATH; document install via `curl -L
-  https://foundry.paradigm.xyz | bash && foundryup`
-- Replace the TODO in `start-fork.mjs` with real subprocess spawn
-- Add readiness probe via cast or direct JSON-RPC poll
-- Wire compose `anvil:` service block (uncomment + verify image pull)
+- **slice 1** — `scripts/detect-anvil.mjs`: discovers anvil/cast/forge
+  on PATH, parses `--version`, enforces a `MIN_VERSION = 1.0.0`,
+  exposes `detectAnvil()` + `requireAnvil()` (the latter throws with a
+  clear `foundryup` install hint). CLI mode prints a 3-line summary or
+  `--json` for machine consumption. Confirmed working with locally
+  installed Foundry 1.5.0-stable.
+
+- **slice 1** — `scripts/start-fork.mjs` rewritten from scaffold to
+  real launcher. Spawns anvil with resolved options, streams output to
+  stderr (prefixed `[anvil]`), polls JSON-RPC `eth_blockNumber` every
+  250ms until success or 30s timeout, then emits `READY <port>` on
+  stdout for orchestrator consumption. SIGINT/SIGTERM forwarded; exit
+  code mirrors anvil's. Documented exit-code taxonomy (0/1/2/3/4).
+
+- **slice 1** — `scripts/block-clock.mjs` (new): thin JSON-RPC wrapper
+  exposing `mineBlock(rpcUrl, count=1)`, `setNextTimestamp(rpcUrl, ts)`,
+  `increaseTime(rpcUrl, delta)`, `snapshot(rpcUrl)`, `revert(rpcUrl, id)`,
+  `setBalance(rpcUrl, addr, weiHex)`, `impersonateAccount`,
+  `stopImpersonating`, plus `blockNumber`, `chainId`, `getBalance`
+  query helpers. Custom `RpcError` class wraps non-2xx + JSON-RPC
+  `error` envelopes. CLI mode runs a snapshot/mine/revert smoke
+  against an external anvil. AbortController-backed 10s timeout per
+  call.
+
+- **slice 1** — `tests/smoke-fork.test.mjs` (new): node:test that
+  spawns start-fork as a child process, awaits `READY`, runs
+  block-clock through chainId/blockNumber/mine-10/snapshot/mine-5/revert
+  round-trip, asserts heights, and SIGTERMs cleanly. **Validated
+  end-to-end against `https://rpc.gnosis.gateway.fm` 2026-05-10:
+  forked at block 46104021, all assertions pass, total runtime 2.8s.**
+  Skips cleanly when anvil isn't on PATH.
+
+- **slice 1** — `auto-qa/harness/package.json` scripts wired:
+  `phase-status`, `detect`, `fork`, `smoke`, `test` (node:test on
+  `tests/**`). Root `package.json` adds `auto-qa:e2e:detect`,
+  `auto-qa:e2e:fork`, `auto-qa:e2e:smoke` shortcuts.
+
+**Phase 1 wrap-up — remaining:**
+
+- slice 2 — Uncomment the compose `anvil:` service block. Verify
+  `docker compose up -d` brings anvil up cleanly (image pull, port
+  binding, healthcheck). Add a `tests/smoke-compose.test.mjs` that
+  drives compose instead of bare anvil.
+- slice 3 — `setNextTimestamp` runtime test (TWAP-window prep).
+  Currently exposed by block-clock but not exercised in smoke.
+- slice 4 — `setBalance` + `impersonateAccount` runtime test
+  (synthetic-user prep for Phase 4).

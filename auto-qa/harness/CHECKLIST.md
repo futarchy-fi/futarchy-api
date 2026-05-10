@@ -47,17 +47,22 @@ agreed-upon, without installing heavy deps or running real services.
 
 **Goal:** deterministic time control over a forked Gnosis chain.
 
-- [ ] `anvil` binary discoverable on PATH (or harness ships an
-      install script that fetches the right Foundry release)
-- [ ] `scripts/start-fork.mjs` actually launches anvil + waits for
-      readiness (`cast block-number` polling)
-- [ ] `scripts/block-clock.mjs` exposes `mineBlock`, `setNextTimestamp`,
-      `snapshot`, `revert` helpers
+- [x] `anvil` binary discoverable on PATH (via `scripts/detect-anvil.mjs`;
+      install hint emitted if missing)
+- [x] `scripts/start-fork.mjs` actually launches anvil + waits for
+      readiness (JSON-RPC `eth_blockNumber` polling, 30s timeout, emits
+      `READY <port>` on stdout)
+- [x] `scripts/block-clock.mjs` exposes `mineBlock`, `setNextTimestamp`,
+      `increaseTime`, `snapshot`, `revert`, `setBalance`,
+      `impersonateAccount`, `stopImpersonating`, plus `blockNumber`,
+      `chainId`, `getBalance` query helpers
 - [ ] `docker compose -f auto-qa/harness/docker-compose.yml up -d`
       brings the anvil service up (no longer just placeholder)
-- [ ] Smoke test: fork at a recent Gnosis block, mine 10 blocks, query
+- [x] Smoke test: fork at a recent Gnosis block, mine 10 blocks, query
       `eth_blockNumber` and confirm = N+10
-- [ ] Smoke test: snapshot → mine 5 blocks → revert → confirm at N
+      (`tests/smoke-fork.test.mjs`, runs in ~3s, validated 2026-05-10)
+- [x] Smoke test: snapshot → mine 5 blocks → revert → confirm at N
+      (same test file, same run)
 
 ## Phase 2 — Chain ↔ api agreement (1 invariant)
 

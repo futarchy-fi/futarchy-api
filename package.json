@@ -13,7 +13,10 @@
         "dev": "node --watch src/index.js",
         "test:lib": "node lib/test.js",
         "auto-qa:test": "node --test 'auto-qa/tests/**/*.test.mjs'",
-        "auto-qa:e2e": "npm --prefix auto-qa/harness run phase-status"
+        "auto-qa:e2e": "npm --prefix auto-qa/harness run phase-status",
+        "auto-qa:e2e:detect": "npm --prefix auto-qa/harness run detect",
+        "auto-qa:e2e:fork": "npm --prefix auto-qa/harness run fork",
+        "auto-qa:e2e:smoke": "npm --prefix auto-qa/harness run smoke"
     },
     "dependencies": {
         "cors": "^2.8.5",

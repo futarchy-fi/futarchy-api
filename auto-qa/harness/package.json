@@ -5,10 +5,12 @@
     "type": "module",
     "description": "Server-side scaffold of the Forked Replay Harness (anvil + indexer + api). See PROGRESS.md.",
     "scripts": {
-        "phase-status": "node -e \"console.log('Forked Replay Harness — Phase 0 (scaffold). See auto-qa/harness/PROGRESS.md');\"",
-        "fork": "echo 'TODO Phase 1 — anvil fork launcher' && exit 1",
+        "phase-status": "node -e \"console.log('Forked Replay Harness — Phase 1 (anvil fork + block clock). See auto-qa/harness/PROGRESS.md');\"",
+        "detect": "node scripts/detect-anvil.mjs",
+        "fork": "node scripts/start-fork.mjs",
+        "smoke": "node --test tests/smoke-fork.test.mjs",
         "replay": "echo 'TODO Phase 6 — scenario replay runner' && exit 1",
-        "test": "echo 'TODO Phase 2 — cross-layer test runner' && exit 1"
+        "test": "node --test 'tests/**/*.test.mjs'"
     },
     "dependencies": {},
     "devDependencies": {}
