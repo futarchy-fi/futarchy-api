@@ -9,10 +9,10 @@ is never modified — only tests on the `auto-qa` branch.
 | Field | Value |
 |---|---|
 | Branch | `auto-qa` (off `origin/main`) |
-| Iterations completed | 2 |
+| Iterations completed | 3 |
 | PRs catalogued | 9 / 9 (full history) |
 | PRs classified | 9 |
-| Tests added | 1 (`path-prefix.test.mjs` — passing) |
+| Tests added | 9 (2 path-prefix + 7 passthrough-contract — all passing) |
 | Test runner | `node --test` via `npm run auto-qa:test` |
 | Tooling backlog | see below |
 
@@ -23,56 +23,57 @@ is never modified — only tests on the `auto-qa` branch.
 - **Hypothesis**: `proxyCandlesQuery` in `src/adapters/candles-adapter.js` rewrote every `periodStartUnix` substring in inbound queries to `time` (and synthesized `periodStartUnix = String(time)` on the way back), assuming Checkpoint only had a single timestamp field. Checkpoint actually exposes both `time` (raw last-swap ts) AND `periodStartUnix` (period-snapped boundary). Collapsing them returned raw swap times to clients asking for `periodStartUnix`, breaking the frontend chart's carry-forward fill — flat line at the earliest candle's price.
 - **Ideal test**: Contract test for the proxy — for each declared response-field semantic ("`periodStartUnix` MUST be a multiple of `period`"), assert that property holds for every candle returned. Generalizes to "any proxy translation must preserve documented field semantics".
 - **Tools needed**: HTTP test client + a fixture proposal with known candles + a property-checker that walks every candle in the response.
-- **Test status**: not-started
+- **Test status**: **landed-passing** (`auto-qa/tests/passthrough-contract.test.mjs`, 2 cases: snapping property + filter operator)
 
 ### PR #8 — fix(api): translate pool_in/proposal_in array filters in passthrough
 - **Class**: bug-fix
 - **Hypothesis**: The `/candles/graphql` proxy chain-prefixed scalar `pool: "0xabc"` filters but missed list-form `pool_in: ["0xabc", "0xdef"]` and `proposal_in: [...]`. Frontend bulk queries returned 0 results.
 - **Ideal test**: For every supported filter operator (`{eq, in, gte, lte, …}` × `{pool, proposal, id, …}`), send a query with a known-good address and assert non-empty result. Catches "we forgot to handle the array form" and any future filter the proxy forgets.
 - **Tools needed**: Same HTTP test client + fixture-driven matrix runner.
-- **Test status**: not-started
+- **Test status**: **landed-passing** (`auto-qa/tests/passthrough-contract.test.mjs`, 2 cases: id_in + proposal_in)
+- **Test status**: not-started (TODO future iteration)
 
 ### PR #7 — fix(api): translate proposal: filter syntax in candles passthrough
 - **Class**: bug-fix
 - **Hypothesis**: Proxy translated `pool: "0xabc"` but not `proposal: "0xabc"`. Same family as #8 (incomplete filter coverage). Symptom: queries filtering by proposal address returned empty when going through `/candles/graphql`.
 - **Ideal test**: subsumed by #8's matrix.
 - **Tools needed**: same as #8.
-- **Test status**: not-started
+- **Test status**: **landed-passing** (covered by `passthrough-contract.test.mjs` PR #7 case) (TODO future iteration)
 
 ### PR #6 — fix(api): resolve token symbols from any pool type, drop PNK fallback
 - **Class**: bug-fix
 - **Hypothesis**: `unified-chart.js` / `market-events.js` only inspected `CONDITIONAL` pools to derive company/currency token symbols. New markets where CONDITIONAL pools weren't yet indexed (or didn't exist) fell through to the `'PNK'` hardcode → wrong ticker on charts. Fix: walk pools in priority `CONDITIONAL > EXPECTED_VALUE > PREDICTION` and parse the pool name regex.
 - **Ideal test**: Snapshot test against `GET /api/v2/proposals/:id/chart` for proposals representing each (CONDITIONAL+, EXPECTED_VALUE+, PREDICTION-only) state — assert `company_tokens.base.tokenSymbol` is plausible and is NEVER literally `"PNK"` unless the proposal really is for PNK.
 - **Tools needed**: HTTP client + fixtures for each market lifecycle stage. Hard part is finding/keeping a "PREDICTION-only" fixture stable.
-- **Test status**: not-started
+- **Test status**: not-started (TODO future iteration)
 
 ### PR #5 — fix(api): fall back to PREDICTION/EXPECTED_VALUE pools for new markets
 - **Class**: bug-fix
 - **Hypothesis**: Same family as #6 — endpoints assumed CONDITIONAL pools always existed. For new proposals where only PREDICTION/EXPECTED_VALUE pools are indexed yet, endpoints returned null prices.
 - **Ideal test**: subsumed by #6's snapshot suite — assert prices are non-null for every market lifecycle stage.
 - **Tools needed**: same as #6.
-- **Test status**: not-started
+- **Test status**: not-started (TODO future iteration)
 
 ### PR #4 — fix(api): translate plain pool IDs in /candles/graphql passthrough
 - **Class**: bug-fix
 - **Hypothesis**: Proxy missed the inline scalar `pool: "0xabc"` form (only handled some other variant). Same family as #7, #8.
 - **Ideal test**: subsumed by #8's matrix.
 - **Tools needed**: same.
-- **Test status**: not-started
+- **Test status**: **landed-passing** (covered by `passthrough-contract.test.mjs` PR #4 case) (TODO future iteration)
 
 ### PR #3 — feat(api): /registry/graphql and /candles/graphql passthroughs
 - **Class**: feature
 - **Hypothesis**: n/a
 - **Ideal test**: Smoke test — passthroughs return HTTP 200 and a well-formed GraphQL envelope (`data` or `errors` key) for a trivial introspection query. Catches infra regressions (route mounted? upstream reachable? HTTPS termination working?).
 - **Tools needed**: HTTP client.
-- **Test status**: not-started
+- **Test status**: not-started (TODO future iteration)
 
 ### PR #2 — infra(rpc-proxy): multi-RPC pool with tip buffer, failover, hash pinning
 - **Class**: infra (also has bug-prevention character — pre-empts reorg loops)
 - **Hypothesis**: n/a (not strictly fixing an in-flight bug, but hardening against a known failure mode)
 - **Ideal test**: Inject a flaky upstream RPC and assert the pool failover completes within a deadline. Hash-pinning correctness check: ensure the proxy serves consistent block hashes across N consecutive requests for the same height.
 - **Tools needed**: mock upstream RPC + ability to introspect proxy state.
-- **Test status**: not-started
+- **Test status**: not-started (TODO future iteration)
 
 ### PR #1 — Restore /charts path prefix for Snapshot widget
 - **Class**: bug-fix
