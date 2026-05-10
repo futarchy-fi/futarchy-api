@@ -409,6 +409,56 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'apiUnifiedChartHasObservabilityHeaders',
+        description: 'api /api/v2/proposals/:id/chart sets X-Cache (HIT|MISS) + X-Response-Time headers (catches ops-observability regressions invisible to body checks)',
+        layer: 'api',
+        check: async (ctx) => {
+            // First response-HEADER validation in the catalog. All
+            // existing api invariants probe the body (status code +
+            // JSON shape). This one checks that the unified-chart
+            // endpoint emits the observability headers ops dashboards
+            // depend on:
+            //   * X-Cache: 'HIT' or 'MISS' — set explicitly on both
+            //     code paths (line 76 cached-return + line 280
+            //     fresh-build in src/routes/unified-chart.js)
+            //   * X-Response-Time: 'Nms' — millisecond timing
+            //
+            // Bug shapes caught:
+            //   * Refactor that introduces a third cache state
+            //     ('STALE', 'BYPASS') without telling ops
+            //   * Removal of the cache layer entirely (headers gone)
+            //   * Header value format change (e.g., 'X-Response-Time'
+            //     becomes a number instead of 'Nms' string)
+            //   * Response-Time emitted as 'NaN ms' or '-1ms' from
+            //     a timing bug
+            //
+            // X-Cache-TTL not asserted because it's only set on the
+            // HIT path (cached responses include it; MISS path
+            // doesn't). A separate invariant could check that TTL
+            // appears WHEN X-Cache is HIT — out of scope for this
+            // first header probe.
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/api/v2/proposals/harness-probe-proposal/chart`, { signal: ctrl.signal });
+                if (r.status !== 200) {
+                    throw new Error(`expected 200, got ${r.status} (apiUnifiedChartShape's domain)`);
+                }
+                const xCache = r.headers.get('x-cache');
+                if (xCache !== 'HIT' && xCache !== 'MISS') {
+                    throw new Error(`X-Cache header expected 'HIT' or 'MISS', got ${JSON.stringify(xCache)} (cache layer instrumentation broken or removed)`);
+                }
+                const xResponseTime = r.headers.get('x-response-time');
+                if (typeof xResponseTime !== 'string' || !/^\d+ms$/.test(xResponseTime)) {
+                    throw new Error(`X-Response-Time expected /^\\d+ms$/ format, got ${JSON.stringify(xResponseTime)} (timing-instrumentation regression)`);
+                }
+                return { ok: true, detail: `X-Cache=${xCache}, X-Response-Time=${xResponseTime}` };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
         name: 'apiCanReachRegistry',
         description: 'api /registry/graphql proxies the __typename probe to registry checkpoint',
         layer: 'api↔registry',

@@ -750,26 +750,26 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 39 invariants:
-      9 api-internal + 26 indexer probes + 4 chain-layer.
-      `registryHasFutarchyProdAggregator` added this
-      slice — high-value PINNING check. Asserts the
-      indexer has the production futarchy aggregator
-      (0xc5eb43d5…d4fc1, hardcoded in 3 api source
-      files: registry-adapter.js, unified-chart.js,
-      market-events.js). Registry-side analog of
-      anvilChainId — chain pin proves we forked Gnosis;
-      this pin proves the indexer was bootstrapped with
-      the right chain + start_block + contract config.
-      Catches indexer started against wrong block
-      (before aggregator deployment), indexer pointed
-      at wrong chain, data wipe missed re-sync. 121
-      smoke tests green. Still to add: candlesAggregation
-      (Candle.volume = sum of contained Swap amounts
-      within period), chartShape full match (api
-      unified-chart vs indexer raw, ID-pair compare),
-      conservation (∑YES + ∑NO = ∑sDAI), monotonicity
-      (TWAP), cross-run monotonicity on rateSanity.
+      PROGRESS.md's invariant tables). **Now 40 invariants
+      (milestone)**: 10 api-internal + 26 indexer probes +
+      4 chain-layer.
+      `apiUnifiedChartHasObservabilityHeaders` added
+      this slice — first response-HEADER validation in
+      the catalog. Asserts X-Cache ∈ {HIT, MISS} AND
+      X-Response-Time matches /^\d+ms$/. New pattern:
+      header probe (vs body probe). Catches ops-
+      observability regressions invisible to body-only
+      checks: refactor that drops the cache layer's
+      instrumentation; refactor that adds a third cache
+      state ('STALE') without telling ops; timing
+      regression that emits raw ms count without unit
+      suffix. 126 smoke tests green. Still to add:
+      candlesAggregation (Candle.volume = sum of
+      contained Swap amounts within period), chartShape
+      full match (api unified-chart vs indexer raw,
+      ID-pair compare), conservation (∑YES + ∑NO =
+      ∑sDAI), monotonicity (TWAP), cross-run
+      monotonicity on rateSanity.
 - [x] **4d-activate — orchestrator block UNCOMMENTED.**
       Replaced the `tail -f /dev/null` placeholder with
       `node orchestrator/scenario-runner.mjs`. Dropped the

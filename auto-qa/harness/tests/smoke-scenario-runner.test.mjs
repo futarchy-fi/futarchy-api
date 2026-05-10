@@ -57,6 +57,11 @@ function startFixture({
         metadata: {},
         candles: { yes: [], no: [], spot: [] },
     }),
+    // Observability headers for apiUnifiedChartHasObservabilityHeaders
+    // (slice 4d-scenarios-more). Defaults match what
+    // src/routes/unified-chart.js emits on a cache MISS.
+    unifiedChartXCache = 'MISS',
+    unifiedChartXResponseTime = '12ms',
     // Market-events happy-path (slice 4d-scenarios-more
     // apiMarketEventsShape): /api/v1/market-events/proposals/
     // <id>/prices defaults to 200 + the minimal contract
@@ -324,6 +329,17 @@ function startFixture({
                     // can put any id there.
                     response.statusCode = unifiedChartStatus;
                     response.setHeader('content-type', 'application/json');
+                    // Observability headers (slice 4d-scenarios-more
+                    // apiUnifiedChartHasObservabilityHeaders). Set
+                    // unconditionally — the production handler also
+                    // sets them on every code path. Knobs let tests
+                    // null these out to simulate dropped instrumentation.
+                    if (unifiedChartXCache !== null) {
+                        response.setHeader('x-cache', unifiedChartXCache);
+                    }
+                    if (unifiedChartXResponseTime !== null) {
+                        response.setHeader('x-response-time', unifiedChartXResponseTime);
+                    }
                     response.end(unifiedChartBody);
                     return;
                 }
@@ -1240,6 +1256,88 @@ test('runAllInvariants — failure: apiUnifiedChartShape missing yes array (refa
         const inv = results.find((r) => r.name === 'apiUnifiedChartShape');
         assert.equal(inv.ok, false);
         assert.match(inv.error, /candles\.yes missing or not array|UI consumers crash/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiUnifiedChartHasObservabilityHeaders happy: X-Cache=MISS + X-Response-Time=12ms', async () => {
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'apiUnifiedChartHasObservabilityHeaders');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /X-Cache=MISS, X-Response-Time=12ms/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiUnifiedChartHasObservabilityHeaders happy on HIT path', async () => {
+    const fx = await startFixture({
+        unifiedChartXCache: 'HIT',
+        unifiedChartXResponseTime: '0ms',
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'apiUnifiedChartHasObservabilityHeaders');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /X-Cache=HIT, X-Response-Time=0ms/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiUnifiedChartHasObservabilityHeaders X-Cache header dropped', async () => {
+    // A refactor removed the cache layer or its instrumentation —
+    // the body is fine but the X-Cache header is gone. Ops
+    // dashboards go blind. apiUnifiedChartShape STILL passes since
+    // body shape is unaffected.
+    const fx = await startFixture({ unifiedChartXCache: null });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiUnifiedChartHasObservabilityHeaders');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /X-Cache header expected.*got null|cache layer instrumentation/);
+        // Body-shape probe still passes — distinguishes header-only
+        // regressions from body regressions
+        const shape = results.find((r) => r.name === 'apiUnifiedChartShape');
+        assert.equal(shape.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiUnifiedChartHasObservabilityHeaders X-Cache=STALE (third state added without telling ops)', async () => {
+    // A refactor added a third cache state that ops dashboards
+    // don't know about (e.g., 'STALE' for serve-stale-while-
+    // revalidate). The HIT/MISS-only pie chart now has a hidden
+    // bucket.
+    const fx = await startFixture({ unifiedChartXCache: 'STALE' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiUnifiedChartHasObservabilityHeaders');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /expected 'HIT' or 'MISS', got "STALE"/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiUnifiedChartHasObservabilityHeaders X-Response-Time wrong format', async () => {
+    // Timing instrumentation regression — emits raw ms count
+    // without unit suffix.
+    const fx = await startFixture({ unifiedChartXResponseTime: '12' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiUnifiedChartHasObservabilityHeaders');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /X-Response-Time expected.*got "12"|timing-instrumentation/);
     } finally {
         await fx.stop();
     }
@@ -2515,6 +2613,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /apiSpotCandlesValidates/);
     assert.match(r.stdout, /apiSpotCandlesHappyPath/);
     assert.match(r.stdout, /apiUnifiedChartShape/);
+    assert.match(r.stdout, /apiUnifiedChartHasObservabilityHeaders/);
     assert.match(r.stdout, /chartCandleCountsBoundedByDirect/);
     assert.match(r.stdout, /apiMarketEventsShape/);
     assert.match(r.stdout, /apiCanReachRegistry/);

@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **39 invariants** — 9 api-internal + 26 indexer + 4 chain-layer; first registry-side hardcoded-address PINNING check landed; 121 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **40 invariants (milestone)** — 10 api-internal + 26 indexer + 4 chain-layer; first response-HEADER validation landed; 126 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,101 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (registryHasFutarchyProdAggregator) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (apiUnifiedChartHasObservabilityHeaders) summary (this iteration on the api side):
+
+- **40-invariant milestone reached**. This is also the
+  first response-HEADER validation in the catalog —
+  every prior api invariant probed status code or
+  body shape:
+  * `apiUnifiedChartHasObservabilityHeaders` — calls
+    `/api/v2/proposals/:id/chart`, asserts response
+    has `X-Cache: HIT|MISS` AND `X-Response-Time:
+    Nms` headers.
+
+- **Why headers are a distinct probe class**: the
+  unified-chart handler emits observability headers
+  on EVERY code path (cached HIT at line 76 + fresh
+  MISS at line 280 in src/routes/unified-chart.js).
+  Ops dashboards consume them to compute cache-hit
+  rates and p50/p95 latency. A regression that drops
+  them is invisible to any body check — body still
+  parses correctly. This invariant catches:
+  * Refactor that removes the cache layer (headers
+    gone)
+  * Refactor adding a third state ('STALE',
+    'BYPASS') without telling ops
+  * Header value format change (e.g., raw integer
+    instead of 'Nms' string from a typeof bug)
+  * Timing regression emitting 'NaN ms' or '-1ms'
+
+- **What's NOT asserted (intentionally)**: X-Cache-TTL
+  is only set on HIT path — gating on it would
+  false-fail every MISS. A future invariant could
+  check "TTL appears IFF X-Cache=HIT" but that's
+  a separate semantic.
+
+- **Test 3 demonstrates the gap closure**: drop the
+  X-Cache header. apiUnifiedChartShape STILL passes
+  since body shape is unchanged; only this header
+  probe catches the broken instrumentation.
+
+- **Fixture extension**:
+  * Chart handler now emits `x-cache` and
+    `x-response-time` headers unconditionally
+    (matches production handler behavior).
+  * New `unifiedChartXCache` / `unifiedChartXResponseTime`
+    knobs (defaults 'MISS' / '12ms'); set to null to
+    drop the header entirely.
+
+- **Smoke test coverage** — 5 new tests:
+  * happy: MISS path (default fixture)
+  * happy: HIT path (X-Cache=HIT, X-Response-Time=0ms)
+  * failure: X-Cache header dropped — verifies
+    apiUnifiedChartShape STILL passes
+  * failure: X-Cache='STALE' (third state without
+    consumer update)
+  * failure: X-Response-Time wrong format ('12'
+    instead of '12ms')
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 126/126 pass (1630ms
+    — was 121/121)
+  * `npm run scenarios:dry` → exits 0; lists 40
+    invariants in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: **40 invariants milestone**.
+  Composition by KIND of correctness checked:
+  * Existence (8): apiHealth, apiWarmer, registry/
+    candles direct probes, *Has* checks
+  * Validation (1): apiSpotCandlesValidates
+  * Data-plane shape (3): all 3 /api/v* shape probes
+  * Single-row data shape (5): OHLC, volumes, swap
+    amounts, swap ts, latest block
+  * Multi-row data shape (2): candle/swap time
+    monotonic
+  * Cross-layer match (3): passthrough × 2 +
+    filtered subset
+  * Cross-entity FK (4): all 4 documented
+  * Cross-entity time coherence (1): swap/candle
+    window
+  * Chain-layer (4): count, identity, time-shape,
+    contract state
+  * Passthrough liveness (3): apiCanReach* +
+    chainId
+  * Economic (1): probabilityBounds
+  * Magnitude bounds (3): candlePricesNonNegative,
+    swapAmountsBoundedAbove, swapAmountsPositive
+  * Enum validation (1): poolType
+  * Pinning (2): anvilChainId + registryHasFutarchyProdAggregator
+  * **Response headers (1): apiUnifiedChartHasObservabilityHeaders
+    — NEW THIS SLICE**
+  Remaining bot-doable: candlesAggregation, full
+  chartShape match, conservation, monotonicity (TWAP),
+  cross-run rate monotonicity.
+
+Phase 7 slice 4d-scenarios-more (registryHasFutarchyProdAggregator) summary (previous iteration on the api side):
 
 - **High-value PINNING check at the registry layer**.
   Registry-side analog of anvilChainId: chain pin
