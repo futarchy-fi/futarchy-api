@@ -418,16 +418,27 @@ freshly-generated addresses as recipients; documented in
 - [x] `scenarios/README.md` updated with a "Current scenarios"
       table indexing the captured scenarios.
 
-**Phase 6 slice 3 (catalog generator) — UNBLOCKED (≥3 scenarios now):**
+**Phase 6 slice 3 (catalog generator) — DONE:**
 
-- [ ] `scenarios:catalog` script that reads every scenario's
-      `bugShape` field and emits a `SCENARIOS.md` index listing
-      the bug-shape coverage. The wrapper spec already handles
-      replay (slice 2 closed that part of the original goal);
-      slice 3 is the human-readable catalog. Now have 3
-      scenarios (`01-stale-price-shape`, `02-registry-down`,
-      `03-candles-down`) so the script becomes worth writing
-      next time we hit Phase 6.
+- [x] `scripts/scenarios-catalog.mjs` (~70 lines): reads every
+      `scenarios/*.scenario.mjs`, dynamically imports each,
+      validates required fields (`name` / `description` /
+      `bugShape` / `route`), and writes
+      `scenarios/SCENARIOS.md` with a markdown table indexing
+      the captured bug-shapes. Pipes in `bugShape` /
+      `description` are escaped so table layout survives.
+- [x] npm scripts wired: `scenarios:catalog` in harness;
+      `auto-qa:e2e:scenarios:catalog` at root.
+- [x] First generated `SCENARIOS.md` committed (3 scenarios:
+      `01-stale-price-shape`, `02-registry-down`,
+      `03-candles-down`). The README's per-file notes table
+      was slimmed down to authoring notes only — the canonical
+      bug-shape index lives in the auto-generated file.
+- [x] Drift gate: a future CI step can `npm run auto-qa:e2e:scenarios:catalog`
+      then `git diff --exit-code scenarios/SCENARIOS.md` to fail
+      builds where the catalog is out of date with the scenarios
+      directory. Worth wiring as part of Phase 7 slice 3 (CI
+      integration).
 
 ## Phase 7 — Chaos injection + nightly CI
 

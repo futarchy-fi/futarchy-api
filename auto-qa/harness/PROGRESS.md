@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 done (slice 3 catalog now unblocked) + Phase 7 slices **1+2 (CANDLES branch)** landed on interface side. Phase 7 slice 2: `03-candles-down.scenario.mjs` mocks REGISTRY healthy + CANDLES → 502. Asserts /companies still renders the event but the price degrades to "0.00 SDAI". Discovery: per-pool fallback fetcher hits the SAME endpoint as the bulk prefetcher → CANDLES outage takes BOTH layers down. 20/20 browser tests green (3 scenarios). Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase **6 fully done** (slice 3 catalog generator landed: `scripts/scenarios-catalog.mjs` auto-emits `scenarios/SCENARIOS.md` from each scenario's `bugShape`; 3 scenarios indexed) + Phase 7 slices 1+2 (CANDLES branch) landed on interface side. 20/20 browser tests green (3 scenarios). Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -873,6 +873,30 @@ Phase 7 slice 2 (candles branch) summary (this iteration on the interface side):
   with cold compile. UI smoke: 29 pass + 0 skip.
 - Phase 6 slice 3 (catalog generator) is now UNBLOCKED — with
   3 scenarios, the script becomes worth writing.
+
+Phase 6 slice 3 summary (this iteration on the interface side):
+
+- Looped back from Phase 7 to ship Phase 6 slice 3 now that the
+  ≥3-scenarios unblock condition is met.
+- New: `scripts/scenarios-catalog.mjs` (~70 lines). Reads
+  scenarios/*.scenario.mjs, dynamically imports each, validates
+  required fields (name/description/bugShape/route), writes
+  scenarios/SCENARIOS.md with a markdown table indexing the
+  bug-shapes. Pipes in content are escaped so the table layout
+  survives.
+- npm scripts: `scenarios:catalog` in harness;
+  `auto-qa:e2e:scenarios:catalog` at root.
+- First generated SCENARIOS.md committed (3 scenarios indexed).
+  README.md slimmed to authoring notes only — the canonical
+  bug-shape index lives in the auto-generated file so PRs only
+  update one place.
+- Drift gate: future CI step can run the script and
+  `git diff --exit-code scenarios/SCENARIOS.md` to fail builds
+  where the catalog is stale. Pinned in CHECKLIST as a Phase 7
+  slice 3 (CI integration) item.
+- Phase 6 status: COMPLETE. All three CHECKLIST gates met
+  (format decided, first scenario captured, wrapper-spec replay
+  + catalog generator both in place).
 
 Slice 4c v3b summary (previous iteration on the interface side):
 
