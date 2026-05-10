@@ -111,12 +111,24 @@ both layers in parallel and probe each via its native protocol.
 
 **Goal:** indexer reconciles with chain after each block.
 
-- [ ] Decision made: published Checkpoint image vs build-from-source
+- [x] Decision made: build-from-source via the existing
+      `futarchy-fi/futarchy-indexers` repo, sibling-clone next to
+      `interface/`. See `docs/ADR-002-indexer-bootstrap.md`. The
+      `stub-indexer` from Phase 2 is retained for fast unit-style
+      cross-layer tests.
 - [ ] Indexer service in compose, depends on anvil healthcheck
 - [ ] Schema migration cold-start time documented (this is the
       brittleness risk per PROGRESS.md)
 - [ ] Smoke test: write a Swap event on anvil → wait → query indexer
       via GraphQL → assert event present
+- [ ] **Open spike** — `START_BLOCK` env support on
+      `@snapshot-labs/checkpoint`. Must resolve before slice 4 (the
+      indexer can't scan blocks 0..N-1 from anvil; it must skip to
+      the fork block). Spike owned by background agent; results in
+      `docs/spike-001-checkpoint-anvil-compat.md` when complete.
+- [ ] **Open spike** — anvil RPC compatibility. Some indexers use
+      `trace_*` calls that anvil doesn't support. Must verify before
+      committing to the build-from-source path with anvil as RPC.
 
 ## Phase 4 — Synthetic wallet + first scripted swap
 

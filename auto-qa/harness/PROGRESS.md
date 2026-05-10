@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 2 — slices 1, 2, 4 landed. Stub-indexer enables real api↔upstream round-trip testing without a live indexer. 9 smoke tests pass + 1 skip (compose, daemon down). 2/3 original CHECKLIST items + 3 bonus items ticked. |
+| Phase | 3 — slice 1 landed (ADR-002 decision made: build-from-source via futarchy-indexers sibling clone). Background spike running on START_BLOCK / anvil RPC compat. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -348,11 +348,63 @@ Phase 2 slice 4 — multi-spawn stress (3 cycles) ✓ ~8.2s
   ethers v6 helpers (`readContract`, `sendContractTx`). Better built
   alongside the synthetic-swap work in Phase 4.
 
-**Phase 3 entry criteria (from CHECKLIST):**
+### Phase 3 — Local Checkpoint indexer
 
-- [ ] Decision made: published Checkpoint image vs build-from-source
-- [ ] Indexer service in compose, depends on anvil healthcheck
-- [ ] Schema migration cold-start time documented (this is the
-      brittleness risk per PROGRESS.md)
-- [ ] Smoke test: write a Swap event on anvil → wait → query indexer
-      via GraphQL → assert event present
+- **slice 1** (this iteration) — `docs/ADR-002-indexer-bootstrap.md`:
+  decision made.
+
+  **Context discovery this iteration**:
+  - Memory + repo inspection revealed the indexer code already lives
+    in `/Users/kas/futarchy-indexers/` (production VM + local clone).
+  - `futarchy-complete/checkpoint/docker-compose.yml` is the registry
+    indexer (port 3003 → host, 3000 internal, postgres on 5435).
+    Builds from local Dockerfile; mounts `resolvers-patched.js` +
+    `controller-patched.js` over `node_modules/@snapshot-labs/checkpoint/dist/`.
+  - `proposals-candles/checkpoint/docker-compose.yml` is the candles
+    indexer (port 3001 → host, 3000 internal, postgres on 5434).
+    Reads `GNOSIS_RPC_URL` + `MAINNET_RPC_URL` envs.
+  - **Decision: build-from-source via sibling clone.** Reuses
+    production's exact compose + patches, no divergence. Stub-indexer
+    from Phase 2 retained for fast unit-style tests.
+
+  **Open spike dispatched** (background agent):
+  - `START_BLOCK` env support on `@snapshot-labs/checkpoint` — needed
+    for slice 4 (skip from genesis to anvil fork-block, since anvil
+    doesn't have history before its fork point)
+  - `GNOSIS_BLOCK_RANGE` semantics
+  - Anvil RPC compatibility (any `trace_*` / `debug_*` calls that
+    anvil doesn't support)
+  - Cold-start time on M-class CI
+
+  Results land in `docs/spike-001-checkpoint-anvil-compat.md` when
+  the agent completes. Slice 2+ planning depends on the spike's
+  recommendations.
+
+- **slice 1** — Honest port note: `endpoints.js` defaults to
+  `localhost:3003/graphql` for registry and `localhost:3004/graphql`
+  for candles. The actual indexer compose binds registry to 3003 ✓
+  but candles to **3001** (NOT 3004 as endpoints.js defaults). This
+  is a pre-existing mismatch in production code; the harness sets
+  `CANDLES_URL=http://localhost:3001/graphql` explicitly to bridge.
+
+**Phase 3 wrap-up — remaining (gated on spike):**
+
+- slice 2 — Compose extension: add `registry-indexer` + `candles-indexer`
+  services that `extends:` from the futarchy-indexers compose, with
+  RPC pointed at our anvil. Wire `INDEXERS_PATH` env for the sibling
+  clone location.
+- slice 3 — `orchestrator/services.mjs` `startLocalIndexers({reset})`
+  helper with readiness probe (poll `{__typename}` until 200).
+- slice 4 — START_BLOCK bootstrap (per spike outcome). Likely either
+  env-var override on the indexer, OR a one-shot init container that
+  pre-seeds postgres `last_indexed_block`.
+- slice 5 — `tests/smoke-indexer-roundtrip.test.mjs`: anvil event →
+  wait for indexer → query → assert. **THE Phase 3 invariant.**
+
+**Phase 3 risks tracked:**
+
+- Cold-start time may exceed CI tolerance (>2 min). Mitigation:
+  pre-warmed postgres image with seeded schema.
+- Anvil ↔ indexer RPC compat unknown until spike completes.
+- Container shutdown ordering matters (indexer may loop trying to
+  reach a dead anvil). `stopAll()` will need `stopOrdered()`.
