@@ -1675,6 +1675,72 @@ test('runAllInvariants — failure: swap amountOut ≤ 0 (signed-amount handler 
     }
 });
 
+test('runAllInvariants — swapAmountsBoundedAbove happy: small decimal amounts', async () => {
+    // Defaults: amountIn=10.5, amountOut=4.2 — both well under 1e15.
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'swapAmountsBoundedAbove');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /amountIn=10\.5, amountOut=4\.2 both < /);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — swapAmountsBoundedAbove vacuously true with no swaps', async () => {
+    const fx = await startFixture({ candlesSwapsCount: 0 });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'swapAmountsBoundedAbove');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /no swaps to check \(vacuously true\)/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: swapAmountsBoundedAbove raw uint256 leak (amountIn=1e18)', async () => {
+    // The bug: indexer emits amountIn as "1000000000000000000" (raw
+    // uint256, 1 token at 18 decimals) instead of decimal "1.0".
+    // parseFloat returns 1e18, which is huge.
+    const fx = await startFixture({
+        latestSwapAmountIn: '1000000000000000000',
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'swapAmountsBoundedAbove');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /raw uint256 leak|amountIn=1e\+18/);
+        // swapAmountsPositive STILL passes — the value IS positive,
+        // just astronomically too large. Distinguishes magnitude
+        // bug from sign bug.
+        const positive = results.find((r) => r.name === 'swapAmountsPositive');
+        assert.equal(positive.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: swapAmountsBoundedAbove huge amountOut (token-decimal misalignment)', async () => {
+    // Scenario: a refactor that scales by 1e6 instead of 1e0 (wrong
+    // token decimals). amountOut becomes a 12-digit number.
+    const fx = await startFixture({
+        latestSwapAmountOut: '4200000000000000',  // 4.2 * 1e15
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'swapAmountsBoundedAbove');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /amountOut=.*≥ 1000000000000000|raw uint256 leak/);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('runAllInvariants — swapAmountsPositive vacuously true when no swaps', async () => {
     const fx = await startFixture({ candlesSwapsCount: 0 });
     try {
@@ -2306,6 +2372,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /candlePricesNonNegative/);
     assert.match(r.stdout, /probabilityBounds/);
     assert.match(r.stdout, /swapAmountsPositive/);
+    assert.match(r.stdout, /swapAmountsBoundedAbove/);
     assert.match(r.stdout, /swapTimestampSensible/);
     assert.match(r.stdout, /candleTimeMonotonic/);
     assert.match(r.stdout, /swapTimeMonotonicNonStrict/);

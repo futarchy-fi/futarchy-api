@@ -969,6 +969,64 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'swapAmountsBoundedAbove',
+        description: 'latest swap has amountIn < 1e15 AND amountOut < 1e15 (catches raw uint256 leaks where parseFloat returns 1e18 instead of a decimal-formatted string)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Mirrors candlePricesNonNegative + probabilityBounds —
+            // magnitude-sanity bound on the swap side. Closes the
+            // gap left by swapAmountsPositive (which only checks
+            // > 0): a raw uint256 leak from the indexer (e.g.,
+            // amountIn = "1000000000000000000" instead of decimal
+            // "1.0") passes the >0 check but represents a serious
+            // formatting bug.
+            //
+            // The 1e15 threshold is generous — even huge real swaps
+            // (e.g., a $1M trade in sDAI = "1000000.0") are far
+            // below it. Raw uint256 of any reasonable token is
+            // ≥ 1e18 (assuming 18 decimals), so the bound cleanly
+            // separates real values from raw-int leaks.
+            //
+            // Bug shapes caught:
+            //   * Raw uint256 leak — indexer emits amountIn as
+            //     "1000000000000000000" instead of "1.0"; parseFloat
+            //     returns 1e18. Real swaps are nowhere near that.
+            //   * parseFloat overflow / scientific-notation
+            //     misformatting (e.g., "1e30")
+            //   * Token-decimal misalignment — wrong-decimals
+            //     scaling that 1e6x's the value
+            //
+            // Vacuous when no swaps. Distinct concern from
+            // swapAmountsPositive (existence + sign) and
+            // swapTimestampSensible (time field).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ swaps(first: 1, orderBy: timestamp, orderDirection: desc) { id amountIn amountOut } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.swaps)) {
+                throw new Error(`unexpected swaps response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.swaps.length === 0) {
+                return { ok: true, detail: 'no swaps to check (vacuously true)' };
+            }
+            const s = j.data.swaps[0];
+            const SANE_MAX = 1e15;
+            for (const [name, raw] of [['amountIn', s.amountIn], ['amountOut', s.amountOut]]) {
+                const val = parseFloat(raw);
+                if (!Number.isFinite(val)) {
+                    throw new Error(`swap ${s.id}: ${name}="${raw}" parseFloat = ${val} (not finite)`);
+                }
+                if (val >= SANE_MAX) {
+                    throw new Error(`swap ${s.id}: ${name}=${val} ≥ ${SANE_MAX} (raw uint256 leak — got "${raw}" instead of decimal-formatted string)`);
+                }
+            }
+            return { ok: true, detail: `swap ${s.id}: amountIn=${parseFloat(s.amountIn)}, amountOut=${parseFloat(s.amountOut)} both < ${SANE_MAX}` };
+        },
+    },
+    {
         name: 'swapTimestampSensible',
         description: 'latest swap timestamp is in a sane range (catches event-topic-decoder bugs)',
         layer: 'orchestrator↔candles',
