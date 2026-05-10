@@ -565,6 +565,30 @@ freshly-generated addresses as recipients; documented in
       `retention-days: 14`; `if-no-files-found: ignore` for
       green runs with no artifacts. Promotes together with
       slice 3c (same staged file).
+- [x] **3e — smoke-test workflow STAGED on api side.**
+      `auto-qa/harness/ci/auto-qa-harness-smoke.yml.staged`
+      (NEW, on api side — first staged workflow on this side;
+      all prior staged workflows lived on interface for the
+      Playwright suite). Job: `scenarios-smoke` — checkout,
+      Node 22 with npm cache on
+      `auto-qa/harness/package-lock.json`, `npm ci` in
+      harness, then `npm run smoke:scenarios` (130+ tests
+      against in-process node:http fixture, ~1.5s of test
+      time + setup overhead). Adds a second step to verify
+      `HARNESS_DRY_RUN=1` catalog listing works at the
+      workflow level (catches catalog-listing regressions
+      that the unit test passes through). Trigger:
+      `workflow_dispatch` (matches conservative roll-out
+      of slices 3a + 3c). Total runtime expected <1 min.
+      Also created `auto-qa/harness/ci/README.md` on api
+      side (mirrors interface ci/README.md) explaining the
+      staging dance + currently-staged table.
+- [ ] **3e-promote** — maintainer task: copy
+      `auto-qa/harness/ci/auto-qa-harness-smoke.yml.staged`
+      into `.github/workflows/auto-qa-harness-smoke.yml`
+      on api repo. Cheapest of the four CI workflows to
+      promote; recommend doing this FIRST since it's pure
+      node + no docker + no GitHub Actions secrets needed.
 
 **Phase 7 slice 4 — IN PROGRESS (full-stack):**
 

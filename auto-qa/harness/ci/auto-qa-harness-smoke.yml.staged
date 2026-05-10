@@ -1,0 +1,64 @@
+name: auto-qa harness smoke tests
+
+# Runs the orchestrator's invariant smoke-test suite (the
+# 130+ tests in `auto-qa/harness/tests/smoke-scenario-runner.test.mjs`)
+# against an in-process node:http fixture. No docker, no real
+# services, no external network — the suite finishes in ~1.5s
+# of test time + Node setup overhead.
+#
+# Trigger is `workflow_dispatch` ONLY for this first version,
+# matching the conservative roll-out pattern of slices 3a + 3c.
+# After the maintainer promotes this file (see
+# `auto-qa/harness/ci/README.md`) and smoke-tests it via the
+# Actions UI, follow-up iterations can add:
+#
+#   pull_request:
+#     paths: ['auto-qa/harness/**']    # gate harness-touching PRs
+#   push:
+#     branches: ['auto-qa', 'main']    # catch direct merges
+#
+# Per Phase 7 slice 4d-smoke-ci.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scenarios-smoke:
+    name: Scenario-runner smoke tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: auto-qa/harness/package-lock.json
+
+      - name: Install harness deps
+        working-directory: auto-qa/harness
+        run: npm ci
+
+      - name: Run smoke tests
+        # The orchestrator's invariant battery against an in-
+        # process node:http fixture. No docker daemon needed.
+        # Output is plain node:test format — GitHub Actions
+        # parses pass/fail lines automatically.
+        working-directory: auto-qa/harness
+        run: npm run smoke:scenarios
+
+      - name: Verify dry-run catalog
+        # Sanity check that scenario-runner.mjs lists every
+        # invariant when called with HARNESS_DRY_RUN=1. Mirrors
+        # what the smoke test's CLI test asserts, but at the
+        # workflow level — catches catalog-listing regressions
+        # that the unit test passes through.
+        working-directory: auto-qa/harness
+        env:
+          HARNESS_COMPOSE: '1'
+          HARNESS_DRY_RUN: '1'
+        run: node orchestrator/scenario-runner.mjs
