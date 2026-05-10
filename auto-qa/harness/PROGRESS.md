@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 slices 1+2+3 landed on interface side. Slice 1: browser-injection smoke. Slice 2: in-page signing via `setupSigningTunnel` exposeBinding. Slice 3: futarchy Next.js dev server in the loop + RainbowKit Connect modal lists "Futarchy Harness Wallet" (EIP-6963 discovery confirmed end-to-end against the real app). 11/11 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 slices 1+2+3+4 (mechanism) landed on interface side. Slices 1-3 prior. Slice 4 v1: DOM↔API invariant mechanism — `flows/dom-api-invariant.spec.mjs` mocks GraphQL POSTs to `api.futarchy.fi/registry/graphql`, returns probe org "HARNESS-PROBE-ORG-001", and asserts the probe renders in the DOM (in two independent rendering paths). 12/12 browser tests green. Numeric-price sub-slices still ahead. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -775,10 +775,29 @@ Summary of slice 1:
     eth_blockNumber forward test from a real http server to
     `context.route(...)` interception (chromium drops fetches from
     `about:blank` to local addresses regardless of CORS headers)
-- Slice 4 (DOM↔API price invariant — the canonical Phase 5
-  deliverable) is the remaining work.
+- Slice 4 sub-slices remaining: 4b (numeric pool price mock +
+  formatted DOM cell match), 4c (cross-protocol reconciliation).
 
-Slice 3b summary (this iteration on the interface side):
+Slice 4 v1 summary (this iteration on the interface side):
+
+- New file `flows/dom-api-invariant.spec.mjs`. The canonical
+  Phase 5 invariant **mechanism** is now wired: mock the
+  futarchy app's GraphQL POSTs to
+  `api.futarchy.fi/registry/graphql`, dispatch on operation
+  name (aggregator / organizations / proposalentities), return
+  controlled response, assert the value reaches the DOM.
+- v1 deliberately scopes down to a non-numeric value (an org
+  name, "HARNESS-PROBE-ORG-001") so the mechanism lands cleanly
+  before chasing formatter quirks. Numeric-price assertions
+  follow in 4b.
+- Bonus discovery: the probe value rendered in BOTH the
+  CompaniesListCarousel card AND the OrganizationsTable row,
+  so the test asserts `count >= 1` to catch any future
+  regression that drops one of the rendering paths.
+- 1 test, 3.3s; wall-clock with warm dev server: 12.6s. UI-side
+  smoke: 21 pass + 0 skip.
+
+Slice 3b summary (previous iteration on the interface side):
 
 - New test in `flows/app-discovery.spec.mjs`:
     1. Install wallet stub (no signing tunnel — modal-listing

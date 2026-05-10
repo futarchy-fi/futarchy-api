@@ -298,10 +298,31 @@ freshly-generated addresses as recipients; documented in
       scenario work when we actually need a connected wallet
       to drive a swap.
 
-**Phase 5 slice 4 (DOM↔API invariant) — TODO:**
+**Phase 5 slice 4 (DOM↔API invariant) — MECHANISM PROVEN:**
 
-- [ ] First DOM↔API check: navigate to a proposal page, scrape the
-      visible price, compare to the api response that produced it
+- [x] First DOM↔API mechanism proof — `flows/dom-api-invariant.spec.mjs`
+      intercepts the futarchy app's GraphQL POSTs to
+      `https://api.futarchy.fi/registry/graphql`, dispatches on the
+      embedded operation (aggregator / organizations /
+      proposalentities), returns a probe org name
+      "HARNESS-PROBE-ORG-001", and asserts the probe value renders
+      in the DOM. The probe surfaces in TWO independent rendering
+      paths (CompaniesListCarousel card + OrganizationsTable row),
+      so any future regression that renames the data field will
+      light up here. Test: 3.3s; wall-clock with warm dev server:
+      12.6s. **The canonical Phase 5 invariant mechanism (mock API →
+      assert DOM reflects it) is now wired and working.**
+- [ ] Sub-slice: mock a NUMERIC value (e.g., a pool spot price) and
+      assert the DOM cell shows the formatted version. Picks up the
+      "price" half of the slice 4 description that v1 deferred so we
+      could land the mechanism cleanly. Will likely need to pick a
+      pool/price endpoint (usePoolData, ChartPage, candle aggregates)
+      and trace the formatter (decimals/currency/rounding) to know
+      what string to assert against.
+- [ ] Sub-slice: cross-protocol price reconciliation (Algebra / CoW /
+      Sushi) mock — when multiple sources should agree, mock each to
+      slightly-different values and assert the UI flags the
+      divergence (or picks the right canonical source).
 
 ## Phase 6 — Scenario library
 
