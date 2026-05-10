@@ -9,6 +9,7 @@
         "detect": "node scripts/detect-anvil.mjs",
         "fork": "node scripts/start-fork.mjs",
         "smoke": "node --test tests/smoke-fork.test.mjs",
+        "smoke:compose": "node --test tests/smoke-compose.test.mjs",
         "replay": "echo 'TODO Phase 6 — scenario replay runner' && exit 1",
         "test": "node --test 'tests/**/*.test.mjs'"
     },

@@ -16,7 +16,8 @@
         "auto-qa:e2e": "npm --prefix auto-qa/harness run phase-status",
         "auto-qa:e2e:detect": "npm --prefix auto-qa/harness run detect",
         "auto-qa:e2e:fork": "npm --prefix auto-qa/harness run fork",
-        "auto-qa:e2e:smoke": "npm --prefix auto-qa/harness run smoke"
+        "auto-qa:e2e:smoke": "npm --prefix auto-qa/harness run smoke",
+        "auto-qa:e2e:smoke:compose": "npm --prefix auto-qa/harness run smoke:compose"
     },
     "dependencies": {
         "cors": "^2.8.5",

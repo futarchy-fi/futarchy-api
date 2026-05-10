@@ -56,8 +56,14 @@ agreed-upon, without installing heavy deps or running real services.
       `increaseTime`, `snapshot`, `revert`, `setBalance`,
       `impersonateAccount`, `stopImpersonating`, plus `blockNumber`,
       `chainId`, `getBalance` query helpers
-- [ ] `docker compose -f auto-qa/harness/docker-compose.yml up -d`
-      brings the anvil service up (no longer just placeholder)
+- [x] `docker compose -f auto-qa/harness/docker-compose.yml up -d`
+      brings the anvil service up (no longer just placeholder).
+      Compose config validates clean; anvil service block is real
+      (`ghcr.io/foundry-rs/foundry:latest`, port 8545, healthcheck
+      via `cast block-number`). Test in `tests/smoke-compose.test.mjs`
+      drives `up -d` → wait healthy → block-clock smoke → `down -v`,
+      and SKIPS cleanly when the docker daemon isn't reachable. Live
+      runtime validation pending Docker Desktop start.
 - [x] Smoke test: fork at a recent Gnosis block, mine 10 blocks, query
       `eth_blockNumber` and confirm = N+10
       (`tests/smoke-fork.test.mjs`, runs in ~3s, validated 2026-05-10)

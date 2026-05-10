@@ -34,43 +34,47 @@ networks:
 # Each block lists the eventual command + the phase that turns it on.
 services:
     # ────────────────────────────────────────────────────────────────
-    # Phase 1: Anvil fork of Gnosis at a pinned past block.
+    # Phase 1: Anvil fork of Gnosis. Forks `latest` by default; for
+    # scenario replays (Phase 6) override FORK_BLOCK with a specific
+    # block number — but note the command list below does NOT yet
+    # plumb FORK_BLOCK through (it requires a shell wrapper to handle
+    # the "no flag when latest" case; deferred to Phase 6 when we
+    # actually need pinned blocks).
     #
-    # We use a published Foundry image rather than building locally so
-    # CI doesn't need to compile Rust on every run.
-    #
-    # FORK_URL is set per-environment; default is a public Gnosis
-    # archive RPC. FORK_BLOCK is per-scenario (defaults to "latest"
-    # for smoke runs, overridden to a known proposal block for
-    # replays).
+    # We use the published Foundry image rather than building locally
+    # so CI doesn't need to compile Rust.
     # ────────────────────────────────────────────────────────────────
-    # anvil:
-    #     image: ghcr.io/foundry-rs/foundry:latest
-    #     container_name: harness-anvil
-    #     networks: [harness-net]
-    #     environment:
-    #         FORK_URL: ${FORK_URL:-https://rpc.gnosis.gateway.fm}
-    #         FORK_BLOCK: ${FORK_BLOCK:-latest}
-    #     command: >
-    #         anvil
-    #         --host 0.0.0.0
-    #         --port 8545
-    #         --fork-url ${FORK_URL}
-    #         --fork-block-number ${FORK_BLOCK}
-    #         --chain-id 100
-    #         --block-time 1
-    #         --no-mining
-    #         --accounts 10
-    #         --balance 10000
-    #     # ports:
-    #     #     - "8545:8545"   # uncomment for direct host access during dev
-    #     volumes:
-    #         - ./.compose-volumes/anvil:/data
-    #     healthcheck:
-    #         test: ["CMD", "cast", "block-number", "--rpc-url", "http://localhost:8545"]
-    #         interval: 2s
-    #         timeout: 1s
-    #         retries: 30
+    anvil:
+        image: ghcr.io/foundry-rs/foundry:latest
+        container_name: harness-anvil
+        networks: [harness-net]
+        environment:
+            FORK_URL: ${FORK_URL:-https://rpc.gnosis.gateway.fm}
+        command:
+            - anvil
+            - --host
+            - "0.0.0.0"
+            - --port
+            - "8545"
+            - --fork-url
+            - ${FORK_URL:-https://rpc.gnosis.gateway.fm}
+            - --chain-id
+            - "100"
+            - --no-mining
+            - --accounts
+            - "10"
+            - --balance
+            - "10000"
+        ports:
+            # Expose to host for the harness test runner. Comment out
+            # if running fully containerized (orchestrator inside compose).
+            - "${ANVIL_HOST_PORT:-8545}:8545"
+        healthcheck:
+            test: ["CMD", "cast", "block-number", "--rpc-url", "http://localhost:8545"]
+            interval: 2s
+            timeout: 2s
+            retries: 30
+            start_period: 5s
 
     # ────────────────────────────────────────────────────────────────
     # Phase 3: Local Checkpoint indexer. Same code as production, but
@@ -162,11 +166,5 @@ services:
     #     command: ["npm", "run", "test"]
 
     # ────────────────────────────────────────────────────────────────
-    # Phase 0: A no-op service so `docker compose config` validates and
-    # CI has something to spin up while we build the rest. Remove when
-    # at least one real service is enabled.
+    # (Phase 0 placeholder removed — anvil is real now.)
     # ────────────────────────────────────────────────────────────────
-    placeholder:
-        image: hello-world
-        container_name: harness-placeholder
-        networks: [harness-net]

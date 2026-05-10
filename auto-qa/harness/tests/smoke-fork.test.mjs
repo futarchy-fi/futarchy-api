@@ -39,6 +39,12 @@ import {
     snapshot,
     revert,
     mineBlock,
+    setNextTimestamp,
+    setBalance,
+    impersonateAccount,
+    stopImpersonating,
+    getBalance,
+    rpc,
 } from '../scripts/block-clock.mjs';
 import { detectAnvil } from '../scripts/detect-anvil.mjs';
 
@@ -154,14 +160,139 @@ test('Phase 1 smoke — start-fork spawns anvil, block-clock round-trips clean',
 
         t.diagnostic('snapshot/revert round-trip clean');
 
-        // Time-pin: subsequent block timestamp should be controllable
-        // (just verifying the helper doesn't throw — full TWAP-window
-        // tests come in Phase 2)
-        // Skipped here to keep the smoke fast.
-
         // Brief settle
         await wait(50);
     } finally {
         await gracefulKill(child);
+    }
+});
+
+// ───────────────────────────────────────────────────────────────────
+// Phase 1 slice 3 — setNextTimestamp (TWAP-window prep)
+// ───────────────────────────────────────────────────────────────────
+
+test('Phase 1 slice 3 — setNextTimestamp pins the next-block timestamp', async (t) => {
+    const info = await detectAnvil();
+    if (!info.found) {
+        t.skip(`anvil not on PATH (${info.reason})`);
+        return;
+    }
+
+    // Reuse a separate port to avoid colliding with smoke 1.
+    const port = 8548;
+    const fakeReady = await spawnFork(port);
+    const localRpc = `http://127.0.0.1:${port}`;
+
+    try {
+        // Pick a future timestamp — current Unix seconds + 3600 (1h ahead).
+        const future = Math.floor(Date.now() / 1000) + 3600;
+
+        await setNextTimestamp(localRpc, future);
+        await mineBlock(localRpc);
+
+        // Read the new block's timestamp via eth_getBlockByNumber.
+        const block = await rpc(localRpc, 'eth_getBlockByNumber', ['latest', false]);
+        const minedTs = parseInt(block.timestamp, 16);
+
+        assert.equal(minedTs, future,
+            `next mined block must be at exactly ${future} (got ${minedTs})`);
+        t.diagnostic(`mined block at pinned timestamp ${future}`);
+
+        // Mining ANOTHER block should advance from `future`, not from
+        // wall clock. anvil increments by 1s by default after a pin.
+        await mineBlock(localRpc);
+        const block2 = await rpc(localRpc, 'eth_getBlockByNumber', ['latest', false]);
+        const ts2 = parseInt(block2.timestamp, 16);
+        assert.ok(ts2 >= future,
+            `subsequent block timestamp ${ts2} should be >= pinned ${future}`);
+        t.diagnostic(`next block timestamp: ${ts2} (delta ${ts2 - future}s)`);
+    } finally {
+        await gracefulKill(fakeReady.child);
+    }
+});
+
+// ───────────────────────────────────────────────────────────────────
+// Phase 1 slice 4 — setBalance + impersonateAccount (synthetic-user prep)
+// ───────────────────────────────────────────────────────────────────
+
+test('Phase 1 slice 4 — setBalance funds an arbitrary address', async (t) => {
+    const info = await detectAnvil();
+    if (!info.found) {
+        t.skip(`anvil not on PATH (${info.reason})`);
+        return;
+    }
+
+    const port = 8549;
+    const fakeReady = await spawnFork(port);
+    const localRpc = `http://127.0.0.1:${port}`;
+
+    try {
+        // Use a high-numbered address very unlikely to have any
+        // historical Gnosis activity. We don't assume zero balance —
+        // some "vanity" addresses on Gnosis carry dust — instead we
+        // pin the post-set value and assert that.
+        const target = '0xff00ff00ff00ff00ff00ff00ff00ff00ff00ff00';
+
+        const before = await getBalance(localRpc, target);
+        t.diagnostic(`before balance: ${before}`);
+
+        // Set 100 ETH (0x56bc75e2d63100000)
+        const hundredEth = '0x56bc75e2d63100000';
+        await setBalance(localRpc, target, hundredEth);
+
+        const after = await getBalance(localRpc, target);
+        assert.equal(after, hundredEth,
+            `setBalance should pin balance to ${hundredEth} regardless of ` +
+                `before-state (got ${after}, before was ${before})`);
+        t.diagnostic(`funded ${target} with 100 ETH (was ${before})`);
+    } finally {
+        await gracefulKill(fakeReady.child);
+    }
+});
+
+test('Phase 1 slice 4 — impersonateAccount allows signing as any address', async (t) => {
+    const info = await detectAnvil();
+    if (!info.found) {
+        t.skip(`anvil not on PATH (${info.reason})`);
+        return;
+    }
+
+    const port = 8550;
+    const fakeReady = await spawnFork(port);
+    const localRpc = `http://127.0.0.1:${port}`;
+
+    try {
+        // A non-anvil-account whale we want to impersonate.
+        const whale = '0x0000000000000000000000000000000000001234';
+        const recipient = '0x0000000000000000000000000000000000005678';
+
+        // Fund the whale + impersonate.
+        await setBalance(localRpc, whale, '0x56bc75e2d63100000'); // 100 ETH
+        await impersonateAccount(localRpc, whale);
+
+        try {
+            // Send 1 ETH via eth_sendTransaction signed BY the whale
+            // (only possible because we're impersonating).
+            const txHash = await rpc(localRpc, 'eth_sendTransaction', [{
+                from: whale,
+                to: recipient,
+                value: '0xde0b6b3a7640000',  // 1 ETH
+                gas: '0x5208',                 // 21000
+            }]);
+            assert.ok(typeof txHash === 'string' && txHash.startsWith('0x'),
+                `sendTransaction should return a tx hash (got ${txHash})`);
+
+            // Mine the tx in.
+            await mineBlock(localRpc);
+
+            const recipientBal = await getBalance(localRpc, recipient);
+            assert.equal(recipientBal, '0xde0b6b3a7640000',
+                `recipient should have received 1 ETH (got ${recipientBal})`);
+            t.diagnostic(`impersonated ${whale}, sent 1 ETH to ${recipient}`);
+        } finally {
+            await stopImpersonating(localRpc, whale);
+        }
+    } finally {
+        await gracefulKill(fakeReady.child);
     }
 });
