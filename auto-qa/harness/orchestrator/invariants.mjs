@@ -2302,6 +2302,72 @@ export const INVARIANTS = [
             return { ok: true, detail: `evm_snapshot returned id ${snapshotId} — snapshot/revert extension available` };
         },
     },
+    {
+        name: 'anvilTimeWarpCapabilityPresent',
+        description: 'evm_setNextBlockTimestamp RPC method works — completes the chain CAPABILITY trio (impersonate + snapshot + time-warp) scenarios depend on for futarchy resolution flows that need to simulate time passing',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            // Third (and final) chain-CAPABILITY probe. Together
+            // with anvilImpersonationCapabilityPresent and
+            // anvilSnapshotCapabilityPresent forms the MINIMAL
+            // CAPABILITY TRIO that scenarios depend on:
+            //   * impersonate → call function as arbitrary account
+            //   * snapshot/revert → roll back state between tests
+            //   * TIME-WARP → simulate "wait N seconds/days" without
+            //     actually waiting (futarchy resolution scenarios
+            //     need this to test "after the trading window
+            //     closes, the proposal resolves to X")
+            //
+            // Without time-warp, any scenario that involves a
+            // time-gated state transition (resolution after deadline,
+            // TWAP window calculation, vote-weight decay) cannot
+            // run at all — wall-clock waits would make CI runs
+            // hours-long.
+            //
+            // evm_setNextBlockTimestamp lineage: ganache-original
+            // method, supported by anvil + hardhat + ganache.
+            // Same support profile as evm_snapshot — wrong-fork
+            // clients (geth/erigon/reth) lack it.
+            //
+            // Bug shapes caught (NOT caught by impersonate / snapshot
+            // capability probes):
+            //   * Anvil flag --no-storage-caching or similar that
+            //     disables time-warp specifically (it's possible to
+            //     have snapshot working but timestamp manipulation
+            //     disabled)
+            //   * RPC layer with method-allowlisting that blocks
+            //     evm_setNextBlockTimestamp specifically (some
+            //     proxy-based dev setups whitelist evm_snapshot/
+            //     revert but not setNextBlockTimestamp)
+            //   * Anvil version regression where the time-warp
+            //     subsystem was rewritten and a newer signature
+            //     was shipped without the legacy alias (tools that
+            //     call the old signature break)
+            //
+            // Side-effect note: evm_setNextBlockTimestamp DOES
+            // mutate chain state (it sets the timestamp the next
+            // mined block will use). But no block is mined as part
+            // of this probe — the only effect is that if a scenario
+            // subsequently mines a block, its timestamp will be the
+            // far-future value we set. Subsequent scenarios can
+            // setNextBlockTimestamp again to override. The chosen
+            // value is now+86400 (1 day) — conservatively far enough
+            // to be obviously synthetic but not so far that downstream
+            // logic would misinterpret it as a year-2099 sentinel.
+            const farFuture = Math.floor(Date.now() / 1000) + 86400;
+            const farFutureHex = '0x' + farFuture.toString(16);
+            try {
+                await rpcRequest(ctx.rpcUrl, 'evm_setNextBlockTimestamp', [farFutureHex]);
+            } catch (err) {
+                const msg = err?.message || String(err);
+                if (/method.*not (found|supported|mocked)|-32601/i.test(msg)) {
+                    throw new Error(`evm_setNextBlockTimestamp unavailable (${msg.slice(0, 100)}) — wrong-fork client or method-allowlisting; futarchy resolution scenarios that simulate time passing cannot run`);
+                }
+                throw err;
+            }
+            return { ok: true, detail: `evm_setNextBlockTimestamp(${farFutureHex}) accepted — time-warp extension available` };
+        },
+    },
     // ── Economic invariants ─────────────────────────────────────────
     // Always-on truth properties from PROGRESS.md's "Economic
     // invariants" table. Each one validates a single chain-level

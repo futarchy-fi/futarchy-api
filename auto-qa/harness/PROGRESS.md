@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent + anvilSnapshotCapabilityPresent + swapAmountsAllRowsPositive + apiHealthBodyShape)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **49 invariants** — 13 api-internal + 27 indexer + 9 chain-layer; first body-shape probe on /health (catches LB string-match breakage + timestamp-format regressions invisible to status-code-only checks); 164 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent + anvilSnapshotCapabilityPresent + swapAmountsAllRowsPositive + apiHealthBodyShape + anvilTimeWarpCapabilityPresent)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **50 invariants** — 13 api-internal + 27 indexer + 10 chain-layer; **🎯 50-invariant milestone reached** — chain-CAPABILITY trio complete (impersonate + snapshot + time-warp = the minimal scenario primitive set); 168 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,74 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (apiHealthBodyShape) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (anvilTimeWarpCapabilityPresent) summary (this iteration on the api side) — 🎯 **50-invariant milestone**:
+
+- **Third chain-CAPABILITY probe** — tenth chain-layer
+  invariant. COMPLETES THE MINIMAL CAPABILITY TRIO that
+  scenarios depend on:
+    1. impersonate → call function as arbitrary account
+       (anvilImpersonationCapabilityPresent)
+    2. snapshot/revert → roll back state between tests
+       (anvilSnapshotCapabilityPresent)
+    3. **TIME-WARP → simulate "wait N seconds/days"
+       without actually waiting (this slice)**
+
+  Without time-warp, ANY scenario involving a time-gated
+  state transition (resolution after deadline, TWAP window
+  calculation, vote-weight decay) cannot run at all —
+  wall-clock waits would make CI runs hours-long.
+
+- **🎯 50-invariant milestone reached.** Layer breakdown:
+  13 api-internal + 27 indexer + 10 chain-layer.
+
+- **evm_setNextBlockTimestamp lineage**: ganache-original
+  method, supported by anvil + hardhat + ganache. Same
+  support profile as evm_snapshot — wrong-fork clients
+  (geth/erigon/reth) lack it.
+
+- **Bug shapes caught (NOT caught by impersonate / snapshot
+  capability probes)**:
+  * Anvil flag --no-storage-caching or similar that disables
+    time-warp specifically (it's possible to have snapshot
+    working but timestamp manipulation disabled)
+  * RPC layer with method-allowlisting that blocks
+    evm_setNextBlockTimestamp specifically (some proxy-based
+    dev setups whitelist evm_snapshot/revert but not
+    setNextBlockTimestamp)
+  * Anvil version regression where the time-warp subsystem
+    was rewritten and a newer signature was shipped without
+    the legacy alias — tools calling old signature break
+
+- **Side-effect note**: evm_setNextBlockTimestamp DOES mutate
+  chain state (sets the next-block timestamp). But no block
+  is mined as part of this probe — only effect is that if
+  a scenario subsequently mines a block, its timestamp will
+  be the far-future value we set. Subsequent scenarios can
+  setNextBlockTimestamp again to override. Chosen value is
+  now+86400 (1 day) — far enough to be obviously synthetic
+  but not so far that downstream logic would misinterpret
+  it as a year-2099 sentinel.
+
+- **Smoke tests**: 4 new (default happy; failure method-not-
+  supported wrong-fork client; failure -32603 internal error
+  propagates as RPC error; **🎯 milestone test that explicitly
+  verifies all THREE capability probes pass on default
+  fixture, documenting the trio as a coherent set**). 1 new
+  fixture knob (timeWarpSupported: true | false | 'rpc-error').
+  1 new RPC dispatch case (evm_setNextBlockTimestamp).
+  168/168 pass (was 164).
+
+- **Slice 4 progress: ~99% (36+ of ~30 sub-slices)**. Chain
+  layer now has TEN coverage points. The three CAPABILITY
+  probes (impersonate, snapshot, time-warp) are now ALL
+  shipped — every scenario primitive the harness depends on
+  is sentinel-protected. Without these probes, a missing
+  capability would surface only when a scenario tried to
+  use it; now it surfaces immediately at probe time. Still
+  to add (per CHECKLIST): candlesAggregation, conservation,
+  TWAP monotonicity, cross-run rate monotonicity.
+
+Phase 7 slice 4d-scenarios-more (apiHealthBodyShape) summary (previous iteration on the api side):
 
 - **First body-shape probe on /health**. STRENGTHENS the
   existing apiHealth (status-code-only) into a body

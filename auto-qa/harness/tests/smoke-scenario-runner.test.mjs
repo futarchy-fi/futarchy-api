@@ -244,6 +244,13 @@ function startFixture({
     //   - 'rpc-error': method exists but throws -32603
     //   - null / non-hex string: subsystem broken (registered but garbage)
     snapshotResult = '0x1',
+    // evm_setNextBlockTimestamp support flag for
+    // anvilTimeWarpCapabilityPresent (slice 4d-scenarios-more).
+    // Default true (full anvil); set false to simulate a wrong-
+    // fork client (geth/erigon) lacking the time-warp extension.
+    // Set 'rpc-error' to simulate the method existing but
+    // throwing -32603 internal error.
+    timeWarpSupported = true,
 } = {}) {
     // ── shared row builders ──────────────────────────────────────────
     // Pulled out of the per-route handlers so the api passthrough
@@ -553,6 +560,19 @@ function startFixture({
                                 }));
                             }
                             return replyResult(snapshotResult);
+                        case 'evm_setNextBlockTimestamp':
+                            if (timeWarpSupported === true) return replyResult(null);
+                            if (timeWarpSupported === 'rpc-error') {
+                                return response.end(JSON.stringify({
+                                    jsonrpc: '2.0', id: parsed.id ?? 1,
+                                    error: { code: -32603, message: 'time-warp subsystem unavailable' },
+                                }));
+                            }
+                            // false → method-not-found (wrong-fork client like geth/erigon)
+                            return response.end(JSON.stringify({
+                                jsonrpc: '2.0', id: parsed.id ?? 1,
+                                error: { code: -32601, message: 'method evm_setNextBlockTimestamp not supported' },
+                            }));
                         default:
                             response.end(JSON.stringify({
                                 jsonrpc: '2.0', id: parsed.id ?? 1,
@@ -1461,6 +1481,71 @@ test('runAllInvariants — failure: anvilSnapshotCapabilityPresent method exists
         const inv = results.find((r) => r.name === 'anvilSnapshotCapabilityPresent');
         assert.equal(inv.ok, false);
         assert.match(inv.error, /RPC error.*snapshot subsystem unavailable/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — anvilTimeWarpCapabilityPresent happy: evm_setNextBlockTimestamp accepted (default fixture)', async () => {
+    const fx = await startFixture();  // default timeWarpSupported=true
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'anvilTimeWarpCapabilityPresent');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /evm_setNextBlockTimestamp\(0x[0-9a-f]+\) accepted.*time-warp extension available/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilTimeWarpCapabilityPresent method not supported (wrong-fork client)', async () => {
+    // Wrong-fork client (geth/erigon/reth) — no evm_* extensions.
+    // Note: anvilSnapshotCapabilityPresent ALSO fails (geth lacks
+    // both), but the failure modes are distinct: this is the
+    // time-warp subsystem missing, snapshot is the rollback
+    // subsystem missing. They cover different scenario primitives.
+    const fx = await startFixture({ timeWarpSupported: false });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilTimeWarpCapabilityPresent');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /evm_setNextBlockTimestamp unavailable.*futarchy resolution scenarios.*cannot run/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilTimeWarpCapabilityPresent method exists but errors (RPC layer issue)', async () => {
+    // Method is registered but throws -32603 internal error. Same
+    // pattern as the impersonation/snapshot sister probes.
+    const fx = await startFixture({ timeWarpSupported: 'rpc-error' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilTimeWarpCapabilityPresent');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /RPC error.*time-warp subsystem unavailable/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — anvilTimeWarpCapabilityPresent: when ALL three chain CAPABILITY probes pass, scenarios have the minimal primitive set', async () => {
+    // 50-invariant milestone test: explicitly verify that the
+    // chain-capability TRIO (impersonate + snapshot + time-warp)
+    // all pass on the default fixture. This documents the trio
+    // as a coherent set rather than three independent probes.
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const trio = ['anvilImpersonationCapabilityPresent', 'anvilSnapshotCapabilityPresent', 'anvilTimeWarpCapabilityPresent'];
+        for (const name of trio) {
+            const inv = results.find((r) => r.name === name);
+            assert.equal(inv?.ok, true, `${name} should pass on default fixture`);
+        }
     } finally {
         await fx.stop();
     }

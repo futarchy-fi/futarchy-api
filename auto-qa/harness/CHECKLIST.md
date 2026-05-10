@@ -774,10 +774,27 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). **Now 49 invariants**:
-      13 api-internal + 27 indexer probes + 9 chain-layer.
-      164 smoke tests green.
-      `apiHealthBodyShape` added this slice — first body-
+      PROGRESS.md's invariant tables). **Now 50 invariants
+      (🎯 milestone)**: 13 api-internal + 27 indexer probes
+      + 10 chain-layer. 168 smoke tests green.
+      `anvilTimeWarpCapabilityPresent` added this slice —
+      tenth chain-layer invariant; THIRD chain-CAPABILITY
+      probe. COMPLETES the minimal capability TRIO that
+      scenarios depend on: impersonate + snapshot/revert +
+      TIME-WARP. Without time-warp, ANY scenario involving a
+      time-gated state transition (resolution after deadline,
+      TWAP window, vote-weight decay) cannot run — wall-clock
+      waits would make CI runs hours-long. Same support
+      profile as evm_snapshot (ganache lineage; geth/erigon/
+      reth lack it). Catches bug classes specific to the
+      time-warp subsystem: --no-storage-caching disabling
+      time-warp specifically; RPC method-allowlisting
+      blocking evm_setNextBlockTimestamp; anvil version
+      regression with new signature dropping legacy alias.
+      Side effect (next-block timestamp set to now+86400)
+      is benign — no block mined in the probe.
+
+      `apiHealthBodyShape` (previous slice) — first body-
       shape probe on /health. STRENGTHENS apiHealth (status-
       code-only) by validating `{ status: 'ok', timestamp:
       <ISO 8601> }`. Both fields matter to downstream ops:
