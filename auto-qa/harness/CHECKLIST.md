@@ -175,15 +175,16 @@ both layers in parallel and probe each via its native protocol.
       but cross-layer indexer↔api reconciliation pending Phase 3's
       indexer up + Docker Desktop.
 
-**Phase 4 KNOWN QUIRK** (logged for follow-up, not blocking): On a
-Gnosis fork, after a successful 1-ETH transfer between anvil dev
-addresses, the recipient's `eth_getBalance` reads as 0 (not pre+1ETH)
-even though the receipt is `status: 0x1` and the sender is correctly
-debited. Sender behavior is correct; only recipient post-balance
-reads anomalous. Not a wallet-stub bug — surfaces some interaction
-between anvil's fork mode and pre-funded dev accounts. Tracked as
-a diagnostic in `tests/smoke-wallet-stub.test.mjs`. Investigate
-before relying on recipient-balance checks in scenario tests.
+**Phase 4 ANVIL DEV-ACCOUNT QUIRK (resolved in slice 3)**: Anvil's
+"10000 ETH" auto-funding for dev addresses on a fork (0xf39F, 0x7099,
+…) is a LAZY view — the underlying fork state is whatever the address
+has on Gnosis (~0). On first incoming tx, the lazy 10000 ETH vanishes
+and the true fork balance materializes. So sending to dev[1] reads as
+recipient going from 10000 → 0, NOT 10000 → 10001. Verified in
+`scripts/debug-balance-quirk.mjs` across 4 recipient kinds: dev[1]
+anomalous, vanity/fresh/low addresses all correct. **Fix**: tests use
+freshly-generated addresses as recipients; documented in
+`tests/smoke-wallet-stub.test.mjs` header. Sender behavior is unaffected.
 
 ## Phase 5 — Playwright + DOM↔API assertions
 
