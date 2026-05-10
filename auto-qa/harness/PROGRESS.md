@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 0 — in progress (scaffold slice 1: README + package.json + npm script wiring) |
+| Phase | 0 — in progress (slices 1-5 landed; remaining: harness package.json npm install, ARCHITECTURE.md sister-link verification) |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -114,18 +114,50 @@ Single docker-compose starts all four services. Orchestrator owns the clock.
 
 ### Phase 0 — Scaffold
 
-- **slice 1** (this commit) — README, harness package.json with stub
-  scripts, .gitignore, root `npm run auto-qa:e2e` wired through
+- **slice 1** — README, harness package.json with stub scripts,
+  .gitignore, root `npm run auto-qa:e2e` wired through
   `npm --prefix auto-qa/harness run phase-status`. Verified the stub
   prints the phase status from the repo root. No deps installed yet.
 
-**Next slices for Phase 0:**
+- **slice 2** — `docker-compose.yml` skeleton committed. All real
+  services (anvil, indexer, api, interface-dev, orchestrator) are
+  block-commented with the eventual launch command + healthcheck +
+  volume layout pinned. A `placeholder` (hello-world) service keeps
+  `docker compose config` valid for CI dry-runs. Networking pinned to
+  a single `harness-net` bridge; volumes go to `.compose-volumes/`
+  (gitignored).
 
-- slice 2 — docker-compose.yml skeleton (anvil service stub only)
-- slice 3 — `scripts/start-fork.mjs` placeholder (just argument
-  parsing + help text; no anvil yet)
-- slice 4 — Sister-repo handshake: top-level `harness/ARCHITECTURE.md`
-  in each repo with the cross-repo invariant table + a "how to clone
-  the sister repo" snippet
-- slice 5 — Decision doc: pick foundry vs hardhat (write a 1-page
-  ADR-style note in `docs/`)
+- **slice 3** — `scripts/start-fork.mjs` placeholder. Argument parsing
+  + help text + structured exit codes documented (0 ready, 1 args, 2
+  binary, 3 unreachable, 4 readiness timeout). `--help` works today;
+  actual `anvil` subprocess launch is queued for Phase 1.
+
+- **slice 4** — `ARCHITECTURE.md` cross-repo handshake doc. Identical
+  copy lives in `interface/auto-qa/harness/ARCHITECTURE.md`. Documents
+  the 5-service topology, repo split table, boot sequence, invariant
+  catalogue, sibling-clone instructions, and 5 deferred open questions.
+
+- **slice 5** — `docs/ADR-001-foundry-vs-hardhat.md` written by
+  background agent. **Decision: Foundry/anvil.** Per-tx replay
+  throughput dominates our workload, anvil's `evm_setNextBlockTimestamp`
+  + manual `evm_mine` covers our TWAP-window needs without Hardhat's
+  `hardhat_mine` advantage, and the single Rust binary cuts CI footprint
+  vs a Node + node_modules Hardhat project. Long-run memory creep
+  mitigated via snapshot/revert at scenario boundaries.
+
+**Phase 0 wrap-up — remaining:**
+
+- slice 6 — `npm install` inside `auto-qa/harness/` (no deps yet, but
+  generate the lockfile so future installs are reproducible)
+- slice 7 — Verify the `ARCHITECTURE.md` sister-link by running the
+  documented `git clone` snippet in a temp dir and confirming the
+  layout works
+- slice 8 — Add a `harness/CHECKLIST.md` enumerating the readiness
+  criteria for declaring Phase 0 complete and Phase 1 ready to start
+
+**After Phase 0 — Phase 1 entry criteria:**
+
+- [ ] anvil binary discoverable on PATH (or via `forge install` script)
+- [ ] `docker compose -f auto-qa/harness/docker-compose.yml up -d`
+      brings up the placeholder cleanly on a fresh checkout
+- [ ] Both ADRs reviewed + status changed from "Proposed" to "Accepted"

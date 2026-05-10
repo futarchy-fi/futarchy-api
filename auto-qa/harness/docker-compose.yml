@@ -1,0 +1,172 @@
+# Forked Replay Harness — service composition
+#
+# Phase 0 SCAFFOLD ONLY. Nothing here is wired up; this file documents
+# the eventual service topology so the layout is reviewable now.
+#
+# Phases that activate which services:
+#   Phase 1 — anvil (uncomment + add the build/image)
+#   Phase 2 — futarchy-api (point at anvil)
+#   Phase 3 — checkpoint indexer (point at anvil)
+#   Phase 4 — orchestrator (drives anvil + sends txs)
+#   Phase 5 — interface-dev (Next.js dev server pointed at anvil; only
+#             needed when running Playwright e2e — a sibling clone of
+#             interface repo is mounted)
+#
+# Run target (Phase 7+):
+#   docker compose -f auto-qa/harness/docker-compose.yml up -d
+#   then: npm run auto-qa:e2e:replay
+#
+# Conventions:
+#   - All services on a single internal network "harness-net"
+#   - Anvil always exposes 8545; everything else routes via this name
+#   - No ports exposed to host EXCEPT for debug (commented blocks below)
+#   - Volumes go into ./.compose-volumes/ (gitignored)
+
+version: "3.9"
+
+name: futarchy-replay-harness
+
+networks:
+    harness-net:
+        driver: bridge
+
+# Top-level service stubs — ALL DISABLED in Phase 0.
+# Each block lists the eventual command + the phase that turns it on.
+services:
+    # ────────────────────────────────────────────────────────────────
+    # Phase 1: Anvil fork of Gnosis at a pinned past block.
+    #
+    # We use a published Foundry image rather than building locally so
+    # CI doesn't need to compile Rust on every run.
+    #
+    # FORK_URL is set per-environment; default is a public Gnosis
+    # archive RPC. FORK_BLOCK is per-scenario (defaults to "latest"
+    # for smoke runs, overridden to a known proposal block for
+    # replays).
+    # ────────────────────────────────────────────────────────────────
+    # anvil:
+    #     image: ghcr.io/foundry-rs/foundry:latest
+    #     container_name: harness-anvil
+    #     networks: [harness-net]
+    #     environment:
+    #         FORK_URL: ${FORK_URL:-https://rpc.gnosis.gateway.fm}
+    #         FORK_BLOCK: ${FORK_BLOCK:-latest}
+    #     command: >
+    #         anvil
+    #         --host 0.0.0.0
+    #         --port 8545
+    #         --fork-url ${FORK_URL}
+    #         --fork-block-number ${FORK_BLOCK}
+    #         --chain-id 100
+    #         --block-time 1
+    #         --no-mining
+    #         --accounts 10
+    #         --balance 10000
+    #     # ports:
+    #     #     - "8545:8545"   # uncomment for direct host access during dev
+    #     volumes:
+    #         - ./.compose-volumes/anvil:/data
+    #     healthcheck:
+    #         test: ["CMD", "cast", "block-number", "--rpc-url", "http://localhost:8545"]
+    #         interval: 2s
+    #         timeout: 1s
+    #         retries: 30
+
+    # ────────────────────────────────────────────────────────────────
+    # Phase 3: Local Checkpoint indexer. Same code as production, but
+    # configured to ingest from the local anvil fork instead of mainnet.
+    # The biggest risk in this phase is schema-migration cold-start.
+    # ────────────────────────────────────────────────────────────────
+    # indexer:
+    #     image: TODO  # decide between published Checkpoint image vs build-from-source
+    #     container_name: harness-indexer
+    #     networks: [harness-net]
+    #     depends_on:
+    #         anvil:
+    #             condition: service_healthy
+    #     environment:
+    #         RPC_URL: http://anvil:8545
+    #         START_BLOCK: ${FORK_BLOCK:-latest}
+    #         DATABASE_URL: sqlite:/data/checkpoint.db
+    #     volumes:
+    #         - ./.compose-volumes/indexer:/data
+    #     # ports:
+    #     #     - "3001:3001"   # GraphQL endpoint for direct dev access
+
+    # ────────────────────────────────────────────────────────────────
+    # Phase 2: futarchy-api pointed at the local indexer + anvil.
+    # ────────────────────────────────────────────────────────────────
+    # api:
+    #     build:
+    #         context: ../../..
+    #         dockerfile: Dockerfile
+    #     container_name: harness-api
+    #     networks: [harness-net]
+    #     depends_on:
+    #         anvil:
+    #             condition: service_healthy
+    #         indexer:
+    #             condition: service_started
+    #     environment:
+    #         RPC_URL: http://anvil:8545
+    #         CHECKPOINT_URL: http://indexer:3001/graphql
+    #         PORT: 3000
+    #     # ports:
+    #     #     - "3000:3000"
+
+    # ────────────────────────────────────────────────────────────────
+    # Phase 5: Next.js dev server from the sibling interface repo,
+    # pointed at the local api + anvil. Mounted as a sibling clone
+    # because the harness lives in futarchy-api but needs the
+    # interface code to spin up the UI.
+    #
+    # Convention: clone interface to ../interface relative to this
+    # docker-compose.yml.
+    # ────────────────────────────────────────────────────────────────
+    # interface-dev:
+    #     image: node:20-bookworm-slim
+    #     container_name: harness-interface
+    #     networks: [harness-net]
+    #     depends_on:
+    #         api:
+    #             condition: service_started
+    #     working_dir: /app
+    #     volumes:
+    #         - ${INTERFACE_PATH:-../../../../interface}:/app
+    #     environment:
+    #         NEXT_PUBLIC_RPC_URL: http://anvil:8545
+    #         NEXT_PUBLIC_API_URL: http://api:3000
+    #     command: ["npm", "run", "dev"]
+    #     # ports:
+    #     #     - "3010:3000"   # interface dev server (when needed for live debug)
+
+    # ────────────────────────────────────────────────────────────────
+    # Phase 4: Orchestrator. Drives anvil's clock, sends synthetic
+    # swap txs, and runs cross-layer assertions. Currently a no-op
+    # placeholder that exits.
+    # ────────────────────────────────────────────────────────────────
+    # orchestrator:
+    #     image: node:20-bookworm-slim
+    #     container_name: harness-orchestrator
+    #     networks: [harness-net]
+    #     depends_on:
+    #         anvil:
+    #             condition: service_healthy
+    #     working_dir: /app
+    #     volumes:
+    #         - ../../../auto-qa/harness:/app
+    #     environment:
+    #         RPC_URL: http://anvil:8545
+    #         API_URL: http://api:3000
+    #         CHECKPOINT_URL: http://indexer:3001/graphql
+    #     command: ["npm", "run", "test"]
+
+    # ────────────────────────────────────────────────────────────────
+    # Phase 0: A no-op service so `docker compose config` validates and
+    # CI has something to spin up while we build the rest. Remove when
+    # at least one real service is enabled.
+    # ────────────────────────────────────────────────────────────────
+    placeholder:
+        image: hello-world
+        container_name: harness-placeholder
+        networks: [harness-net]
