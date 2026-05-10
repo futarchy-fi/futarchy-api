@@ -750,22 +750,19 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 28 invariants:
-      5 api-internal + 20 indexer probes (2 `__typename`
+      PROGRESS.md's invariant tables). Now 29 invariants:
+      5 api-internal + 21 indexer probes (2 `__typename`
       liveness + 6 data-aware coverage + 4 single-row
       data-SHAPE + 2 multi-row data-SHAPE + 2 cross-layer
-      MATCH + 3 cross-entity FK + 1 cross-entity TIME-
-      COHERENCE: `organizationAggregatorReferentialIntegrity`
-      added this slice — registry-side FK check, mirrors
-      the candles-side swap/candle FK pattern but for the
-      registry's Organization → Aggregator relationship.
-      Pins the upper link of the registry FK chain
-      (Aggregator ← Organization ← ProposalEntity); the
-      remaining ProposalEntity → Organization link is
-      next iteration. Catches orphan-org from FK
-      derivation bugs in the org-event handler) + 3
-      chain-layer probes. 77 smoke tests green. Still to
-      add: proposalEntity → organization FK, plus
+      MATCH + 4 cross-entity FK + 1 cross-entity TIME-
+      COHERENCE: `proposalEntityOrganizationReferentialIntegrity`
+      added this slice — closes the registry FK chain
+      coverage. With this in place, ALL 4 documented FK
+      relationships in the system have a check:
+      Swap→Pool, Candle→Pool, Organization→Aggregator,
+      ProposalEntity→Organization. Catches orphan-proposal
+      from proposal-event handler FK bugs) + 3 chain-layer
+      probes. 81 smoke tests green. Still to add:
       probabilityBounds, candlesAggregation (Candle.volume
       = sum of contained Swap amounts within period),
       chartShape (api unified-chart vs indexer raw),

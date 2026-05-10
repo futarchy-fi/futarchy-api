@@ -99,6 +99,11 @@ function startFixture({
     // from buildRegistry). Tests pass an explicit array to
     // simulate orphan-org bugs.
     organizationAggregatorIds = null,
+    // Per-proposalEntity organization FK for
+    // proposalEntityOrganizationReferentialIntegrity (slice 4d-
+    // scenarios-more). Closes the registry FK chain coverage.
+    // Default null → every proposal references mock-org-0.
+    proposalEntityOrganizationIds = null,
     // Set to true to make the direct-indexer paths return 502, simulating
     // an indexer that's down even though the api passthrough still works
     // (e.g., api is caching).
@@ -157,8 +162,17 @@ function startFixture({
         return row;
     });
     const buildRegistry = () => ({
-        proposalEntities: Array.from({ length: registryProposalEntitiesCount },
-            (_, i) => ({ id: `mock-prop-entity-${i}` })),
+        proposalEntities: Array.from({ length: registryProposalEntitiesCount }, (_, i) => {
+            const row = { id: `mock-prop-entity-${i}` };
+            // FK to an Organization. Default mock-org-0 (the first
+            // org from buildRegistry, present when
+            // registryOrganizationsCount > 0). Tests override
+            // proposalEntityOrganizationIds[i] for orphan-proposal
+            // simulation.
+            const orgId = proposalEntityOrganizationIds ? proposalEntityOrganizationIds[i] : 'mock-org-0';
+            row.organization = { id: orgId };
+            return row;
+        }),
         organizations: Array.from({ length: registryOrganizationsCount }, (_, i) => {
             const row = { id: `mock-org-${i}` };
             // FK to an Aggregator. Default mock-agg-0 (the first
@@ -1416,6 +1430,77 @@ test('runAllInvariants — failure: organizationAggregatorReferentialIntegrity a
     }
 });
 
+test('runAllInvariants — proposalEntityOrganizationReferentialIntegrity happy: proposal references existing org', async () => {
+    // Defaults: 1 organization (mock-org-0), 1 proposalEntity
+    // defaulting to organization.id="mock-org-0". FK intact.
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'proposalEntityOrganizationReferentialIntegrity');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /proposalEntity mock-prop-entity-0 → organization mock-org-0 \(FK intact/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — proposalEntityOrganizationReferentialIntegrity vacuously true with no proposalEntities', async () => {
+    const fx = await startFixture({ registryProposalEntitiesCount: 0 });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'proposalEntityOrganizationReferentialIntegrity');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /no proposalEntities to check \(vacuously true\)/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: proposalEntityOrganizationReferentialIntegrity orphan proposal (FK derivation bug)', async () => {
+    // Proposal references a nonexistent org — proposal-event
+    // handler derived FK wrong.
+    const fx = await startFixture({
+        registryOrganizationsCount: 2,
+        proposalEntityOrganizationIds: ['nonexistent-org-xyz'],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'proposalEntityOrganizationReferentialIntegrity');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /references organization nonexistent-org-xyz but no such organization|orphan proposal/);
+        // Existence + the OTHER registry FK still pass — distinguishes
+        // "proposal-handler FK bug" from "org-handler FK bug"
+        const orgInv = results.find((r) => r.name === 'organizationAggregatorReferentialIntegrity');
+        assert.equal(orgInv.ok, true);
+        const propsExist = results.find((r) => r.name === 'registryHasProposalEntities');
+        assert.equal(propsExist.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: proposalEntityOrganizationReferentialIntegrity all orgs deleted (orphan-storm)', async () => {
+    // Organizations wiped; proposal sync may continue independently
+    // and its FK becomes stale. Catches schema migrations that
+    // dropped Organization rows without GC-ing ProposalEntity.
+    const fx = await startFixture({
+        registryOrganizationsCount: 0,
+        registryProposalEntitiesCount: 1,
+        proposalEntityOrganizationIds: ['mock-org-0'],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'proposalEntityOrganizationReferentialIntegrity');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /references organization mock-org-0 but no such organization/);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('runAllInvariants — failure: candleSwapTimeWindowConsistency candle in future relative to latest swap (clock-skew bug)', async () => {
     // Candle exists for a period AHEAD of any observed swap. Bug
     // shape: aggregator's clock source skewed forward, OR indexer
@@ -1568,6 +1653,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /candlePoolReferentialIntegrity/);
     assert.match(r.stdout, /candleSwapTimeWindowConsistency/);
     assert.match(r.stdout, /organizationAggregatorReferentialIntegrity/);
+    assert.match(r.stdout, /proposalEntityOrganizationReferentialIntegrity/);
     assert.match(r.stdout, /anvilBlockNumber/);
     assert.match(r.stdout, /anvilChainId/);
     assert.match(r.stdout, /rateSanity/);

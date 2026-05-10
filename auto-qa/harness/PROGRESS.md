@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 28 invariants — 5 api-internal + 20 indexer + 3 chain-layer; cross-entity FK pattern now extends to registry's Organization → Aggregator link; 77 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 29 invariants — 5 api-internal + 21 indexer + 3 chain-layer; **all 4 documented FK relationships now covered** (Swap→Pool, Candle→Pool, Organization→Aggregator, ProposalEntity→Organization); 81 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,82 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (organizationAggregatorReferentialIntegrity) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (proposalEntityOrganizationReferentialIntegrity) summary (this iteration on the api side):
+
+- **Closes the registry FK chain coverage**. Last
+  iteration shipped Organization→Aggregator (upper
+  link); this iteration ships ProposalEntity→
+  Organization (lower link). With both in place, the
+  catalog now has FK coverage for ALL 4 documented
+  entity relationships in the system:
+  * Aggregator (root) ← Organization
+    (← `organizationAggregatorReferentialIntegrity`)
+    ← ProposalEntity (← THIS invariant)
+  * Pool ← Swap
+    (← `swapPoolReferentialIntegrity`),
+    Candle (← `candlePoolReferentialIntegrity`)
+
+- **Bug shapes caught (lower-link specific)**:
+  * Proposal-event handler derives organization id
+    wrong (proposals belong to orgs; if the FK
+    derivation reads the wrong topic slot, every
+    new proposal becomes orphan)
+  * Organization deleted/superseded but its proposals
+    weren't garbage-collected (orphan proposals —
+    distinct from orphan orgs because proposal sync
+    may run independently of org sync)
+  * Schema migration that renamed Organization
+    without updating ProposalEntity's foreign key
+  * Handler dropped organization FK entirely
+
+- **Symmetric FK build-out is now complete** (within
+  the indexer layer):
+  * candles indexer: 2 FK checks (swap→pool +
+    candle→pool — covers both entity-emit paths)
+  * registry indexer: 2 FK checks
+    (organization→aggregator + proposalEntity→
+    organization — covers the full FK chain)
+
+- **Fixture extension**:
+  * Each proposalEntity row now gets `organization:
+    {id}` field.
+  * Default: `mock-org-0` (matches buildRegistry's
+    first org, FK intact in happy path).
+  * New `proposalEntityOrganizationIds` array option
+    for tests to override per-proposal FK and simulate
+    orphan-proposal bugs.
+
+- **Smoke test coverage** — 4 new tests:
+  * happy: proposal references existing org
+  * vacuously true with 0 proposalEntities
+  * failure: orphan proposal from FK derivation bug;
+    verifies the OTHER registry FK
+    (organizationAggregatorRefIntegrity) STILL passes
+    — distinguishes "proposal-handler FK bug" from
+    "org-handler FK bug"
+  * failure: orphan-storm from all orgs deleted
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 81/81 pass (813ms — was
+    77/77)
+  * `npm run scenarios:dry` → exits 0; lists 29
+    invariants in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: ~99% (29 of ~30 sub-slices total).
+  29 invariants now: 5 api-internal + 21 indexer (2
+  liveness + 6 data-aware coverage + 4 single-row
+  data-shape + 2 multi-row data-shape + 2 cross-layer
+  match + 4 cross-entity FK + 1 cross-entity time-
+  coherence) + 3 chain-layer. Full FK chain coverage
+  across both indexers — this milestone closes a
+  natural arc that started 4 iterations ago. Next
+  arcs: candlesAggregation (sum reconciliation),
+  conservation, probabilityBounds, chartShape — each
+  exercises a different dimension of correctness.
+
+Phase 7 slice 4d-scenarios-more (organizationAggregatorReferentialIntegrity) summary (previous iteration on the api side):
 
 - **Cross-entity FK pattern now extends to the registry
   indexer's FK chain**. Previous FK checks

@@ -311,6 +311,65 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'proposalEntityOrganizationReferentialIntegrity',
+        description: 'latest ProposalEntity references an Organization that exists in the registry indexer (closes the registry FK chain coverage)',
+        layer: 'orchestrator↔registry',
+        check: async (ctx) => {
+            // Closes the registry FK chain coverage. With this
+            // invariant in place, every documented FK relationship
+            // in the system has a check:
+            //
+            //   Aggregator (root)
+            //     ← Organization (← organizationAggregatorRefIntegrity)
+            //       ← ProposalEntity (← THIS invariant)
+            //   Pool
+            //     ← Swap (← swapPoolReferentialIntegrity)
+            //     ← Candle (← candlePoolReferentialIntegrity)
+            //
+            // Bug shapes caught (lower-link specific):
+            //   * Proposal-event handler derives organization id
+            //     wrong (proposals belong to orgs; if the FK
+            //     derivation reads the wrong topic slot, every new
+            //     proposal becomes orphan)
+            //   * Organization entity deleted/superseded but its
+            //     proposals weren't garbage-collected (orphan
+            //     proposals — distinct from orphan orgs because
+            //     proposal sync may run independently of org sync)
+            //   * Schema migration that renamed Organization
+            //     without updating ProposalEntity's foreign key
+            //   * Handler dropped organization FK (returns null)
+            //
+            // Vacuous when no proposalEntities exist. Distinct from
+            // "organizations=0 but proposals>0" — that's an
+            // integrity FAIL (every proposal is orphan).
+            const j = await fetchJson(ctx.registryUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ proposalEntities(first: 1) { id organization { id } } organizations(first: 50) { id } }',
+                }),
+            });
+            const proposals = j?.data?.proposalEntities;
+            const organizations = j?.data?.organizations;
+            if (!Array.isArray(proposals) || !Array.isArray(organizations)) {
+                throw new Error(`unexpected response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (proposals.length === 0) {
+                return { ok: true, detail: 'no proposalEntities to check (vacuously true)' };
+            }
+            const proposal = proposals[0];
+            const refOrgId = proposal?.organization?.id;
+            if (typeof refOrgId !== 'string' || refOrgId.length === 0) {
+                throw new Error(`proposalEntity ${proposal.id}: organization.id missing or non-string (handler dropped FK; got ${JSON.stringify(proposal.organization)})`);
+            }
+            const orgIds = new Set(organizations.map((o) => o.id));
+            if (!orgIds.has(refOrgId)) {
+                throw new Error(`proposalEntity ${proposal.id}: references organization ${refOrgId} but no such organization in organizations(first: 50) — orphan proposal (FK derivation bug or organization deletion)`);
+            }
+            return { ok: true, detail: `proposalEntity ${proposal.id} → organization ${refOrgId} (FK intact; ${organizations.length} organization(s) total)` };
+        },
+    },
+    {
         name: 'organizationAggregatorReferentialIntegrity',
         description: 'latest Organization references an Aggregator that exists in the registry indexer (catches orphan-org from FK derivation bugs)',
         layer: 'orchestrator↔registry',
