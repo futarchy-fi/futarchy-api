@@ -708,8 +708,51 @@ freshly-generated addresses as recipients; documented in
       docker network are the most likely sources of
       surprise; CHOKIDAR_USEPOLLING=true env var is the
       standard fallback if HMR doesn't fire on host edits.
-- [ ] **4d — orchestrator service** (compose driver for the
-      cross-layer assertions).
+- [x] **4d-prep — fixed FIVE bugs in the orchestrator stub
+      while keeping it commented out** + decomposed slice 4d
+      into 3 sub-slices below. Bugs surfaced + fixed:
+      (i) path was `../../../auto-qa/harness` (resolves to
+      `/Users/kas/auto-qa/harness/` which doesn't exist);
+      corrected to `.` (the dir containing this compose file
+      IS the harness dir). (ii) `API_URL: http://api:3000`
+      should be `http://api:3031` (slice 4a-prep finding).
+      (iii) `CHECKPOINT_URL: http://indexer:3001/graphql`
+      uses the wrong env var AND non-existent service;
+      replaced with `REGISTRY_URL: http://registry-checkpoint:3000/graphql`
+      + `CANDLES_URL: http://checkpoint:3000/graphql` per
+      src/config/endpoints.js (slice 4b-api-env discovery).
+      (iv) Image was node:20-bookworm-slim; standardized
+      on node:22-alpine. (v) Bare `npm run test` won't work
+      in fresh container; replaced with the same conditional
+      install pattern as interface-dev. Also added
+      `HARNESS_COMPOSE: "1"` env signal + a no-op
+      `tail -f /dev/null` placeholder command (the assertion
+      scripts don't exist yet — see 4d-scenarios below).
+      Top-level `orchestrator-node-modules` volume declared
+      eagerly so 4d-activate stays atomic.
+- [ ] **4d-scenarios — build the missing assertion scripts.**
+      ARCHITECTURE.md envisions `orchestrator/invariants.mjs`
+      (cross-layer assertion library) and a scenario-runner
+      that drives anvil's clock + sends synthetic txs +
+      verifies the per-block invariants. Neither exists yet.
+      The existing `orchestrator/services.mjs` is a process-
+      spawner that ASSUMES native-anvil + script-orchestrated
+      indexers — it would conflict with the compose stack
+      (where anvil + indexers are already up). Two paths
+      forward:
+      (a) Build `orchestrator/scenario-runner.mjs` that
+          gates on `HARNESS_COMPOSE=1`: in compose mode,
+          skip spawning + just hit existing endpoints; in
+          native mode, delegate to services.mjs. Same
+          binary, two topologies.
+      (b) Defer compose orchestrator entirely; treat compose
+          as a "bring up the stack" tool, keep using
+          start-indexers.mjs + tests/ in native mode for
+          actual orchestration work.
+      Decision needed before 4d-activate.
+- [ ] **4d-activate — uncomment orchestrator block.** Atomic
+      one-step uncomment after 4d-scenarios decision lands.
+      Adds 8th service to compose stack.
 - [ ] **4e — single `docker compose up -d`** brings the full
       stack cleanly on a fresh checkout. The slice 4 acceptance
       gate.

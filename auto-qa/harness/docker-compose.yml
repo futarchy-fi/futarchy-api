@@ -69,6 +69,10 @@ volumes:
     # wouldn't run in the Linux container; the named volume keeps a
     # separate Linux node_modules tree without touching the host's.
     interface-node-modules:
+    # Slice 4d-prep: same story for the orchestrator container.
+    # The harness package.json deps (viem, playwright in dev) get
+    # installed once in this volume rather than re-installed per run.
+    orchestrator-node-modules:
 
 # Top-level service stubs — ALL DISABLED in Phase 0.
 # Each block lists the eventual command + the phase that turns it on.
@@ -320,25 +324,103 @@ services:
         # other services on harness-net.
 
     # ────────────────────────────────────────────────────────────────
-    # Phase 4: Orchestrator. Drives anvil's clock, sends synthetic
-    # swap txs, and runs cross-layer assertions. Currently a no-op
-    # placeholder that exits.
+    # Phase 4 / Phase 7 slice 4d: Orchestrator. Drives anvil's clock,
+    # sends synthetic swap txs, and runs cross-layer assertions per
+    # ARCHITECTURE.md.
+    #
+    # Slice 4d-prep findings (Phase 0 stub had FIVE issues, all fixed
+    # below; this is the same productive pattern as 4a-prep + 4c-prep):
+    #
+    #   (i)   Path bug: original `../../../auto-qa/harness` resolves
+    #         to `/Users/kas/auto-qa/harness/` (three levels up from
+    #         compose, then auto-qa/harness on top of that — but
+    #         /Users/kas doesn't have an auto-qa dir). Corrected to
+    #         `.` (the dir containing this compose file IS the
+    #         harness dir = /Users/kas/futarchy-api/auto-qa/harness).
+    #   (ii)  Port bug: original `API_URL: http://api:3000` pointed
+    #         at the wrong port. Api binds to 3031 (slice 4a-prep
+    #         finding). Corrected to `http://api:3031`.
+    #   (iii) Wrong env vars: original `CHECKPOINT_URL: http://indexer:3001/graphql`
+    #         used the wrong env var (api side surfaced this in
+    #         slice 4b-api-env: real env vars are `REGISTRY_URL` +
+    #         `CANDLES_URL` per src/config/endpoints.js, and there's
+    #         no `indexer` service — it's `registry-checkpoint` +
+    #         `checkpoint`). Replaced with the correct two vars.
+    #   (iv)  Node version: 20-bookworm-slim → 22-alpine (matches
+    #         api Dockerfile + interface-dev convention).
+    #   (v)   Bare `npm run test` won't work in a fresh container
+    #         (no node_modules in bind mount). Replaced with the
+    #         same conditional install pattern as interface-dev.
+    #
+    # DEEPER SCOPE CONCERN — not fixed by this prep slice:
+    #
+    # ARCHITECTURE.md envisions an orchestrator that drives anvil's
+    # clock + sends synthetic txs + runs cross-layer assertions
+    # (orchestrator/invariants.mjs). But invariants.mjs DOESN'T EXIST
+    # YET. The orchestrator/ dir currently has only services.mjs (a
+    # process-spawner used by tests/) and stub-indexer.mjs (a Phase 2
+    # in-memory stub).
+    #
+    # Even worse, the existing services.mjs ASSUMES native-anvil +
+    # script-orchestrated indexers (Phase 3 way). Inside the compose
+    # stack, anvil + indexers are ALREADY RUNNING — orchestrator
+    # spawning them again would be a topology error.
+    #
+    # Two paths forward for slice 4d-activate (deferred):
+    #   (a) Build a new orchestrator entrypoint (e.g.,
+    #       orchestrator/scenario-runner.mjs) that, in compose mode,
+    #       does NOT spawn services — just hits the existing
+    #       compose-internal endpoints + runs assertions. Same
+    #       binary works in both compose mode (HARNESS_COMPOSE=1)
+    #       and native mode (delegates to services.mjs).
+    #   (b) Defer compose orchestrator entirely; keep using
+    #       scripts/start-indexers.mjs + tests/ in native mode for
+    #       Phase 3 work, and treat compose as a "demo/visualize the
+    #       stack" tool rather than the test runner.
+    #
+    # For now: stub command is a long-running no-op (tail -f
+    # /dev/null) so the orchestrator service starts cleanly in the
+    # stack but does nothing. Replace once 4d-scenarios builds out
+    # invariants.mjs / scenario-runner.mjs.
+    #
+    # REMAINS COMMENTED until slice 4d-activate decides between
+    # paths (a) and (b).
     # ────────────────────────────────────────────────────────────────
     # orchestrator:
-    #     image: node:20-bookworm-slim
+    #     image: node:22-alpine
     #     container_name: harness-orchestrator
     #     networks: [harness-net]
     #     depends_on:
     #         anvil:
     #             condition: service_healthy
+    #         api:
+    #             condition: service_started
+    #         registry-checkpoint:
+    #             condition: service_started
+    #         checkpoint:
+    #             condition: service_started
     #     working_dir: /app
     #     volumes:
-    #         - ../../../auto-qa/harness:/app
+    #         - .:/app                      # mount harness/ itself
+    #         - orchestrator-node-modules:/app/node_modules
     #     environment:
     #         RPC_URL: http://anvil:8545
-    #         API_URL: http://api:3000
-    #         CHECKPOINT_URL: http://indexer:3001/graphql
-    #     command: ["npm", "run", "test"]
+    #         API_URL: http://api:3031
+    #         REGISTRY_URL: http://registry-checkpoint:3000/graphql
+    #         CANDLES_URL: http://checkpoint:3000/graphql
+    #         FUTARCHY_MODE: checkpoint
+    #         HARNESS_COMPOSE: "1"          # signal compose mode
+    #     command:
+    #         - sh
+    #         - -c
+    #         - |
+    #             if [ ! -d node_modules ] || [ -z "$(ls -A node_modules)" ]; then
+    #                 echo "[orchestrator] installing deps (first run)..."
+    #                 npm install --no-audit --no-fund
+    #             fi
+    #             # PLACEHOLDER until 4d-scenarios builds invariants.mjs:
+    #             echo "[orchestrator] no scenario runner yet; idling."
+    #             exec tail -f /dev/null
 
     # ────────────────────────────────────────────────────────────────
     # (Phase 0 placeholder removed — anvil is real now.)

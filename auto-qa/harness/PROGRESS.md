@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate** on api side (`docker compose config --services` returns 7; full app stack — anvil + api + 4 indexer services + Next.js dev server — structurally validated). 30/30 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep** on api side (orchestrator stub fixed: same path/port/env/Node-version pattern as 4c-prep + a deeper scope concern surfaced — assertion scripts don't exist yet, so 4d split into 4d-prep / 4d-scenarios / 4d-activate). 30/30 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -1541,6 +1541,94 @@ Phase 7 slice 4c-activate summary (this iteration on the api side):
   Next bot-doable: slice 4d-prep (orchestrator stub fixes,
   if scope allows) OR 4d-scenarios (build the missing
   invariants.mjs assertion scripts).
+
+Phase 7 slice 4d-prep summary (this iteration on the api side):
+
+- Slice 4d (orchestrator service) starts with same prep
+  pattern as 4a-prep + 4c-prep: surface + fix Phase 0 stub
+  bugs in place, kept commented out. Plus a deeper scope
+  finding that splits 4d into THREE sub-slices instead of
+  the original one.
+
+- **Bug catalog (orchestrator stub vs reality)**:
+
+  (i) **Path bug**: stub had `../../../auto-qa/harness`.
+      From `auto-qa/harness/`, three levels up = `/Users/kas/`,
+      then `auto-qa/harness` on top = `/Users/kas/auto-qa/harness/`
+      which doesn't exist. Bind mount would fail at compose-up.
+      Corrected to `.` (the dir containing this compose file
+      IS the harness dir = `/Users/kas/futarchy-api/auto-qa/harness/`).
+
+  (ii) **Port bug**: stub had `API_URL: http://api:3000`.
+      Api binds to 3031 (slice 4a-prep finding). Corrected
+      to `http://api:3031`.
+
+  (iii) **Wrong env vars**: stub had
+      `CHECKPOINT_URL: http://indexer:3001/graphql`.
+      `src/config/endpoints.js` reads `REGISTRY_URL` +
+      `CANDLES_URL` (slice 4b-api-env discovery), and there's
+      no `indexer` service — it's `registry-checkpoint` +
+      `checkpoint`. Replaced with the correct two vars
+      pointing at the right compose-internal services on
+      port 3000 (container-internal, not host-mapped 3001/3003).
+
+  (iv) **Node version mismatch**: stub had
+      `image: node:20-bookworm-slim`. Standardized on
+      `node:22-alpine` to match api Dockerfile +
+      interface-dev convention.
+
+  (v) **Bare `npm run test` won't work in fresh container**:
+      bind mount has source but no node_modules. Replaced
+      command with the same conditional `npm install` +
+      `exec ...` pattern as interface-dev.
+
+- **Top-level addition**: `orchestrator-node-modules` named
+  volume (same pattern as `interface-node-modules`).
+
+- **DEEPER SCOPE FINDING** — slice 4d's command needs to
+  do something useful, but the assertion scripts don't exist
+  yet. ARCHITECTURE.md envisions
+  `auto-qa/harness/orchestrator/invariants.mjs` (cross-layer
+  assertion library) and a scenario-runner that drives anvil's
+  clock + sends synthetic txs + verifies per-block invariants.
+  Neither exists yet. The existing `orchestrator/services.mjs`
+  ASSUMES native-anvil + script-orchestrated indexers (Phase 3
+  topology) — running it inside compose would conflict with
+  the already-running anvil + indexers.
+
+  Two paths forward (decision deferred to slice 4d-scenarios):
+  (a) Build `orchestrator/scenario-runner.mjs` that gates on
+      `HARNESS_COMPOSE=1`: in compose mode, skip spawning,
+      just hit existing endpoints; in native mode, delegate
+      to services.mjs. Same binary, two topologies.
+  (b) Defer compose orchestrator entirely; treat compose as
+      a "bring up the stack" tool, keep using the existing
+      start-indexers.mjs + tests/ in native mode for actual
+      orchestration work.
+
+- **Why current command is `tail -f /dev/null`**: even with
+  all stub bugs fixed, the orchestrator container needs SOME
+  command. A no-op long-running placeholder lets the service
+  start cleanly in the compose stack but does nothing useful.
+  Replaced once 4d-scenarios builds invariants.mjs.
+
+- **CHECKLIST: slice 4d expanded into 3 sub-slices**:
+  4d-prep (DONE this iteration), 4d-scenarios (build
+  invariants.mjs + scenario-runner; decide path a vs b),
+  4d-activate (atomic uncomment after 4d-scenarios lands).
+
+- **Validation**: `docker compose config --quiet` succeeds;
+  `--services` still returns 7 (orchestrator block remains a
+  YAML comment, no runtime delta). Top-level
+  `orchestrator-node-modules` volume declared eagerly so
+  4d-activate stays atomic.
+
+- Slice 4 progress: ~62% done (9 of ~14+ sub-slices total —
+  slice 4d now decomposes into 3). Next bot-doable: slice
+  4d-scenarios (build the missing assertion library —
+  meaningful new code, not just compose wiring) OR slice 4e
+  (which is essentially the acceptance gate, blocked on
+  4b-verify + 4c-verify + 4d-activate all being done).
 
 Slice 4c v3b summary (previous iteration on the interface side):
 
