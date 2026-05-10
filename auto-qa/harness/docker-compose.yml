@@ -383,44 +383,44 @@ services:
     # stack but does nothing. Replace once 4d-scenarios builds out
     # invariants.mjs / scenario-runner.mjs.
     #
-    # REMAINS COMMENTED until slice 4d-activate decides between
-    # paths (a) and (b).
+    # ACTIVATED in slice 4d-activate after 4d-scenarios shipped
+    # `orchestrator/scenario-runner.mjs`. Path (a) chosen — the
+    # runner gates on HARNESS_COMPOSE=1 and runs the invariant
+    # battery from `orchestrator/invariants.mjs` against the
+    # already-running compose stack. Lifecycle is one-shot: the
+    # container starts, runs every invariant, exits 0 on all-pass
+    # or 1 on any-fail. Other services (anvil, api, indexers,
+    # interface-dev) keep running.
     # ────────────────────────────────────────────────────────────────
-    # orchestrator:
-    #     image: node:22-alpine
-    #     container_name: harness-orchestrator
-    #     networks: [harness-net]
-    #     depends_on:
-    #         anvil:
-    #             condition: service_healthy
-    #         api:
-    #             condition: service_started
-    #         registry-checkpoint:
-    #             condition: service_started
-    #         checkpoint:
-    #             condition: service_started
-    #     working_dir: /app
-    #     volumes:
-    #         - .:/app                      # mount harness/ itself
-    #         - orchestrator-node-modules:/app/node_modules
-    #     environment:
-    #         RPC_URL: http://anvil:8545
-    #         API_URL: http://api:3031
-    #         REGISTRY_URL: http://registry-checkpoint:3000/graphql
-    #         CANDLES_URL: http://checkpoint:3000/graphql
-    #         FUTARCHY_MODE: checkpoint
-    #         HARNESS_COMPOSE: "1"          # signal compose mode
-    #     command:
-    #         - sh
-    #         - -c
-    #         - |
-    #             if [ ! -d node_modules ] || [ -z "$(ls -A node_modules)" ]; then
-    #                 echo "[orchestrator] installing deps (first run)..."
-    #                 npm install --no-audit --no-fund
-    #             fi
-    #             # PLACEHOLDER until 4d-scenarios builds invariants.mjs:
-    #             echo "[orchestrator] no scenario runner yet; idling."
-    #             exec tail -f /dev/null
+    orchestrator:
+        image: node:22-alpine
+        container_name: harness-orchestrator
+        networks: [harness-net]
+        depends_on:
+            anvil:
+                condition: service_healthy
+            api:
+                condition: service_started
+            registry-checkpoint:
+                condition: service_started
+            checkpoint:
+                condition: service_started
+        working_dir: /app
+        volumes:
+            - .:/app                      # mount harness/ itself
+            - orchestrator-node-modules:/app/node_modules
+            # Volume kept even though scenario-runner.mjs has zero
+            # runtime deps (node:22-alpine ships fetch). Future
+            # invariants that need viem / etc will install into
+            # this volume on first run.
+        environment:
+            RPC_URL: http://anvil:8545
+            API_URL: http://api:3031
+            REGISTRY_URL: http://registry-checkpoint:3000/graphql
+            CANDLES_URL: http://checkpoint:3000/graphql
+            FUTARCHY_MODE: checkpoint
+            HARNESS_COMPOSE: "1"          # signal compose mode
+        command: ["node", "orchestrator/scenario-runner.mjs"]
 
     # ────────────────────────────────────────────────────────────────
     # (Phase 0 placeholder removed — anvil is real now.)

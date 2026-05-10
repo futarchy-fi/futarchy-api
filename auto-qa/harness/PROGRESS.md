@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold)** on api side (orchestrator/invariants.mjs + scenario-runner.mjs shipped with 2 starter invariants — apiHealth + apiCanReachRegistry; 6 smoke tests green; HARNESS_COMPOSE-gated runner per ADR-002 wrapper leg). 30/30 browser tests green. Phase 3 25+6 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE: anvil + api + 4 indexer services + interface-dev + orchestrator wired to scenario-runner.mjs). 30/30 browser tests green. Phase 3 25+6 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -1724,6 +1724,72 @@ Phase 7 slice 4d-scenarios summary (this iteration on the api side):
   (atomic uncomment + replace placeholder command) OR slice
   4d-scenarios-more (add the next invariant — probably
   apiCanReachCandles, mirroring the registry pattern).
+
+Phase 7 slice 4d-activate summary (this iteration on the api side):
+
+- The orchestrator block in docker-compose.yml is now
+  UNCOMMENTED. The placeholder `tail -f /dev/null` (kept
+  through 4d-prep so the service could exist structurally
+  before the runner did) is replaced with the real entry
+  point: `node orchestrator/scenario-runner.mjs`.
+
+- **`docker compose config --services` returns 8** — the
+  full stack is now structurally complete:
+    anvil, api, registry-checkpoint, registry-postgres,
+    checkpoint, postgres, interface-dev, orchestrator.
+
+- **Lifecycle behavior**: orchestrator is one-shot. Container
+  starts → runs every invariant from `INVARIANTS` array
+  sequentially → exits 0 (all-pass) or 1 (any-fail). Other
+  services (anvil, api, indexers, interface-dev) keep
+  running so you can re-run the orchestrator with
+  `docker compose run --rm orchestrator` without bringing
+  the stack down. This matches the eventual CI workflow
+  (workflow checks orchestrator's exit code).
+
+- **What was simplified vs slice 4d-prep**: the prep slice
+  staged a conditional `npm install` in the command (same
+  pattern as interface-dev). That turned out to be
+  unnecessary — the harness package.json has zero runtime
+  deps, and `scenario-runner.mjs` only uses Node 22 builtins
+  (fetch, AbortController, http). Replaced the multi-line
+  `sh -c` with a clean `["node", "orchestrator/scenario-runner.mjs"]`.
+  The `orchestrator-node-modules` named volume is kept
+  (currently empty) for future invariants that need viem /
+  etc — they can install into it on first run.
+
+- **Merged config verified**:
+  * depends_on: anvil (service_healthy) + api/registry-
+    checkpoint/checkpoint (service_started)
+  * environment: RPC_URL=http://anvil:8545,
+    API_URL=http://api:3031,
+    REGISTRY_URL=http://registry-checkpoint:3000/graphql,
+    CANDLES_URL=http://checkpoint:3000/graphql,
+    FUTARCHY_MODE=checkpoint, HARNESS_COMPOSE=1
+  * command: ["node", "orchestrator/scenario-runner.mjs"]
+  * working_dir: /app, mounted from `.` (the harness dir)
+  * single-homed on harness-net (the indexers + api are on
+    harness-net via 4b-network-wire's dual-homing, so
+    orchestrator can reach all of them)
+
+- **What's left for slice 4 acceptance gate (4e)**:
+  * 4b-verify (Docker daemon required, mostly human): bring
+    up anvil + indexers, probe registry GraphQL works
+  * 4c-verify (Docker daemon, human): bring up interface-dev,
+    curl http://localhost:3010 serves the futarchy app
+  * 4d-verify (NEW — Docker daemon): bring up the full
+    stack with `docker compose up`, watch the orchestrator
+    container's exit code. With the current 2 invariants
+    (apiHealth + apiCanReachRegistry) plus a healthy stack,
+    expected exit code is 0.
+  * 4e (acceptance gate): single `docker compose up -d`
+    works on a fresh checkout. Trivial after 4b/4c/4d-verify.
+
+- Slice 4 progress: ~73% done (11 of ~15+ sub-slices). All
+  bot-doable structural work in slice 4 is now complete
+  except for slice 4d-scenarios-more (incremental: add more
+  invariants). The remaining sub-slices (4b/4c/4d-verify +
+  4e) all need the Docker daemon and are mostly human work.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 

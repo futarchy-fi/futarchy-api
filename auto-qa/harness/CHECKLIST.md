@@ -756,12 +756,20 @@ freshly-generated addresses as recipients; documented in
       swaps), chartShape, conservation (∑YES + ∑NO = ∑sDAI).
       Each is a small additive slice on the now-stable
       `INVARIANTS` array.
-- [ ] **4d-activate — atomic uncomment** of the orchestrator
-      block. Now that scenario-runner.mjs exists and works,
-      the placeholder `tail -f /dev/null` command in the
-      compose stub can be replaced with `node
-      orchestrator/scenario-runner.mjs` (or
-      `npm run scenarios:run`). Adds 8th service to compose.
+- [x] **4d-activate — orchestrator block UNCOMMENTED.**
+      Replaced the `tail -f /dev/null` placeholder with
+      `node orchestrator/scenario-runner.mjs`. Dropped the
+      conditional `npm install` (harness has zero runtime
+      deps; node:22-alpine ships fetch). Lifecycle is
+      one-shot: container starts, runs invariants, exits 0
+      on all-pass or 1 on any-fail; other services keep
+      running. `docker compose config --services` returns
+      8: anvil + api + 4 indexer services + interface-dev +
+      orchestrator. Merged config verified: 4 depends_on
+      (anvil healthy + api/registry-checkpoint/checkpoint
+      started), env (RPC_URL, API_URL, REGISTRY_URL,
+      CANDLES_URL, FUTARCHY_MODE, HARNESS_COMPOSE=1),
+      command (node orchestrator/scenario-runner.mjs).
 - [ ] **4d-activate — uncomment orchestrator block.** Atomic
       one-step uncomment after 4d-scenarios decision lands.
       Adds 8th service to compose stack.
