@@ -551,12 +551,20 @@ freshly-generated addresses as recipients; documented in
       of 3a-promote (different workflow file), but the README
       recommends promoting + smoke-testing 3a first since it's
       cheaper.
-- [ ] **3d — per-failure artifact upload**: Playwright already
-      captures trace / screenshot / video per
-      `playwright.config.mjs`'s `retain-on-failure` settings.
-      The CI step that uploads those as workflow artifacts is
-      the remaining work — small `actions/upload-artifact@v4`
-      block conditional on failure.
+- [x] **3d — per-failure artifact upload: STAGED.** Added an
+      `actions/upload-artifact@v4` step to the slice-3c
+      scenarios workflow file (not a new file — same staged
+      workflow, just one more step). Conditional on
+      `if: failure()`. Captures both
+      `auto-qa/harness/playwright-report/` (HTML report) and
+      `auto-qa/harness/test-results/` (per-test trace zip,
+      screenshot, video — already produced by
+      `playwright.config.mjs`'s `retain-on-failure` settings).
+      Artifact name uses `${{ github.run_attempt }}` so each
+      retry's artifacts stay distinct (`retries: 2` in CI).
+      `retention-days: 14`; `if-no-files-found: ignore` for
+      green runs with no artifacts. Promotes together with
+      slice 3c (same staged file).
 
 **Phase 7 slice 4 — TODO (full-stack):**
 

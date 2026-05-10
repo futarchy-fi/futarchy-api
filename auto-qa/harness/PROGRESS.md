@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices **3a + 3c** STAGED on interface side. `auto-qa/harness/ci/auto-qa-harness.yml.staged` (drift check, fast) + `auto-qa-harness-scenarios.yml.staged` (full Playwright scenarios suite, heavier) both await maintainer promotion to `.github/workflows/` (the bot's OAuth token lacks `workflow` scope). 30/30 browser tests green; drift check <1 min, scenarios suite ~5-10 min cold. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices **3a + 3c + 3d** STAGED on interface side. `auto-qa/harness/ci/auto-qa-harness.yml.staged` (drift check, fast) + `auto-qa-harness-scenarios.yml.staged` (full Playwright scenarios suite + on-failure artifact upload via `actions/upload-artifact@v4`) both await maintainer promotion to `.github/workflows/` (the bot's OAuth token lacks `workflow` scope). 30/30 browser tests green; drift check <1 min, scenarios suite ~5-10 min cold. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -1041,10 +1041,68 @@ Phase 7 slice 3c summary (this iteration on the interface side):
   ui:full` was last run end-to-end during slice 3a iteration
   (30 tests, all green); YAML parses cleanly via
   `python3 -c 'import yaml; yaml.safe_load(open(...))'`.
-- Slice 3d (next): `actions/upload-artifact@v4` block
-  conditional on `failure()`, capturing playwright-report/ +
-  test-results/ for debugging. Slice 3b: triggers expansion on
-  the slice-3a workflow file.
+- Slice 3b (next bot-doable, but gated on 3a smoke-test):
+  triggers expansion on the slice-3a workflow file
+  (`schedule: '0 4 * * *'` + `pull_request: paths:
+  ['auto-qa/harness/**']`).
+
+Phase 7 slice 3d summary (this iteration on the interface side):
+
+- **On-failure artifact upload STAGED** as one new step appended
+  to slice 3c's staged scenarios workflow (NOT a new file —
+  same workflow, one more step). When the scenarios suite fails
+  in CI, you NEED the trace/screenshots/video to debug; without
+  this step, that payload would die in the runner's ephemeral
+  filesystem.
+- Edit landed at:
+  `auto-qa/harness/ci/auto-qa-harness-scenarios.yml.staged`
+  appending one `actions/upload-artifact@v4` step right after
+  the `npm run ui:full` step.
+- Step shape:
+  ```
+  - name: Upload Playwright artifacts on failure
+    if: failure()
+    uses: actions/upload-artifact@v4
+    with:
+      name: playwright-scenarios-results-${{ github.run_attempt }}
+      path: |
+        auto-qa/harness/playwright-report/
+        auto-qa/harness/test-results/
+      retention-days: 14
+      if-no-files-found: ignore
+  ```
+- **Why these two paths**: `playwright.config.mjs` already
+  configures the on-failure capture (`trace: retain-on-failure`,
+  `screenshot: only-on-failure`, `video: retain-on-failure`)
+  plus the HTML report (`outputFolder: 'playwright-report'`).
+  All the bot needs is to hoist them out of the runner's
+  workspace before tear-down.
+- **Why `${{ github.run_attempt }}` in the artifact name**: the
+  Playwright config sets `retries: 2` in CI mode. Without the
+  suffix, retry #2 would clobber retry #1's artifacts (or the
+  upload would fail with "name already exists"). With it, you
+  get `playwright-scenarios-results-1`, `-2`, `-3` for a
+  fully-retried failed run — all visible in the workflow's
+  Artifacts tab.
+- **Why `if-no-files-found: ignore`**: covers the corner case
+  where the workflow fails BEFORE Playwright produces any
+  output (e.g. `npm ci` itself fails). Without it, the upload
+  step would fail too, masking the real error in the run log.
+- **Why STAGED together with 3c (not a separate file)**: 3d is
+  one more step in 3c's job — same workflow file, same runtime,
+  same trigger. Splitting would require a second promote and a
+  second smoke-test for what's effectively a feature flag on
+  3c's debugging output. Promoted together, they form one
+  coherent "run scenarios + capture failures" workflow.
+- Local validation: `npx js-yaml@4 ...` parses the file
+  cleanly; the upload-artifact step shows up at the right point
+  in the parsed structure with `if: failure()` and the two
+  correct paths.
+- Phase 7 slice 3 status after this slice: 3a, 3c, 3d STAGED
+  (waiting on maintainer promote). 3b is the only remaining
+  bot-doable sub-slice (and it's gated on slice 3a being
+  smoke-tested live first). Then slice 4 — full-stack
+  docker-compose.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 
