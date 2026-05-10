@@ -774,11 +774,28 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). **Now 41 invariants**:
-      10 api-internal + 26 indexer probes + 5 chain-layer.
-      130 smoke tests green.
-      `anvilClientVersionMentionsAnvil` added this slice
-      — chain-CLIENT identity pin (distinct from
+      PROGRESS.md's invariant tables). **Now 42 invariants**:
+      11 api-internal + 26 indexer probes + 5 chain-layer.
+      134 smoke tests green.
+      `chartCandlesAreSubsetOfDirect` added this slice —
+      first cross-layer per-row TIME-PAIR check for the
+      unified-chart endpoint. STRENGTHENS the existing
+      chartCandleCountsBoundedByDirect (count-bound) into
+      a per-row time-membership check: every candle time
+      the api surfaces must correspond to a real candle
+      the indexer actually emitted; otherwise the api is
+      fabricating data (or mixing in another proposal's
+      periods). Uses `time` not `id` because the unified-
+      chart transform (applyRateToCandles) reshapes raw
+      indexer candles and doesn't expose IDs. Catches
+      bug classes that count-bound MISSES: transform
+      filling gaps with synthetic period-start timestamps,
+      cache key mismatch returning wrong proposal's candles,
+      time-bucket calculation off-by-one, SPOT bleeding
+      into yes/no.
+
+      `anvilClientVersionMentionsAnvil` (previous slice) —
+      chain-CLIENT identity pin (distinct from
       anvilChainId chain-ID pin). Calls web3_clientVersion;
       asserts response contains "anvil" (case-insensitive).
       Together they pin both layers of "right environment":
@@ -788,23 +805,13 @@ freshly-generated addresses as recipients; documented in
       extensions for impersonation, snapshots, time-warping
       would silently fail in scenario tests.
 
-      `apiUnifiedChartHasObservabilityHeaders` (previous
-      slice) — first response-HEADER validation in
-      the catalog. Asserts X-Cache ∈ {HIT, MISS} AND
-      X-Response-Time matches /^\d+ms$/. New pattern:
-      header probe (vs body probe). Catches ops-
-      observability regressions invisible to body-only
-      checks: refactor that drops the cache layer's
-      instrumentation; refactor that adds a third cache
-      state ('STALE') without telling ops; timing
-      regression that emits raw ms count without unit
-      suffix. Still to add:
+      Still to add (per ordering in this entry):
       candlesAggregation (Candle.volume = sum of
-      contained Swap amounts within period), chartShape
-      full match (api unified-chart vs indexer raw,
-      ID-pair compare), conservation (∑YES + ∑NO =
-      ∑sDAI), monotonicity (TWAP), cross-run
-      monotonicity on rateSanity.
+      contained Swap amounts within period), conservation
+      (∑YES + ∑NO = ∑sDAI), monotonicity (TWAP),
+      cross-run monotonicity on rateSanity. The
+      chartShape full-match line is now retired (subsumed
+      by chartCandlesAreSubsetOfDirect from this slice).
 - [x] **4d-activate — orchestrator block UNCOMMENTED.**
       Replaced the `tail -f /dev/null` placeholder with
       `node orchestrator/scenario-runner.mjs`. Dropped the

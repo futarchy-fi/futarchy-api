@@ -409,6 +409,95 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'chartCandlesAreSubsetOfDirect',
+        description: 'every time value in api unified-chart candles.{yes,no} appears in the direct candles indexer time set (catches transform fabricating timestamps the indexer never emitted)',
+        layer: 'api↔candles',
+        check: async (ctx) => {
+            // STRENGTHENS chartCandleCountsBoundedByDirect (count
+            // bound) into a per-row TIME-PAIR check. Every candle
+            // time the api returns must correspond to a real candle
+            // the indexer actually emitted; otherwise the api is
+            // fabricating data (or mixing in another proposal's
+            // periods).
+            //
+            // Why time, not id: the unified-chart endpoint applies
+            // a presentation transform (applyRateToCandles) that
+            // reshapes raw indexer candles into {time, close, ...} —
+            // the original ID is not exposed in the response. Both
+            // layers agree on `time` (period-start unix timestamp),
+            // so we use that as the matching key.
+            //
+            // Vacuous when api returns 0 candles. If api returns
+            // rows but direct returns 0, the count check fires
+            // first; if both return 0, the count check returns
+            // vacuous and so does this one.
+            //
+            // Bug shapes caught (NOT caught by the count bound):
+            //   * Transform fills gaps with synthetic period-start
+            //     timestamps — emits a candle at t=T even when the
+            //     indexer skipped that period (no swaps in window)
+            //   * Cache layer returns a different proposal's candles
+            //     where count happens to be ≤ direct but specific
+            //     times are wrong (cache key mismatch)
+            //   * Time-bucket calculation regression — every api
+            //     time off by one second / one hour from a period-
+            //     boundary off-by-one
+            //   * SPOT side bleeds into yes/no — spot uses different
+            //     time alignment so its times wouldn't match the
+            //     candles indexer's set
+            const directBody = JSON.stringify({
+                query: '{ candles(first: 100) { time } }',
+            });
+            const [chartResp, directResp] = await Promise.all([
+                fetch(`${ctx.apiUrl}/api/v2/proposals/harness-probe-proposal/chart`),
+                fetchJson(ctx.candlesUrl, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: directBody,
+                }),
+            ]);
+            if (chartResp.status !== 200) {
+                throw new Error(`chart endpoint returned ${chartResp.status} (data plane down — apiUnifiedChartShape's domain)`);
+            }
+            const chart = await chartResp.json();
+            const apiYes = Array.isArray(chart?.candles?.yes) ? chart.candles.yes : null;
+            const apiNo = Array.isArray(chart?.candles?.no) ? chart.candles.no : null;
+            if (apiYes === null || apiNo === null) {
+                throw new Error(`chart response missing candles.{yes,no} arrays (apiUnifiedChartShape's domain)`);
+            }
+            const directCandles = directResp?.data?.candles;
+            if (!Array.isArray(directCandles)) {
+                throw new Error(`direct candles response shape: ${JSON.stringify(directResp)?.slice(0, 80)}`);
+            }
+            const apiTotal = apiYes.length + apiNo.length;
+            if (apiTotal === 0) {
+                return { ok: true, detail: 'api returned 0 candles (vacuous — nothing to match against direct)' };
+            }
+            // Build the direct time-set. Use Number() to normalize
+            // string/number variants (some indexer schemas return
+            // BigInt as string).
+            const directTimes = new Set();
+            for (const c of directCandles) {
+                const n = Number(c?.time);
+                if (Number.isFinite(n)) directTimes.add(n);
+            }
+            const checkSide = (rows, side) => {
+                for (let i = 0; i < rows.length; i++) {
+                    const t = Number(rows[i]?.time);
+                    if (!Number.isFinite(t)) {
+                        throw new Error(`api candles.${side}[${i}].time not finite (was ${JSON.stringify(rows[i]?.time)}) — transform regression`);
+                    }
+                    if (!directTimes.has(t)) {
+                        throw new Error(`api candles.${side}[${i}].time=${t} not in direct candles time set (size=${directTimes.size}) — api fabricated a timestamp the indexer never emitted (transform regression OR cache key mismatch OR period-boundary off-by-one)`);
+                    }
+                }
+            };
+            checkSide(apiYes, 'yes');
+            checkSide(apiNo, 'no');
+            return { ok: true, detail: `${apiTotal} api candles (yes=${apiYes.length} + no=${apiNo.length}) all match direct times (direct set size ${directTimes.size})` };
+        },
+    },
+    {
         name: 'apiUnifiedChartHasObservabilityHeaders',
         description: 'api /api/v2/proposals/:id/chart sets X-Cache (HIT|MISS) + X-Response-Time headers (catches ops-observability regressions invisible to body checks)',
         layer: 'api',

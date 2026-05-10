@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **41 invariants** — 10 api-internal + 26 indexer + 5 chain-layer; chain-CLIENT identity pin landed; 130 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **42 invariants** — 11 api-internal + 26 indexer + 5 chain-layer; per-row time-pair check landed for unified-chart; 134 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,72 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 3e (smoke-tests CI workflow STAGED on api side) summary (this iteration):
+Phase 7 slice 4d-scenarios-more (chartCandlesAreSubsetOfDirect) summary (this iteration on the api side):
+
+- **Per-row TIME-pair check** — STRENGTHENS the existing
+  chartCandleCountsBoundedByDirect (count-bound) into a
+  per-row time-membership check. Every candle time the api
+  unified-chart endpoint surfaces must correspond to a real
+  candle the indexer actually emitted; otherwise the api is
+  fabricating data (or mixing in another proposal's periods).
+
+- **42-invariant milestone** — first cross-layer per-row
+  reconciliation for the unified-chart endpoint. Layer
+  breakdown: 11 api-internal (was 10) + 26 indexer + 5
+  chain-layer.
+
+- **Why time, not id** — the unified-chart endpoint runs
+  applyRateToCandles which reshapes raw indexer candles
+  into {time, close, ...}; the original candle ID is not
+  exposed in the response. Both layers agree on `time`
+  (period-start unix timestamp) so we use that as the
+  matching key.
+
+- **Bug shapes caught (NOT caught by the count bound)**:
+  * Transform fills gaps with synthetic period-start
+    timestamps — emits a candle at t=T even when the
+    indexer skipped that period (no swaps in window)
+  * Cache layer returns a different proposal's candles
+    where count happens to be ≤ direct but specific times
+    are wrong (cache key mismatch)
+  * Time-bucket calculation regression — every api time
+    off by one second / one hour from a period-boundary
+    off-by-one
+  * SPOT side bleeds into yes/no — spot uses different
+    time alignment so its times wouldn't match the
+    candles indexer's set
+
+- **Smoke tests**: 4 new (vacuous default; 3-row happy
+  with descending candleTimes [1700007200, 1700003600,
+  1700000000]; failure where api fabricates a timestamp
+  the indexer never emitted — chartCandleCountsBoundedByDirect
+  STILL passes (2 ≤ 3) but the new invariant catches it,
+  demonstrating the value-add; failure with non-finite
+  string time 'invalid-time' — Number(string) → NaN). 2
+  existing tests fixed up to align candleTimes with the
+  api response and reordered descending for
+  candleTimeMonotonic. 134/134 pass (was 130).
+
+- **Why two existing tests needed candleTimes alignment**:
+  apiUnifiedChartShape happy populated returned api times
+  {1700000000, 1700003600} but direct auto-generates times
+  relative to NOW; new invariant would fail. Fix: explicit
+  candleTimes [1700007200, 1700003600, 1700000000]
+  (descending so candleTimeMonotonic stays happy). Same
+  fix for chartCandleCountsBoundedByDirect happy 1+1≤5.
+
+- Slice 4 progress: ~95% (28+ of ~30 sub-slices). The
+  unified-chart endpoint now has THREE coverage layers:
+  (a) shape (apiUnifiedChartShape — yes/no/spot are arrays),
+  (b) count-bound (chartCandleCountsBoundedByDirect — api
+  total ≤ direct total), and (c) per-time-pair membership
+  (chartCandlesAreSubsetOfDirect — every api time exists
+  in direct set). Each catches a distinct bug class; each
+  alone would let the others slip. Still to add (per
+  CHECKLIST): candlesAggregation, conservation, monotonicity,
+  cross-run rate monotonicity.
+
+Phase 7 slice 3e (smoke-tests CI workflow STAGED on api side) summary (previous iteration):
 
 - **Per maintainer's CI question**: api-side smoke-test
   workflow now staged in version control. First staged

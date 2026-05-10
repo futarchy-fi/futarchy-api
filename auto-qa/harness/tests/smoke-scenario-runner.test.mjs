@@ -1171,8 +1171,14 @@ test('runAllInvariants — apiUnifiedChartShape happy: 200 + populated yes/no/sp
         // Bump direct candles count so the chartCandleCountsBoundedByDirect
         // invariant (which asserts api yes+no <= direct count) doesn't
         // fire — apiUnifiedChartShape happy returns yes=2 + no=1 = 3
-        // candles, so direct needs ≥ 3.
+        // candles, so direct needs ≥ 3. Times must align with api's
+        // {1700000000, 1700003600} so chartCandlesAreSubsetOfDirect
+        // (slice 4d-scenarios-more) also passes — that invariant
+        // requires every api time to appear in direct's time set.
+        // Array order is DESCENDING (largest first) so the existing
+        // candleTimeMonotonic invariant ALSO stays happy.
         candlesCandlesCount: 3,
+        candleTimes: [1700007200, 1700003600, 1700000000],
         unifiedChartBody: JSON.stringify({
             metadata: { trading_contract_id: 'mock-contract' },
             candles: {
@@ -1246,6 +1252,12 @@ test('runAllInvariants — chartCandleCountsBoundedByDirect vacuous: both 0', as
 test('runAllInvariants — chartCandleCountsBoundedByDirect happy: api subset matches direct (1 yes + 1 no ≤ 5)', async () => {
     const fx = await startFixture({
         candlesCandlesCount: 5,
+        // candleTimes must include 1700000000 (the time api returns
+        // on both yes/no sides) so the sister chartCandlesAreSubsetOfDirect
+        // invariant (slice 4d-scenarios-more) also passes — it requires
+        // every api time to appear in direct's time set. DESCENDING
+        // order keeps candleTimeMonotonic happy.
+        candleTimes: [1700014400, 1700010800, 1700007200, 1700003600, 1700000000],
         unifiedChartBody: JSON.stringify({
             metadata: {},
             candles: {
@@ -1304,6 +1316,122 @@ test('runAllInvariants — failure: chartCandleCountsBoundedByDirect filter regr
         // to direct, which only this invariant checks
         const shape = results.find((r) => r.name === 'apiUnifiedChartShape');
         assert.equal(shape.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — chartCandlesAreSubsetOfDirect happy: vacuous (api returns 0 candles, default fixture)', async () => {
+    // Default fixture: api chart returns yes=[], no=[], spot=[] → 0 total.
+    // chartCandlesAreSubsetOfDirect short-circuits to ok+vacuous before
+    // touching direct.
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'chartCandlesAreSubsetOfDirect');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /api returned 0 candles \(vacuous/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — chartCandlesAreSubsetOfDirect happy: api times all match direct (yes=2 + no=1)', async () => {
+    // Direct has 3 candles at known times; api returns a subset of
+    // those exact times. Every api time appears in the direct set.
+    // candleTimes in DESCENDING order so candleTimeMonotonic stays happy.
+    const fx = await startFixture({
+        candlesCandlesCount: 3,
+        candleTimes: [1700007200, 1700003600, 1700000000],
+        unifiedChartBody: JSON.stringify({
+            metadata: {},
+            candles: {
+                yes: [{ time: 1700000000, close: '0.42' }, { time: 1700003600, close: '0.45' }],
+                no: [{ time: 1700007200, close: '0.58' }],
+                spot: [],
+            },
+        }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'chartCandlesAreSubsetOfDirect');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /3 api candles \(yes=2 \+ no=1\) all match direct times/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: chartCandlesAreSubsetOfDirect (api fabricates a timestamp the indexer never emitted)', async () => {
+    // Direct has 3 candles at {1700000000, 1700003600, 1700007200}.
+    // API returns yes=[1700000000, 1700099999] — the second time is
+    // NOT in direct's set. Cache key mismatch / transform regression
+    // / period-boundary off-by-one all manifest this way.
+    //
+    // Count check still passes (api total 2 + 0 = 2 ≤ direct 3) — only
+    // the per-row time check catches this. That's the value of this
+    // invariant: it strengthens the count bound into a per-time-pair
+    // membership check. DESCENDING order keeps candleTimeMonotonic happy.
+    const fx = await startFixture({
+        candlesCandlesCount: 3,
+        candleTimes: [1700007200, 1700003600, 1700000000],
+        unifiedChartBody: JSON.stringify({
+            metadata: {},
+            candles: {
+                yes: [
+                    { time: 1700000000, close: '0.42' },
+                    { time: 1700099999, close: '0.43' },  // NOT in direct
+                ],
+                no: [],
+                spot: [],
+            },
+        }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'chartCandlesAreSubsetOfDirect');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /api candles\.yes\[1\]\.time=1700099999 not in direct candles time set/);
+        // Count check STILL passes (2 ≤ 3) — only per-row time
+        // membership catches this fabrication. Demonstrates the
+        // value-add of this invariant over chartCandleCountsBoundedByDirect.
+        const counts = results.find((r) => r.name === 'chartCandleCountsBoundedByDirect');
+        assert.equal(counts.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: chartCandlesAreSubsetOfDirect (api emits non-finite time — transform regression)', async () => {
+    // Transform bug: a parseInt() on the period boundary returned
+    // NaN and the api stringified it (which becomes 'NaN' or 'invalid').
+    // Direct has data; api row's time is non-finite.
+    //
+    // Note: we use the string 'invalid-time' (not null) because
+    // Number(null) === 0 (finite) but Number('invalid-time') === NaN.
+    // The transform bug we're catching is one that emits a string
+    // representation of a parse failure.
+    const fx = await startFixture({
+        candlesCandlesCount: 1,
+        candleTimes: [1700000000],
+        unifiedChartBody: JSON.stringify({
+            metadata: {},
+            candles: {
+                yes: [{ time: 'invalid-time', close: '0.42' }],  // non-finite
+                no: [],
+                spot: [],
+            },
+        }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'chartCandlesAreSubsetOfDirect');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /api candles\.yes\[0\]\.time not finite.*transform regression/);
     } finally {
         await fx.stop();
     }
