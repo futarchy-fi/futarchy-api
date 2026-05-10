@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent + anvilSnapshotCapabilityPresent + swapAmountsAllRowsPositive + apiHealthBodyShape + anvilTimeWarpCapabilityPresent)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **50 invariants** — 13 api-internal + 27 indexer + 10 chain-layer; **🎯 50-invariant milestone reached** — chain-CAPABILITY trio complete (impersonate + snapshot + time-warp = the minimal scenario primitive set); 168 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent + anvilSnapshotCapabilityPresent + swapAmountsAllRowsPositive + apiHealthBodyShape + anvilTimeWarpCapabilityPresent + apiWarmerBodyShape)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **51 invariants** — 14 api-internal + 27 indexer + 10 chain-layer; second body-shape probe (sister to apiHealthBodyShape, on /warmer) — completes body-shape coverage on the two main observability endpoints; 172 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,65 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (anvilTimeWarpCapabilityPresent) summary (this iteration on the api side) — 🎯 **50-invariant milestone**:
+Phase 7 slice 4d-scenarios-more (apiWarmerBodyShape) summary (this iteration on the api side):
+
+- **Second body-shape probe** in the catalog. Sister to
+  apiHealthBodyShape (just shipped) — both extend a status-
+  code-only invariant with body-shape validation. Together
+  they cover the two main observability endpoints (/health
+  + /warmer).
+
+- **51-invariant milestone**. Layer breakdown: 14 api-
+  internal (was 13) + 27 indexer + 10 chain-layer.
+
+- **What it asserts**: production /warmer
+  (src/utils/warmer.js getWarmerStatus()) emits:
+  ```
+  { active, maxEntries, refreshIntervalSec,
+    retentionDays, entries[] }
+  ```
+  All four numeric fields must be finite numbers. `active`
+  may be 0 (warmer might have no entries yet); the three
+  config fields must be > 0 (0 means "disabled" — a config
+  regression). `entries` must be an array.
+
+- **Bug shapes caught (NOT caught by apiWarmer)**:
+  * Refactor renames any of the four numeric fields
+    (e.g., active → activeCount) — silent until ops gauge
+    dashboards stop updating
+  * Numeric field emitted as string ('5' instead of 5) —
+    consumers using strict typeof checks break
+  * entries field changed to non-array (e.g., object keyed
+    by id) — consumers iterating with .map() crash with
+    "is not a function"
+  * Body wrapped in a `data` field by middleware refactor
+  * Config sentinel hit (refreshIntervalSec=0 = warmer
+    disabled — silent regression that breaks the entire
+    warming subsystem)
+
+- **Fixture extension**: /warmer handler now defaults to
+  production shape (was `{ status: 'warm', queues: 0 }`).
+  New knobs: `warmerActive`, `warmerMaxEntries`,
+  `warmerRefreshIntervalSec`, `warmerRetentionDays`,
+  `warmerEntries`, plus `warmerBody` (full-body override
+  for shape-failure tests).
+
+- **Smoke tests**: 4 new (default fixture happy; failure
+  field renamed activeCount — sister apiWarmer STILL
+  passes (200 + valid JSON); failure config sentinel
+  refreshIntervalSec=0; failure entries as object instead
+  of array). 172/172 pass (was 168).
+
+- **Slice 4 progress: ~99% (37+ of ~30 sub-slices)**. The
+  api layer now has BODY-SHAPE coverage on both
+  observability endpoints (/health + /warmer). Together
+  with the 4 unified-chart probes (shape, count-bound,
+  per-time-pair, two header probes), the api layer's
+  observability surface is comprehensively pinned. Still
+  to add (per CHECKLIST): candlesAggregation, conservation,
+  TWAP monotonicity, cross-run rate monotonicity.
+
+Phase 7 slice 4d-scenarios-more (anvilTimeWarpCapabilityPresent) summary (previous iteration on the api side) — 🎯 **50-invariant milestone**:
 
 - **Third chain-CAPABILITY probe** — tenth chain-layer
   invariant. COMPLETES THE MINIMAL CAPABILITY TRIO that

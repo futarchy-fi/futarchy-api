@@ -183,8 +183,98 @@ export const INVARIANTS = [
                 }
                 // Just verify the body parses as JSON; getWarmerStatus()
                 // can return any shape and we don't want to over-couple.
+                // (apiWarmerBodyShape — sister invariant — does the
+                // shape validation; this one stays cheap.)
                 await r.json();
                 return { ok: true, detail: '200 + JSON body from /warmer' };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
+        name: 'apiWarmerBodyShape',
+        description: 'api /warmer body conforms to getWarmerStatus() shape: {active, maxEntries, refreshIntervalSec, retentionDays} are non-negative finite numbers + entries is array (catches refactor that drops fields, renames, or changes numeric types to strings)',
+        layer: 'api',
+        check: async (ctx) => {
+            // Sister to apiHealthBodyShape (just shipped). Same
+            // pattern: status-code-only sister + body-shape probe.
+            // STRENGTHENS apiWarmer (which only checks 200 + JSON
+            // parse) into a body validation. Production /warmer
+            // (src/index.js line 59 → src/utils/warmer.js
+            // getWarmerStatus()) emits:
+            //   {
+            //     active: warmList.size,                    // number
+            //     maxEntries: WARMER_MAX_ENTRIES,           // number
+            //     refreshIntervalSec: WARMER_INTERVAL_SEC,  // number
+            //     retentionDays: WARMER_RETENTION_DAYS,     // number
+            //     entries: [...]                            // array
+            //   }
+            //
+            // Why each field matters:
+            //   * active — ops dashboards plot this as a gauge
+            //   * maxEntries — capacity-planning signal (shows
+            //     when warmer hit its cap)
+            //   * refreshIntervalSec — config-drift detection
+            //     (regression that changed a constant without
+            //     updating dashboards)
+            //   * retentionDays — same
+            //   * entries — array contract; consumers iterate it
+            //     and crash on non-array (e.g., null when warmer
+            //     uninitialized)
+            //
+            // Bug shapes caught (NOT caught by apiWarmer):
+            //   * Refactor renames any of the four numeric fields
+            //     (e.g., active → activeCount)
+            //   * Numeric field emitted as string ('5' instead
+            //     of 5) — silent for consumers that JS-coerce,
+            //     breaks consumers using strict typeof checks
+            //   * entries field changed to non-array (e.g., object
+            //     keyed by id) — consumers iterating with .map()
+            //     crash with "is not a function"
+            //   * Body wrapped in a `data` field by a middleware
+            //     refactor (response.json({data: ...}) instead of
+            //     response.json(...))
+            //
+            // active === 0 is allowed (warmer might have no entries
+            // yet); only NEGATIVE / non-finite values fail. maxEntries
+            // / refreshIntervalSec / retentionDays MUST be > 0
+            // (config sentinels — 0 means "disabled", which is a
+            // configuration regression).
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/warmer`, { signal: ctrl.signal });
+                if (!r.ok) throw new Error(`/warmer → HTTP ${r.status} (apiWarmer's domain)`);
+                const ct = r.headers.get('content-type') || '';
+                if (!ct.includes('json')) {
+                    throw new Error(`/warmer non-JSON content-type "${ct}" (apiWarmer's domain)`);
+                }
+                let body;
+                try {
+                    body = await r.json();
+                } catch (e) {
+                    throw new Error(`/warmer body not parseable as JSON: ${e?.message || e}`);
+                }
+                if (!body || typeof body !== 'object') {
+                    throw new Error(`/warmer body not an object (got ${typeof body}); middleware regression?`);
+                }
+                if (typeof body.active !== 'number' || !Number.isFinite(body.active) || body.active < 0) {
+                    throw new Error(`active expected non-negative finite number, got ${typeof body.active} (${JSON.stringify(body.active)?.slice(0, 40)}) — ops gauge dashboards break`);
+                }
+                for (const field of ['maxEntries', 'refreshIntervalSec', 'retentionDays']) {
+                    const val = body[field];
+                    if (typeof val !== 'number' || !Number.isFinite(val)) {
+                        throw new Error(`${field} expected finite number, got ${typeof val} (${JSON.stringify(val)?.slice(0, 40)}) — config-drift detection broken`);
+                    }
+                    if (val <= 0) {
+                        throw new Error(`${field} = ${val} (≤ 0; config sentinel — value of 0 means "disabled" which is a configuration regression)`);
+                    }
+                }
+                if (!Array.isArray(body.entries)) {
+                    throw new Error(`entries expected array, got ${typeof body.entries} (${JSON.stringify(body.entries)?.slice(0, 40)}) — consumers iterating with .map() crash with "is not a function"`);
+                }
+                return { ok: true, detail: `active=${body.active}, maxEntries=${body.maxEntries}, refreshIntervalSec=${body.refreshIntervalSec}, retentionDays=${body.retentionDays}, entries.length=${body.entries.length}` };
             } finally {
                 clearTimeout(t);
             }

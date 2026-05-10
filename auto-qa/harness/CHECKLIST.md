@@ -774,10 +774,26 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). **Now 50 invariants
-      (🎯 milestone)**: 13 api-internal + 27 indexer probes
-      + 10 chain-layer. 168 smoke tests green.
-      `anvilTimeWarpCapabilityPresent` added this slice —
+      PROGRESS.md's invariant tables). **Now 51 invariants**:
+      14 api-internal + 27 indexer probes + 10 chain-layer.
+      172 smoke tests green.
+      `apiWarmerBodyShape` added this slice — second body-
+      shape probe in the catalog; sister to apiHealthBodyShape.
+      Asserts /warmer body conforms to getWarmerStatus()
+      shape: active is non-negative finite number,
+      maxEntries/refreshIntervalSec/retentionDays are
+      POSITIVE finite numbers (0 = "disabled" config
+      sentinel, regression), entries is array. Catches
+      field rename (active → activeCount), numeric type
+      regression (string instead of number), entries-
+      changed-to-object (consumers .map() crash), config
+      sentinel hit (refreshIntervalSec=0 silently disables
+      warmer). Sister apiWarmer probe still passes when
+      body is valid JSON; only this body-shape catches
+      these. Fixture /warmer handler now defaults to
+      production shape (was `{ status: 'warm', queues: 0 }`).
+
+      `anvilTimeWarpCapabilityPresent` (previous slice) —
       tenth chain-layer invariant; THIRD chain-CAPABILITY
       probe. COMPLETES the minimal capability TRIO that
       scenarios depend on: impersonate + snapshot/revert +

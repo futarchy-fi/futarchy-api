@@ -43,6 +43,17 @@ function startFixture({
     // returns a JSON status object; toggle warmerOk to false for 503.
     warmerOk = true,
     warmerContentType = 'application/json',
+    // /warmer body shape for apiWarmerBodyShape (slice 4d-scenarios-more).
+    // Defaults match what src/utils/warmer.js getWarmerStatus() emits:
+    //   { active, maxEntries, refreshIntervalSec, retentionDays, entries[] }
+    // warmerBody: full-body override for shape-failure tests; null →
+    // construct from the four numeric knobs + an empty entries array.
+    warmerActive = 5,
+    warmerMaxEntries = 100,
+    warmerRefreshIntervalSec = 30,
+    warmerRetentionDays = 7,
+    warmerEntries = [],
+    warmerBody = null,
     // Spot-candles validation (slice 4d-scenarios-more apiSpotCandlesValidates):
     // default returns 400 + JSON {error: 'ticker required'} when ticker
     // missing (matching the api behavior). Toggle to override.
@@ -374,7 +385,17 @@ function startFixture({
                 if (req.url === '/warmer' && req.method === 'GET') {
                     if (!warmerOk) { response.statusCode = 503; response.end('down'); return; }
                     response.setHeader('content-type', warmerContentType);
-                    response.end(JSON.stringify({ status: 'warm', queues: 0 }));
+                    // Default body matches production getWarmerStatus():
+                    //   { active, maxEntries, refreshIntervalSec, retentionDays, entries }
+                    // Override warmerBody to test shape regressions.
+                    const body = warmerBody ?? JSON.stringify({
+                        active: warmerActive,
+                        maxEntries: warmerMaxEntries,
+                        refreshIntervalSec: warmerRefreshIntervalSec,
+                        retentionDays: warmerRetentionDays,
+                        entries: warmerEntries,
+                    });
+                    response.end(body);
                     return;
                 }
                 if (req.url?.startsWith('/api/v1/spot-candles') && req.method === 'GET') {
@@ -1585,6 +1606,83 @@ test('runAllInvariants — failure: apiWarmer returns HTML not JSON', async () =
         const w = results.find((r) => r.name === 'apiWarmer');
         assert.equal(w.ok, false);
         assert.match(w.error, /non-JSON content-type: text\/html/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiWarmerBodyShape happy: production shape (default fixture)', async () => {
+    const fx = await startFixture();  // defaults match production
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'apiWarmerBodyShape');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /active=5.*maxEntries=100.*refreshIntervalSec=30.*retentionDays=7.*entries\.length=0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiWarmerBodyShape numeric field renamed (active → activeCount)', async () => {
+    // Refactor renamed `active` to `activeCount`. Sister apiWarmer
+    // still passes (200 + JSON parses), but ops gauges break.
+    const fx = await startFixture({
+        warmerBody: JSON.stringify({
+            activeCount: 5,        // renamed!
+            maxEntries: 100,
+            refreshIntervalSec: 30,
+            retentionDays: 7,
+            entries: [],
+        }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiWarmerBodyShape');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /active expected non-negative finite number, got undefined/);
+        // Sister apiWarmer STILL passes (200 + valid JSON)
+        const sister = results.find((r) => r.name === 'apiWarmer');
+        assert.equal(sister.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiWarmerBodyShape config sentinel hit (refreshIntervalSec = 0)', async () => {
+    // refreshIntervalSec=0 means warmer disabled — config regression
+    // that silently breaks the warmer subsystem entirely.
+    const fx = await startFixture({ warmerRefreshIntervalSec: 0 });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiWarmerBodyShape');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /refreshIntervalSec = 0.*config sentinel.*disabled/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiWarmerBodyShape entries changed to non-array (object keyed by id)', async () => {
+    // Refactor changed entries from array to object. Consumers
+    // doing entries.map() crash with "is not a function".
+    const fx = await startFixture({
+        warmerBody: JSON.stringify({
+            active: 5,
+            maxEntries: 100,
+            refreshIntervalSec: 30,
+            retentionDays: 7,
+            entries: { 'entry-1': {} },  // object, not array
+        }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiWarmerBodyShape');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /entries expected array, got object.*\.map\(\) crash/);
     } finally {
         await fx.stop();
     }
