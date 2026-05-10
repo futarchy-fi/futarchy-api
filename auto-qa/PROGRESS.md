@@ -9,16 +9,16 @@ is never modified — only tests on the `auto-qa` branch.
 | Field | Value |
 |---|---|
 | Branch | `auto-qa` (off `origin/main`) |
-| Iterations completed | 24 |
+| Iterations completed | 25 |
 | PRs catalogued | 9 / 9 (full history) |
 | PRs classified | 9 |
-| Tests added | 195 (2 path-prefix + 7 passthrough-contract + 4 unified-chart + 3 multi-proposal-smoke + 3 spot-candles + 3 indexer-freshness + 4 registry-org-shape + 6 legacy-v1-prices + 3 operational-endpoints + 11 passthrough-smoke + 21 cors-headers + 6 cache-headers + 9 chart-window-invariants + 6 legacy-subgraph-alias + 11 chart-envelope-shape + 8 proposal-id-handling + 21 chain-prefix-helpers + 16 extract-tokens-from-pools + 17 cache-class + 11 endpoints-config + 11 warmer-list-management + 12 rate-provider-config — 194 passing, 1 skipped) |
+| Tests added | 208 (2 path-prefix + 7 passthrough-contract + 4 unified-chart + 3 multi-proposal-smoke + 3 spot-candles + 3 indexer-freshness + 4 registry-org-shape + 6 legacy-v1-prices + 3 operational-endpoints + 11 passthrough-smoke + 21 cors-headers + 6 cache-headers + 9 chart-window-invariants + 6 legacy-subgraph-alias + 11 chart-envelope-shape + 8 proposal-id-handling + 21 chain-prefix-helpers + 16 extract-tokens-from-pools + 17 cache-class + 11 endpoints-config + 11 warmer-list-management + 12 rate-provider-config + 13 spot-source-config — 207 passing, 1 skipped) |
 | Cross-cutting catches | catastrophic-empty guards, indexer freshness bounds, metadata parseability, **parse-error status inconsistency between passthroughs**, CORS preflight + Apollo header allow-list + expose-headers, cache-layer disablement / stale-key / TTL drift |
 | Ops invariants tracked | indexer lag (candles + registry) bounded vs. Gnosis chain tip |
 | PRs covered by tests | **8 / 9** (#1, #3, #4, #5, #6, #7, #8, #9 — only #2 infra remains) |
 | API surfaces with smoke tests | **4 / 4** (`/api/v2/.../chart`, `/candles/graphql`, `/api/v1/spot-candles`, `/subgraphs/name/algebra-proposal-candles-v1` legacy alias) |
 | Data-quality issues surfaced | 2 proposals (TSLA Mega Package, CIP-82) return zero prices + "TOKEN" fallback symbol — see below |
-| **Real bugs surfaced** | **`/candles/graphql` returns HTTP 502 on malformed query (should be 400 like /registry/graphql)** — pinned in `passthrough-smoke.test.mjs::PARSE_ERROR_STATUS` |
+| **Real bugs surfaced** | **`/candles/graphql` returns HTTP 502 on malformed query (should be 400 like /registry/graphql)** — pinned in `passthrough-smoke.test.mjs::PARSE_ERROR_STATUS`; **hardcoded CoinGecko API key fallback in `src/services/spot-price.js` (`GECKO_API_KEY` default)** — pinned for ratchet in `spot-source-config.test.mjs` |
 | Test runner | `node --test` via `npm run auto-qa:test` |
 | Tooling backlog | see below |
 
