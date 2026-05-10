@@ -774,10 +774,27 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). **Now 43 invariants**:
-      11 api-internal + 26 indexer probes + 6 chain-layer.
-      139 smoke tests green.
-      `anvilGasPricePresent` added this slice — chain-FEE-
+      PROGRESS.md's invariant tables). **Now 44 invariants**:
+      12 api-internal + 26 indexer probes + 6 chain-layer.
+      144 smoke tests green.
+      `apiUnifiedChartXCacheTtlPresent` added this slice
+      — second response-HEADER probe (sister to
+      apiUnifiedChartHasObservabilityHeaders which covers
+      X-Cache + X-Response-Time; this covers X-Cache-TTL).
+      Asserts unconditionally on both HIT + MISS paths
+      (corrects an earlier comment that mistakenly said
+      TTL was HIT-only — src/routes/unified-chart.js
+      line 74 + line 278 set it on both). Format: positive
+      integer string, no unit suffix. Catches refactor
+      that drops TTL from one path but not the other,
+      'NaN'/'-1' from timing/env-var bugs, accidental
+      unit suffix ('300s' silently wrong since parseInt
+      returns 300 by coincidence), TTL header dropped
+      entirely. Sister X-Cache+X-Response-Time probe
+      STILL passes when only TTL drops — demonstrates
+      per-header-split value.
+
+      `anvilGasPricePresent` (previous slice) — chain-FEE-
       MARKET probe (sixth chain-layer invariant). Companion
       to anvilLatestBlockSensible + anvilChainId; those pin
       "chain reachable + right network", this pins fee-

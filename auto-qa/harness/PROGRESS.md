@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **43 invariants** — 11 api-internal + 26 indexer + 6 chain-layer; chain-FEE-MARKET probe landed; 139 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **44 invariants** — 12 api-internal + 26 indexer + 6 chain-layer; X-Cache-TTL header now probed unconditionally on both HIT + MISS paths; 144 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,69 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (anvilGasPricePresent) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (apiUnifiedChartXCacheTtlPresent) summary (this iteration on the api side):
+
+- **Second response-HEADER probe** in the catalog. Sister
+  to apiUnifiedChartHasObservabilityHeaders (X-Cache +
+  X-Response-Time); this one covers X-Cache-TTL. Split
+  into a separate invariant for single-responsibility per
+  probe — ops dashboards filter on TTL independently of
+  hit/miss.
+
+- **44-invariant milestone**. Layer breakdown: 12 api-
+  internal (was 11) + 26 indexer + 6 chain-layer.
+
+- **Scope correction**: the original
+  apiUnifiedChartHasObservabilityHeaders comment said
+  "X-Cache-TTL not asserted because it's only set on the
+  HIT path". Inspection of `src/routes/unified-chart.js`
+  shows TTL is set on BOTH paths (line 74 HIT + line 278
+  MISS). So this new invariant asserts unconditionally
+  rather than as a conditional WHEN-HIT check. The old
+  comment was updated in the same commit to reflect the
+  corrected understanding.
+
+- **Bug shapes caught (NOT caught by the X-Cache + X-Response-Time
+  probe)**:
+  * Refactor drops TTL from one path but not the other
+    (HIT-path-only TTL — common pattern but BREAKS ops
+    dashboards that filter on cache age regardless of
+    hit/miss)
+  * TTL value emitted as 'NaN' or '-1' from a timing
+    bug or env-var fallback gone wrong
+  * TTL value gains a unit suffix accidentally
+    ('300s' instead of '300') — silently wrong: parseInt
+    returns 300 by coincidence, but a future refactor
+    to '5m' would return 5
+  * TTL header dropped entirely (refactor removed
+    `res.set('X-Cache-TTL', ...)` from both paths)
+
+- **Format asserted**: positive integer string, no unit
+  suffix. Matches the src's `String(RESPONSE_TTL_SEC)`
+  emit pattern.
+
+- **Smoke tests**: 5 new (default 300s on MISS happy;
+  large 86400s on HIT happy; failure header dropped —
+  sister apiUnifiedChartHasObservabilityHeaders STILL
+  passes (X-Cache + X-Response-Time intact), demonstrating
+  the value of splitting per-header probes; failure unit
+  suffix '300s'; failure non-numeric 'abc'). 1 new
+  fixture knob (unifiedChartXCacheTtl). 144/144 pass
+  (was 139).
+
+- Slice 4 progress: ~97% (30+ of ~30 sub-slices). The
+  unified-chart endpoint now has FOUR coverage layers:
+  shape (apiUnifiedChartShape), count-bound
+  (chartCandleCountsBoundedByDirect), per-time-pair
+  membership (chartCandlesAreSubsetOfDirect), AND TWO
+  observability-header probes (apiUnifiedChartHasObservabilityHeaders
+  for X-Cache+X-Response-Time, apiUnifiedChartXCacheTtlPresent
+  for X-Cache-TTL — NEW). Each catches a distinct bug
+  class. Still to add (per CHECKLIST): candlesAggregation,
+  conservation, TWAP monotonicity, cross-run rate
+  monotonicity.
+
+Phase 7 slice 4d-scenarios-more (anvilGasPricePresent) summary (previous iteration on the api side):
 
 - **Chain-FEE-MARKET probe** — sixth chain-layer invariant.
   Companion to anvilLatestBlockSensible + anvilChainId

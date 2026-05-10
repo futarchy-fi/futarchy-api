@@ -62,6 +62,13 @@ function startFixture({
     // src/routes/unified-chart.js emits on a cache MISS.
     unifiedChartXCache = 'MISS',
     unifiedChartXResponseTime = '12ms',
+    // X-Cache-TTL for apiUnifiedChartXCacheTtlPresent (slice
+    // 4d-scenarios-more). Default '300' = 5 minutes (a sensible
+    // RESPONSE_TTL_SEC ish). Set to null to simulate the header
+    // being dropped, '300s' for the unit-suffix regression, '0'
+    // for the meaningless-TTL regression, or 'abc' for the
+    // non-numeric regression.
+    unifiedChartXCacheTtl = '300',
     // Market-events happy-path (slice 4d-scenarios-more
     // apiMarketEventsShape): /api/v1/market-events/proposals/
     // <id>/prices defaults to 200 + the minimal contract
@@ -350,6 +357,9 @@ function startFixture({
                     }
                     if (unifiedChartXResponseTime !== null) {
                         response.setHeader('x-response-time', unifiedChartXResponseTime);
+                    }
+                    if (unifiedChartXCacheTtl !== null) {
+                        response.setHeader('x-cache-ttl', unifiedChartXCacheTtl);
                     }
                     response.end(unifiedChartBody);
                     return;
@@ -1622,6 +1632,94 @@ test('runAllInvariants — failure: apiUnifiedChartHasObservabilityHeaders X-Res
         const inv = results.find((r) => r.name === 'apiUnifiedChartHasObservabilityHeaders');
         assert.equal(inv.ok, false);
         assert.match(inv.error, /X-Response-Time expected.*got "12"|timing-instrumentation/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiUnifiedChartXCacheTtlPresent happy: 300s (default fixture, MISS path)', async () => {
+    const fx = await startFixture();  // default unifiedChartXCacheTtl='300', X-Cache=MISS
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'apiUnifiedChartXCacheTtlPresent');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /X-Cache-TTL=300s/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiUnifiedChartXCacheTtlPresent happy: 86400s (large TTL on HIT path)', async () => {
+    // HIT path with a large 24h TTL. Both unconditional — invariant
+    // doesn't care which path emitted the header, only that it
+    // emitted it correctly.
+    const fx = await startFixture({
+        unifiedChartXCache: 'HIT',
+        unifiedChartXResponseTime: '0ms',
+        unifiedChartXCacheTtl: '86400',
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'apiUnifiedChartXCacheTtlPresent');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /X-Cache-TTL=86400s/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiUnifiedChartXCacheTtlPresent header dropped entirely', async () => {
+    // Refactor removed res.set('X-Cache-TTL', ...) from one or both
+    // code paths. Ops dashboards that compute cache age silently break.
+    //
+    // Sister apiUnifiedChartHasObservabilityHeaders STILL passes
+    // (X-Cache + X-Response-Time still present); only this invariant
+    // catches the TTL-specific regression. Demonstrates the value of
+    // splitting the headers into per-header probes.
+    const fx = await startFixture({ unifiedChartXCacheTtl: null });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiUnifiedChartXCacheTtlPresent');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /X-Cache-TTL header missing/);
+        const sister = results.find((r) => r.name === 'apiUnifiedChartHasObservabilityHeaders');
+        assert.equal(sister.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiUnifiedChartXCacheTtlPresent unit suffix regression (300s)', async () => {
+    // Refactor accidentally added a unit suffix to the value. Currently
+    // parseInt() returns 300 by coincidence, but a future refactor to
+    // '5m' would return 5 — silently changing every consumer's notion
+    // of TTL. Catch the suffix at the source.
+    const fx = await startFixture({ unifiedChartXCacheTtl: '300s' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiUnifiedChartXCacheTtlPresent');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /X-Cache-TTL expected positive integer string.*got "300s"/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiUnifiedChartXCacheTtlPresent non-numeric value', async () => {
+    // Env-var fallback gone wrong: RESPONSE_TTL_SEC was set to a
+    // string the env loader didn't coerce. Or a NaN-from-timing-bug
+    // got stringified.
+    const fx = await startFixture({ unifiedChartXCacheTtl: 'abc' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiUnifiedChartXCacheTtlPresent');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /X-Cache-TTL expected positive integer string.*got "abc"/);
     } finally {
         await fx.stop();
     }

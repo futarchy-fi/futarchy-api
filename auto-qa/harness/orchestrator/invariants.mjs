@@ -521,11 +521,13 @@ export const INVARIANTS = [
             //   * Response-Time emitted as 'NaN ms' or '-1ms' from
             //     a timing bug
             //
-            // X-Cache-TTL not asserted because it's only set on the
-            // HIT path (cached responses include it; MISS path
-            // doesn't). A separate invariant could check that TTL
-            // appears WHEN X-Cache is HIT — out of scope for this
-            // first header probe.
+            // X-Cache-TTL not asserted here — split into its own
+            // invariant (apiUnifiedChartXCacheTtlPresent) for
+            // single-responsibility per probe. (Initial reading of
+            // the source suggested TTL was HIT-path-only; closer
+            // inspection of unified-chart.js shows BOTH paths emit
+            // it, so the dedicated invariant asserts unconditionally
+            // rather than as a conditional WHEN-HIT check.)
             const ctrl = new AbortController();
             const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
             try {
@@ -542,6 +544,64 @@ export const INVARIANTS = [
                     throw new Error(`X-Response-Time expected /^\\d+ms$/ format, got ${JSON.stringify(xResponseTime)} (timing-instrumentation regression)`);
                 }
                 return { ok: true, detail: `X-Cache=${xCache}, X-Response-Time=${xResponseTime}` };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
+        name: 'apiUnifiedChartXCacheTtlPresent',
+        description: 'api /api/v2/proposals/:id/chart sets X-Cache-TTL to a positive integer string on BOTH HIT and MISS paths (catches refactor that drops TTL from one path or emits a non-numeric value)',
+        layer: 'api',
+        check: async (ctx) => {
+            // SISTER probe to apiUnifiedChartHasObservabilityHeaders.
+            // That one covers X-Cache + X-Response-Time; this one
+            // covers X-Cache-TTL (split into a separate invariant for
+            // single-responsibility per probe).
+            //
+            // Both HIT and MISS paths in src/routes/unified-chart.js
+            // set X-Cache-TTL to `String(RESPONSE_TTL_SEC)` — line 74
+            // (HIT path) and line 278 (MISS path). Neither is
+            // optional; both must always emit it. So the assertion
+            // is unconditional, NOT a conditional-on-HIT check.
+            //
+            // Bug shapes caught (NOT caught by the X-Cache + X-Response-Time
+            // probe):
+            //   * Refactor drops TTL from one path but not the other
+            //     (HIT-path-only TTL — common pattern but BREAKS ops
+            //     dashboards that filter on cache age regardless of
+            //     hit/miss)
+            //   * TTL value emitted as 'NaN' or '-1' from a timing
+            //     bug or env-var fallback gone wrong
+            //   * TTL value gains a unit suffix accidentally
+            //     ('300s' instead of '300') — breaks any consumer
+            //     that does `parseInt(value)` (returns 300 by
+            //     coincidence, but a future refactor to '5m' would
+            //     return 5)
+            //   * TTL header dropped entirely (refactor removed
+            //     `res.set('X-Cache-TTL', ...)` from both paths)
+            //
+            // Format: positive integer string, no unit suffix. The
+            // src emits `String(RESPONSE_TTL_SEC)` — a bare integer.
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/api/v2/proposals/harness-probe-proposal/chart`, { signal: ctrl.signal });
+                if (r.status !== 200) {
+                    throw new Error(`expected 200, got ${r.status} (apiUnifiedChartShape's domain)`);
+                }
+                const ttl = r.headers.get('x-cache-ttl');
+                if (ttl === null || ttl === undefined) {
+                    throw new Error(`X-Cache-TTL header missing (cache-TTL instrumentation removed from this code path — ops dashboards that compute cache age will silently break)`);
+                }
+                if (!/^\d+$/.test(ttl)) {
+                    throw new Error(`X-Cache-TTL expected positive integer string (no unit suffix), got ${JSON.stringify(ttl)} (consumers that parseInt() will get a wrong value or NaN)`);
+                }
+                const ttlNum = parseInt(ttl, 10);
+                if (ttlNum <= 0) {
+                    throw new Error(`X-Cache-TTL = ${ttlNum} (≤ 0 — TTL must be a positive duration; values of 0 mean "never cache" which contradicts the X-Cache header itself)`);
+                }
+                return { ok: true, detail: `X-Cache-TTL=${ttl}s` };
             } finally {
                 clearTimeout(t);
             }
