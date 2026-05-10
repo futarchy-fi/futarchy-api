@@ -9,10 +9,10 @@ is never modified — only tests on the `auto-qa` branch.
 | Field | Value |
 |---|---|
 | Branch | `auto-qa` (off `origin/main`) |
-| Iterations completed | 17 |
+| Iterations completed | 18 |
 | PRs catalogued | 9 / 9 (full history) |
 | PRs classified | 9 |
-| Tests added | 99 (2 path-prefix + 7 passthrough-contract + 4 unified-chart + 3 multi-proposal-smoke + 3 spot-candles + 3 indexer-freshness + 4 registry-org-shape + 6 legacy-v1-prices + 3 operational-endpoints + 11 passthrough-smoke + 21 cors-headers + 6 cache-headers + 9 chart-window-invariants + 6 legacy-subgraph-alias + 11 chart-envelope-shape — 98 passing, 1 skipped) |
+| Tests added | 107 (2 path-prefix + 7 passthrough-contract + 4 unified-chart + 3 multi-proposal-smoke + 3 spot-candles + 3 indexer-freshness + 4 registry-org-shape + 6 legacy-v1-prices + 3 operational-endpoints + 11 passthrough-smoke + 21 cors-headers + 6 cache-headers + 9 chart-window-invariants + 6 legacy-subgraph-alias + 11 chart-envelope-shape + 8 proposal-id-handling — 106 passing, 1 skipped) |
 | Cross-cutting catches | catastrophic-empty guards, indexer freshness bounds, metadata parseability, **parse-error status inconsistency between passthroughs**, CORS preflight + Apollo header allow-list + expose-headers, cache-layer disablement / stale-key / TTL drift |
 | Ops invariants tracked | indexer lag (candles + registry) bounded vs. Gnosis chain tip |
 | PRs covered by tests | **8 / 9** (#1, #3, #4, #5, #6, #7, #8, #9 — only #2 infra remains) |
@@ -105,6 +105,7 @@ is never modified — only tests on the `auto-qa` branch.
 | **Chart window invariants** | window predicate flipped (>= ↔ <=), sort order inverted, default-window logic returning unbounded data, inverted/future/past windows crashing the upstream passthrough | `auto-qa/tests/chart-window-invariants.test.mjs` (9 cases — degenerate-window graceful handling + within-window invariant + strictly-ascending sort + candle shape parseability + 1-second snapping boundary) |
 | **Legacy subgraph alias** | `/subgraphs/name/algebra-proposal-candles-v1` removed (would silently 404 the Snapshot widget + pre-Cloud-Run integrations), legacy/modern routes drift, spotCandles injection lost | `auto-qa/tests/legacy-subgraph-alias.test.mjs` (6 cases — POST 200 + GET rejected + spotCandles injection invariant + negative confirmation that modern route does NOT inject + cross-route data shape parity + malformed-query envelope) |
 | **Chart envelope shape** | numeric type heterogeneity flipped (price_usd as string, or volume normalized to number losing precision), uppercase address leak, chain_id drift, YES/NO pool collapse, "TOKEN" fallback on canonical fixture | `auto-qa/tests/chart-envelope-shape.test.mjs` (11 cases — price_usd as number / volume as string invariant + address-shape regex + YES≠NO pool distinctness + timeline integrity + chain_id=100 pin + token-symbol non-fallback) |
+| **Proposal ID handling** | case-insensitive lookup broken (uppercase request resolves different/no pool), garbage input crashes the proxy (5xx leak), path-traversal payload reaches upstream as a literal, oversized id triggers buffer-style bug | `auto-qa/tests/proposal-id-handling.test.mjs` (8 cases — uppercase==lowercase data parity + event_id case-normalization + zero-address graceful 200 + "TOKEN" fallback for zero-addr + non-hex/short/path-traversal/very-long inputs all 2xx, no 5xx) |
 | **Operational endpoints** | /health stale, /warmer broken, edge cache freezing /health timestamp | `auto-qa/tests/operational-endpoints.test.mjs` |
 | **Indexer freshness** | candles + registry indexer stalls (lag vs. Gnosis chain tip) | `auto-qa/tests/indexer-freshness.test.mjs` |
 
