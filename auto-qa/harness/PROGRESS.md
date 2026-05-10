@@ -1104,6 +1104,70 @@ Phase 7 slice 3d summary (this iteration on the interface side):
   smoke-tested live first). Then slice 4 — full-stack
   docker-compose.
 
+Phase 7 slice 4d-invariants-catalog summary (this iteration on the api side):
+
+- **Tooling slice** (no new invariant). Sister to interface-
+  side `scenarios-catalog.mjs` + `SCENARIOS.md`. The api
+  side has had `npm run scenarios:by-layer` for transient
+  stdout inspection but no committed catalog file —
+  meaning the 57-invariant index was navigable only by
+  running a script. This slice ships a committed
+  Markdown catalog browsable on GitHub + drift detection
+  against doc rot.
+
+- **What ships**:
+  * `scripts/invariants-catalog.mjs` (~85 lines) — imports
+    `INVARIANTS`, validates each entry has
+    `{name, description, layer}`, groups by layer, emits
+    `orchestrator/INVARIANTS.md`.
+  * `orchestrator/INVARIANTS.md` (~110 lines, committed) —
+    title + per-layer summary table + per-layer detail
+    tables. Each detail table has `# / Name / Description`.
+    Mirrors the interface-side `SCENARIOS.md` structure.
+  * `npm run invariants:catalog` script wired in
+    `auto-qa/harness/package.json`.
+  * `tests/smoke-invariants-catalog.test.mjs` — drift-
+    detection smoke test mirroring just-shipped
+    interface-side `smoke-scenarios-catalog.test.mjs`.
+    Snapshots the committed `INVARIANTS.md`, runs the
+    generator, asserts byte-identical regen + restores
+    snapshot in `finally`. Catches "added an invariant
+    but forgot to regen" with a clear fix-command pointer.
+
+- **Why this matters**: with 57 invariants spanning 6
+  layers (api, api↔candles, api↔registry, orchestrator↔
+  candles, orchestrator↔chain, orchestrator↔registry),
+  the harness has crossed the threshold where coverage-
+  by-script is insufficient. Reviewers + new contributors
+  can now click into `INVARIANTS.md` on the GitHub repo
+  page and see the full coverage matrix without cloning,
+  installing, or running anything. Also: scaffolding for
+  future tooling that wants to read the catalog (e.g., CI
+  dashboards, coverage gap reports) — the script's
+  in-process JS extraction still works, and the
+  Markdown is the human-readable equivalent.
+
+- **Validation**:
+  * `npm run invariants:catalog` → "Wrote …
+    INVARIANTS.md (57 invariants across 6 layers)".
+  * Idempotence pre-verified before writing the smoke
+    test: ran twice in a row, `diff -q` exited silently
+    (byte-identical).
+  * Smoke test passes in isolation
+    (`node --test tests/smoke-invariants-catalog.test.mjs`
+    → 1/1).
+  * Full smoke suite: pre-existing daemon-dependent
+    flake on Phase 2 slice 4 (port leak cycle test);
+    new test reliably passes; no regressions caused by
+    the slice.
+
+- **Why this iteration is tooling-only on the api side**:
+  per the user's strategic question + my commitment
+  to wait for their direction on the bigger
+  /companies-vs-market-page-vs-PR call, this is safe
+  parallel work that doesn't push toward any
+  strategic direction. Pays off whichever way they go.
+
 Phase 7 slice 4a-prep summary (this iteration on the api side):
 
 - Slice 4 (full-stack docker-compose) starts with prep work
