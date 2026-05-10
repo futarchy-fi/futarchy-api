@@ -30,6 +30,42 @@ networks:
     harness-net:
         driver: bridge
 
+# ────────────────────────────────────────────────────────────────────
+# Phase 7 slice 4b-plan: indexer compose-include staging.
+#
+# Per ADR-002 (Accepted), the harness uses a build-from-source
+# indexer via a sibling `futarchy-indexers` clone. Phase 3
+# implemented this via `scripts/start-indexers.mjs` (per-indexer
+# compose projects, native anvil). For the Phase 7 single-stack
+# vision, we'll instead `include:` the indexer compose files here
+# so `docker compose -f auto-qa/harness/docker-compose.yml up -d`
+# brings everything up in one shot.
+#
+# REMAINS COMMENTED until slice 4b-include because:
+#   1. Network wiring isn't done yet (slice 4b-network-wire) —
+#      the included compose files default RPC_URL to
+#      https://rpc.gnosischain.com; the harness needs them to use
+#      http://anvil:8545 instead. Without an env override, the
+#      indexers would ingest from real Gnosis, not our anvil fork.
+#   2. The included files create their own networks (registry-net,
+#      etc); cross-network depends_on with harness-net needs a
+#      decision (extra `networks:` block on each indexer service?
+#      shared external network?).
+#   3. detect-indexers.mjs probes for the sibling clone; the
+#      compose-include path is FIXED, not auto-detected, so users
+#      who clone the indexer repo somewhere else need to override.
+#
+# include:
+#     - path: ../../../futarchy-indexers/futarchy-complete/checkpoint/docker-compose.yml
+#       # registry indexer (port 3003) + its postgres (port 5435).
+#       # Provides services: registry-checkpoint, registry-postgres
+#       # Network: registry-net (NOT harness-net; needs bridging)
+#     - path: ../../../futarchy-indexers/proposals-candles/checkpoint/docker-compose.yml
+#       # candles indexer (port 3001 prod / 3004 staging) + postgres.
+#       # Provides services: candles-checkpoint, candles-postgres
+#       # Network: candles-net (NOT harness-net; needs bridging)
+# ────────────────────────────────────────────────────────────────────
+
 # Top-level service stubs — ALL DISABLED in Phase 0.
 # Each block lists the eventual command + the phase that turns it on.
 services:
@@ -77,25 +113,33 @@ services:
             start_period: 5s
 
     # ────────────────────────────────────────────────────────────────
-    # Phase 3: Local Checkpoint indexer. Same code as production, but
-    # configured to ingest from the local anvil fork instead of mainnet.
-    # The biggest risk in this phase is schema-migration cold-start.
+    # Phase 3 / Phase 7 slice 4b: Local Checkpoint indexer(s).
+    #
+    # The original Phase 0 stub assumed ONE indexer service called
+    # `indexer` with an "image: TODO" decision pending. ADR-002
+    # (Accepted) resolved both questions:
+    #   - There are TWO indexers (registry + candles), each with
+    #     its own postgres, on its own network — see the per-service
+    #     compose files at `futarchy-indexers/*/checkpoint/`
+    #   - Image source: build-from-source via the sibling
+    #     `futarchy-indexers` clone (NOT a published image — there
+    #     isn't a usable generic Checkpoint image)
+    #
+    # The originally-stubbed `indexer:` service is therefore
+    # superseded by the top-level `include:` block above (see slice
+    # 4b-plan comment). The four real services that emerge after
+    # `include:` is uncommented:
+    #   - registry-checkpoint (port 3003 → graphql)
+    #   - registry-postgres
+    #   - candles-checkpoint (port 3001/3004 → graphql)
+    #   - candles-postgres
+    #
+    # The api service (below) will need its env vars updated from
+    # `CHECKPOINT_URL` (a Phase 0 mistake — api never reads that)
+    # to `REGISTRY_URL` + `CANDLES_URL` (the real env names per
+    # `src/config/endpoints.js`) once the indexers are wired up
+    # via slice 4b-include + 4b-network-wire.
     # ────────────────────────────────────────────────────────────────
-    # indexer:
-    #     image: TODO  # decide between published Checkpoint image vs build-from-source
-    #     container_name: harness-indexer
-    #     networks: [harness-net]
-    #     depends_on:
-    #         anvil:
-    #             condition: service_healthy
-    #     environment:
-    #         RPC_URL: http://anvil:8545
-    #         START_BLOCK: ${FORK_BLOCK:-latest}
-    #         DATABASE_URL: sqlite:/data/checkpoint.db
-    #     volumes:
-    #         - ./.compose-volumes/indexer:/data
-    #     # ports:
-    #     #     - "3001:3001"   # GraphQL endpoint for direct dev access
 
     # ────────────────────────────────────────────────────────────────
     # Phase 2 / Phase 7 slice 4a: futarchy-api pointed at the local

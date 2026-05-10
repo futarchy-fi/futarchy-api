@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a** on api side (compose api block UNCOMMENTED; `docker compose config` parses cleanly with anvil + api). 4a-verify pending (needs running Docker daemon for `docker compose build api`). 30/30 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan** on api side (compose api block UNCOMMENTED; ADR-002 → Accepted; indexer `include:` block staged; slice 4b expanded into 4b-plan/4b-include/4b-network-wire/4b-api-env/4b-verify). 30/30 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -1196,6 +1196,73 @@ Phase 7 slice 4a summary (this iteration on the api side):
   4b + 4c + 4d + 4e). Next bot-doable: slice 4b (add Phase 3
   indexer service to compose) — bigger lift, decisions to make
   about Checkpoint image source.
+
+Phase 7 slice 4b-plan summary (this iteration on the api side):
+
+- **Big architectural finding pre-empts implementation**: the
+  Phase 0 indexer stub assumed ONE service `indexer` with
+  `image: TODO`. Reality, per ADR-002 + Phase 3
+  implementation, is TWO indexers (registry + candles), each
+  with its own postgres, each built from the sibling
+  `futarchy-indexers` clone (per-service compose files at
+  `futarchy-indexers/futarchy-complete/checkpoint/` and
+  `futarchy-indexers/proposals-candles/checkpoint/`). The
+  Phase 0 stub also used `CHECKPOINT_URL` as the api env var,
+  but `src/config/endpoints.js` actually reads `REGISTRY_URL` +
+  `CANDLES_URL` (third path/port bug surfaced by working
+  through compose).
+
+- **What landed (api side)**:
+  * `auto-qa/harness/docs/ADR-002-indexer-bootstrap.md` —
+    Status: Proposed → Accepted. Added a 2026-05 revisit note
+    explaining how the decision held up through Phase 3 and
+    what slice 4b-include/network-wire will do for Phase 7.
+  * `auto-qa/harness/docker-compose.yml` — Phase 0 indexer
+    stub block (the `image: TODO` single-service one)
+    rewritten to point at ADR-002 and explain the four real
+    services (registry-checkpoint + registry-postgres +
+    candles-checkpoint + candles-postgres). New top-level
+    `include:` block staged COMMENTED OUT, referencing both
+    sibling indexer compose files; uncommenting is slice
+    4b-include.
+  * `auto-qa/harness/CHECKLIST.md` — slice 4b expanded into
+    5 sub-slices: 4b-plan (DONE), 4b-include (uncomment),
+    4b-network-wire (RPC_URL override + bridge networks),
+    4b-api-env (CHECKPOINT_URL → REGISTRY_URL/CANDLES_URL +
+    re-add depends_on), 4b-verify (full validation).
+
+- **Why staged not active**: uncommenting `include:` brings in
+  the four indexer services AND their networks (registry-net,
+  candles-net) AND defaults RPC_URL to real Gnosis. Without
+  the network bridging + env override done atomically, the
+  indexers would either fail to reach anvil OR happily ingest
+  from real Gnosis (defeating the harness purpose). Slice
+  4b-include + 4b-network-wire are sequential, not parallel,
+  but doing them one at a time risks an intermediate broken
+  state. Slice 4b-plan stages the structure so the next two
+  slices have a clear target.
+
+- **Why ADR-002 wasn't already Accepted**: the ADR was written
+  during Phase 3 slice 1 with status "Proposed (Phase 3 slice
+  1)" assuming a future review session. That review never
+  happened, but the implementation went ahead and has 25
+  smoke tests behind it. Slice 4b-plan retroactively closes
+  the loop: Status → Accepted, with a revisit note pointing
+  at Phase 7 slice 4b's compose-include extension of the
+  same decision.
+
+- **Validation**: `docker compose config --quiet` succeeds;
+  `--services` still returns just `anvil` + `api` (the
+  include block is a YAML comment, no runtime delta). The
+  Phase 0 `indexer:` stub block was deleted in favor of a
+  redirect comment pointing at the include block + the
+  per-service compose files in `futarchy-indexers`.
+
+- Slice 4 progress: ~25% done (4a-prep + 4a + 4b-plan out of
+  ~12 sub-slices total — slice 4b alone now decomposes into
+  5). Next bot-doable: slice 4b-include (uncomment include
+  block + add cross-network bridging) AND/OR 4b-network-wire
+  (RPC_URL override).
 
 Slice 4c v3b summary (previous iteration on the interface side):
 

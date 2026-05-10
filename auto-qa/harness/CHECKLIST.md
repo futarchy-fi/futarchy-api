@@ -604,12 +604,50 @@ freshly-generated addresses as recipients; documented in
       ~50 MB node:22-alpine + run a multi-minute npm
       install; subsequent builds use the layer cache and
       complete in ~10s if package-lock.json hasn't changed.
-- [ ] **4b — add Phase 3 indexer service** to compose. Has to
-      decide between published Checkpoint image vs build-from-
-      source; the SQLite migration cold-start is the biggest
-      risk. (Per Phase 3 effort estimate: 3 wks; this
-      sub-slice is just the compose wiring, not the indexer
-      development itself.)
+- [x] **4b-plan — ADR-002 status update + indexer compose
+      strategy.** ADR-002 moved Proposed → Accepted (Phase 3
+      already implemented build-from-source via sibling
+      `futarchy-indexers` clone; 25 smoke tests pass on it).
+      The Phase 0 indexer stub assumed ONE service `indexer`
+      with `image: TODO`; reality per ADR-002 is TWO indexers
+      (registry + candles), each with its own postgres, each
+      built from `futarchy-indexers/*/checkpoint/`. Compose
+      stub block rewritten to reflect this. New top-level
+      `include:` block staged (commented out) referencing the
+      two sibling indexer compose files — uncommenting is
+      slice 4b-include.
+- [ ] **4b-include — uncomment the top-level `include:`
+      block.** Once uncommented, `docker compose config`
+      should report 6 services: anvil + api + registry-
+      checkpoint + registry-postgres + candles-checkpoint +
+      candles-postgres. Will need to be paired with 4b-network-
+      wire because the included files default RPC_URL to real
+      Gnosis (https://rpc.gnosischain.com) and put the
+      indexers on their own networks (registry-net, etc).
+- [ ] **4b-network-wire — point indexers at compose anvil
+      via env override + bridge networks.** The included
+      compose files use `${RPC_URL:-https://rpc.gnosischain.com}`
+      so an env file or compose-level `environment:` override
+      can redirect them at `http://anvil:8545`. Networks
+      need a decision: either add `networks: [registry-net,
+      harness-net]` to the registry-checkpoint service via a
+      `services:` override, or declare registry-net + candles-
+      net as `external:` and let the harness-net be the
+      bridge. Document the choice in PROGRESS.
+- [ ] **4b-api-env — update api service env from
+      `CHECKPOINT_URL` to `REGISTRY_URL` + `CANDLES_URL`.**
+      `src/config/endpoints.js` reads these two specific names
+      (NOT `CHECKPOINT_URL` — Phase 0 stub had it wrong, third
+      port/path bug surfaced by working through compose).
+      Re-add the depends_on on registry-checkpoint + candles-
+      checkpoint at the same time.
+- [ ] **4b-verify — full structural validation.**
+      `docker compose config --services` returns the 6 expected
+      services; `docker compose build api` still succeeds
+      (slice 4a-verify supersession). Daemon-required smoke:
+      `docker compose up -d anvil registry-checkpoint` and
+      probe `curl -s http://localhost:3003/graphql` for
+      `{__typename}`.
 - [ ] **4c — uncomment compose interface-dev block.** Mounts
       sibling interface clone at INTERFACE_PATH. Wires
       NEXT_PUBLIC_RPC_URL → http://anvil:8545 and

@@ -1,8 +1,22 @@
 # ADR-002: Local Checkpoint indexer bootstrap strategy
 
-**Status:** Proposed (Phase 3 slice 1)
-**Date:** 2026-05-10
-**Deciders:** TBD
+**Status:** Accepted (Phase 3 implemented; revisited in Phase 7 slice 4b)
+**Date:** 2026-05-10 (proposed); 2026-05-10 (accepted via Phase 3 implementation)
+**Deciders:** harness author (sole maintainer at this point)
+
+> **2026-05 revisit (Phase 7 slice 4b-plan)**: The decision held up
+> through Phase 3 implementation. `scripts/start-indexers.mjs` brings
+> up the per-indexer compose projects against a sibling
+> `futarchy-indexers` clone discovered by
+> `scripts/detect-indexers.mjs`. 25 smoke tests pass on this
+> infrastructure.
+>
+> Phase 7 slice 4 needs the SAME indexer source visible from the
+> harness's unified `docker-compose.yml`. Sub-slice 4b adds a
+> top-level `include:` of the sibling indexer compose files (the
+> "include" leg of this ADR's "include OR wrapper" decision).
+> Network wiring (RPC_URL → http://anvil:8545 instead of
+> http://host.docker.internal:8546) is its own sub-slice (4b-network-wire).
 
 ## Context
 
