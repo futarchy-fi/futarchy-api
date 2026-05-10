@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase **6 slice 1** landed on interface side (scenario format ADR + structure). Phase 5: 17/17 browser tests green; canonical DOM↔API invariant working end-to-end. Phase 6 slice 1: ADR-002 picks executable `.scenario.mjs` modules over JSON snapshot or full state dump. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 slices **1+2** landed on interface side. Slice 1: ADR-002 + scenarios/ structure. Slice 2: first scenario captured (`01-stale-price-shape.scenario.mjs` lifts slice 4c v3b's mocks + assertions into the Scenario format) + wrapper spec auto-discovers scenarios + mock helpers extracted to shared `fixtures/api-mocks.mjs`. **Phase 6's "first real bug shape replayable" gate is now met.** 18/18 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -803,10 +803,29 @@ Phase 6 slice 1 summary (this iteration on the interface side):
   `interface/auto-qa/harness/docs/ADR-002-scenario-format.md`;
   `auto-qa/harness/scenarios/` directory with README documenting
   format + naming convention (<NN>-<short-name>.scenario.mjs).
-- Slice 2 (next) lands the first scenario (likely the
-  stale-price-but-API-healthy class lifted from slice 4c v3b)
-  + a wrapper Playwright spec that auto-discovers + runs every
-  *.scenario.mjs file.
+- Slice 2 lands the first scenario + wrapper spec (see below).
+
+Phase 6 slice 2 summary (this iteration on the interface side):
+
+- Mock-helper extraction: makeGraphqlMockHandler,
+  makeCandlesMockHandler, fakeProposal, fakePoolBearingProposal,
+  PROBE_* constants moved out of flows/dom-api-invariant.spec.mjs
+  into a new shared module fixtures/api-mocks.mjs. Both the spec
+  AND scenario files now import from there.
+- First scenario captured:
+  scenarios/01-stale-price-shape.scenario.mjs lifts slice 4c v3b's
+  mocks + assertions into the Scenario format (ADR-002). Guards
+  the PR #64 stale-price-but-API-healthy bug shape.
+- Wrapper spec flows/scenarios.spec.mjs auto-discovers
+  scenarios/*.scenario.mjs, dynamically imports each, and emits
+  one Playwright test('<name> — <bugShape>') per scenario.
+  Default wallet stub + mocks + navigation + sequential
+  assertions baked in.
+- Validated end-to-end: 7 tests pass when run together (6
+  dom-api-invariant + 1 scenario). Phase 6's "first real bug
+  shape replayable" gate is met.
+- scenarios/README.md updated with a "Current scenarios" table.
+  Becomes the human-readable bug-shape catalog.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 

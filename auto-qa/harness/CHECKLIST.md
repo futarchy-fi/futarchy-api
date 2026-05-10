@@ -393,19 +393,36 @@ freshly-generated addresses as recipients; documented in
       `README.md` documenting the format + naming convention
       (`<NN>-<short-name>.scenario.mjs`).
 
-**Phase 6 slice 2 (first scenario + runner) — TODO:**
+**Phase 6 slice 2 (first scenario + runner) — DONE:**
 
-- [ ] First scenario captured: not the original "settled
-      historical proposal (block range + tx list + expected
-      end-state)" — that was full-stack-Option-D framing. Under
-      the chosen format (Option B), slice 2's first scenario is a
-      mocked-API + DOM-assertion bug-shape replay, e.g. the
-      stale-price-but-API-healthy class (PR #64 shape) lifted out
-      of `flows/dom-api-invariant.spec.mjs::4c v3b`.
-- [ ] Wrapper Playwright spec at `flows/scenarios.spec.mjs` that
-      auto-discovers every `*.scenario.mjs`, applies its mocks
-      before navigation, and runs its assertions. One Playwright
-      `test()` per scenario, reported with the scenario's `name`.
+- [x] Mock-helper extraction: `makeGraphqlMockHandler`,
+      `makeCandlesMockHandler`, `fakeProposal`,
+      `fakePoolBearingProposal`, and the PROBE_* constants moved
+      from `flows/dom-api-invariant.spec.mjs` into a new shared
+      module `fixtures/api-mocks.mjs`. The original spec file now
+      imports from there. Both `dom-api-invariant.spec.mjs` AND
+      scenario files reuse the same fixture vocabulary.
+- [x] First scenario captured —
+      `scenarios/01-stale-price-shape.scenario.mjs` — lifts
+      slice 4c v3b's mocks + assertions into the Scenario format
+      defined by ADR-002. Guards the PR #64 stale-price-but-API-
+      healthy class (mocked candles GraphQL → "0.4200 SDAI" via
+      EventHighlightCard's prefetched-price short-circuit).
+- [x] Wrapper spec `flows/scenarios.spec.mjs` auto-discovers
+      every `*.scenario.mjs`, dynamically imports each, and emits
+      one Playwright `test()` per scenario titled
+      "<name> — <bugShape>". Default wallet stub installed for
+      each; mocks applied via `context.route`; assertions run
+      sequentially. Top-level `await` for the imports so
+      Playwright sees the full test list at collection time.
+- [x] `scenarios/README.md` updated with a "Current scenarios"
+      table indexing the captured scenarios.
+
+**Phase 6 slice 3 (catalog generator) — TODO:**
+
+- [ ] `scenarios:catalog` script that emits a `SCENARIOS.md`
+      index from each scenario's `bugShape`. Worth doing once we
+      have ≥3 scenarios.
 
 **Phase 6 slice 3 (replay framework / catalog) — TODO:**
 
