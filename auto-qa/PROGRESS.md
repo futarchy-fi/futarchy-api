@@ -9,11 +9,12 @@ is never modified — only tests on the `auto-qa` branch.
 | Field | Value |
 |---|---|
 | Branch | `auto-qa` (off `origin/main`) |
-| Iterations completed | 5 |
+| Iterations completed | 6 |
 | PRs catalogued | 9 / 9 (full history) |
 | PRs classified | 9 |
-| Tests added | 16 (2 path-prefix + 7 passthrough-contract + 4 unified-chart + 3 multi-proposal-smoke — all passing) |
+| Tests added | 19 (2 path-prefix + 7 passthrough-contract + 4 unified-chart + 3 multi-proposal-smoke + 3 spot-candles — 18 passing, 1 skipped) |
 | PRs covered by tests | **7 / 9** (#1, #4, #5, #6, #7, #8, #9 — all bug-fix PRs) |
+| API surfaces with smoke tests | **3 / 3** (`/api/v2/.../chart`, `/candles/graphql`, `/api/v1/spot-candles`) |
 | Data-quality issues surfaced | 2 proposals (TSLA Mega Package, CIP-82) return zero prices + "TOKEN" fallback symbol — see below |
 | Test runner | `node --test` via `npm run auto-qa:test` |
 | Tooling backlog | see below |
