@@ -470,10 +470,31 @@ freshly-generated addresses as recipients; documented in
       hits the SAME `getSubgraphEndpoint` → CANDLES URL as the
       bulk prefetcher, so a CANDLES outage takes BOTH layers down
       at once. Test: 1.4s.
-- [ ] WALLET RPC failure (assert wallet section shows error,
-      not an undefined account)
-- [ ] Mid-flight failure (succeeds first request, fails second
-      — pattern useful for per-call retry probes)
+- [x] CANDLES partial success — `scenarios/04-candles-partial.scenario.mjs`
+      mocks REGISTRY with TWO events (different pool addresses);
+      CANDLES returns prices for ONE event's pools, omits the other.
+      Asserts the priced card renders "0.4200 SDAI" while the
+      unpriced card falls back to "0.00 SDAI" AND both cards
+      remain visible. Bug-shapes guarded: one missing price
+      corrupting all, card disappearing when its price is missing,
+      prices swapping between cards. Test: 1.4s.
+- [~] WALLET RPC failure — investigated and **deprioritized**:
+      the wallet stub handles `eth_chainId` / `eth_accounts` /
+      `wallet_switchEthereumChain` LOCALLY (not via
+      `rpcPassthrough`), so wagmi/RainbowKit's auto-probe surface
+      doesn't actually hit `rpcUrl`. On `/companies` (no swap, no
+      message-sign) the wallet's RPC URL has near-zero blast
+      radius. Revisit when a scenario needs to drive a real swap
+      where the wallet's RPC failure matters.
+- [~] Mid-flight failure — investigated and **deprioritized for
+      `/companies`**: traced through `useAggregatorCompanies` +
+      `CompaniesPage.jsx` (the consumer drops the hook's `error`
+      field) — partial-success on REGISTRY's three-query pipeline
+      lands at the same DOM state as full failure ("No
+      organizations found"). Indistinguishable from scenario 02;
+      no new bug shape captured. Re-evaluate when a scenario
+      reaches a page that surfaces partial loading states (e.g.
+      a market detail page).
 
 **Phase 7 slice 3 — TODO (CI integration):**
 

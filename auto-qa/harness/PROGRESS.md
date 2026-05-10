@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase **6 fully done** (slice 3 catalog generator landed: `scripts/scenarios-catalog.mjs` auto-emits `scenarios/SCENARIOS.md` from each scenario's `bugShape`; 3 scenarios indexed) + Phase 7 slices 1+2 (CANDLES branch) landed on interface side. 20/20 browser tests green (3 scenarios). Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 (3 chaos scenarios: registry-down, candles-down, **candles-partial**) landed on interface side. Latest: `04-candles-partial.scenario.mjs` mocks 2 events but CANDLES returns prices for only 1 — asserts the priced card renders "0.4200 SDAI" while the unpriced card falls back to "0.00 SDAI". 21/21 browser tests green (4 scenarios + 17 prior). Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -897,6 +897,32 @@ Phase 6 slice 3 summary (this iteration on the interface side):
 - Phase 6 status: COMPLETE. All three CHECKLIST gates met
   (format decided, first scenario captured, wrapper-spec replay
   + catalog generator both in place).
+
+Phase 7 slice 2 (partial branch) summary (this iteration on the interface side):
+
+- 04-candles-partial.scenario.mjs: 2 events in REGISTRY, CANDLES
+  returns prices for only ONE. Asserts the priced card renders
+  "0.4200 SDAI" while the unpriced card falls back to "0.00 SDAI"
+  AND both cards remain visible. The "API is up but my data
+  isn't in the answer" shape — distinct from 03's full outage.
+- Bug-shapes guarded: missing price corrupting all cards, card
+  vanishing when its price is missing, formatter crashing on
+  null prices, prices swapping between cards.
+- Two slice-2 sub-slices DEPRIORITIZED after investigation:
+  (a) WALLET RPC failure has near-zero blast radius on
+  /companies (wallet stub handles auto-probe methods locally,
+  not via rpcPassthrough); (b) mid-flight failure on /companies
+  is DOM-indistinguishable from full failure (consumer drops
+  the hook's error field). Both worth revisiting on a market
+  detail page that surfaces partial loading states.
+- 04 alone: 1.4s; all 4 scenarios together: 20.6s wall-clock
+  with cold compile. UI smoke: 30 pass + 0 skip.
+- SCENARIOS.md regenerated cleanly via the slice 3 script, now
+  indexes 4 scenarios.
+- Transient gotcha worth noting: first run failed with
+  "Playwright Test did not expect test.describe()" — turned out
+  to be a stale dev-server / test-results interaction, fixed by
+  killing port 3000 and clearing test-results/.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 
