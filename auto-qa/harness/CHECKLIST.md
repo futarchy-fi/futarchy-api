@@ -312,13 +312,24 @@ freshly-generated addresses as recipients; documented in
       light up here. Test: 3.3s; wall-clock with warm dev server:
       12.6s. **The canonical Phase 5 invariant mechanism (mock API →
       assert DOM reflects it) is now wired and working.**
-- [ ] Sub-slice: mock a NUMERIC value (e.g., a pool spot price) and
-      assert the DOM cell shows the formatted version. Picks up the
-      "price" half of the slice 4 description that v1 deferred so we
-      could land the mechanism cleanly. Will likely need to pick a
-      pool/price endpoint (usePoolData, ChartPage, candle aggregates)
-      and trace the formatter (decimals/currency/rounding) to know
-      what string to assert against.
+- [x] Sub-slice 4b — first NUMERIC value through the mock →
+      DOM-cell pipeline. Mock the `proposalentities` GraphQL response
+      with 8 active + 3 hidden proposals; assert the OrgRow's active
+      cell shows "8" and total cell shows "11". Verifies that the
+      visibility-filter logic in `transformOrgToCard` (drops
+      archived from both, drops hidden from active) maps the API
+      payload to the rendered counts correctly. Test: 2.3s; both
+      slice 4 tests together: 15s wall-clock warm.
+- [ ] Sub-slice 4c — currency-formatted price (e.g., usePoolData /
+      candle aggregates → `$0.42` style format). 4b proved integer
+      counts; 4c should pin a value like `0.42424242` and assert the
+      DOM shows the formatter's exact rendering ("$0.42" or
+      "0.4242" or whatever the real formatter does).
+- [ ] Sub-slice 4d — cross-protocol price reconciliation
+      (Algebra / CoW / Sushi) mock — when multiple sources should
+      agree, mock each to slightly-different values and assert the
+      UI flags the divergence (or picks the right canonical
+      source).
 - [ ] Sub-slice: cross-protocol price reconciliation (Algebra / CoW /
       Sushi) mock — when multiple sources should agree, mock each to
       slightly-different values and assert the UI flags the

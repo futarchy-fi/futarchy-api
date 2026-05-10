@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 slices 1+2+3+4 (mechanism) landed on interface side. Slices 1-3 prior. Slice 4 v1: DOM↔API invariant mechanism — `flows/dom-api-invariant.spec.mjs` mocks GraphQL POSTs to `api.futarchy.fi/registry/graphql`, returns probe org "HARNESS-PROBE-ORG-001", and asserts the probe renders in the DOM (in two independent rendering paths). 12/12 browser tests green. Numeric-price sub-slices still ahead. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 slices 1+2+3+4a+4b landed on interface side. Slices 1-3 prior. Slice 4a: DOM↔API mechanism (mock GraphQL → assert probe org name renders in DOM). Slice 4b: first NUMERIC value through the pipeline — mock 8 active + 3 hidden proposals → assert OrgRow cells show "8" / "11" (verifies `transformOrgToCard` visibility-filter logic). 13/13 browser tests green. Currency-formatted price + cross-protocol reconciliation still ahead. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -775,10 +775,31 @@ Summary of slice 1:
     eth_blockNumber forward test from a real http server to
     `context.route(...)` interception (chromium drops fetches from
     `about:blank` to local addresses regardless of CORS headers)
-- Slice 4 sub-slices remaining: 4b (numeric pool price mock +
-  formatted DOM cell match), 4c (cross-protocol reconciliation).
+- Slice 4 sub-slices remaining: 4c (currency-formatted price
+  with formatter assertion), 4d (cross-protocol reconciliation).
 
-Slice 4 v1 summary (this iteration on the interface side):
+Slice 4b summary (this iteration on the interface side):
+
+- Same `flows/dom-api-invariant.spec.mjs`, second test added.
+  Mock 8 + 3 = 11 proposals (the 3 with
+  `metadata.visibility: 'hidden'`); assert the OrgRow's Active
+  cell shows "8" and the Total cell shows "11". Verifies that
+  the visibility filter in `transformOrgToCard` (drops archived
+  from both, drops hidden from active) maps the GraphQL payload
+  to the rendered counts correctly.
+- Refactor: `makeGraphqlMockHandler` now takes a `proposals`
+  parameter so multiple tests share the same dispatch logic
+  with different stubbed payloads. New `fakeProposal(idSuffix,
+  metadataExtra)` helper builds a stub row in the shape
+  useAggregatorCompanies expects.
+- Bug-shape this catches: a regression in the visibility filter
+  (e.g. flipping `!hidden` predicate, or counting resolved
+  proposals as active) would make the active cell show "11"
+  instead of "8". A `parseMetadata` regression would zero both
+  cells.
+- 1 test, 2.3s. UI-side smoke: 22 pass + 0 skip.
+
+Slice 4 v1 / 4a summary (previous iteration on the interface side):
 
 - New file `flows/dom-api-invariant.spec.mjs`. The canonical
   Phase 5 invariant **mechanism** is now wired: mock the
