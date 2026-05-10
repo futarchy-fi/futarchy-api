@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 18 invariants — 5 api-internal + 10 indexer + 3 chain-layer; 39 smoke tests green). 30/30 browser tests green. Phase 3 25+39 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 20 invariants — 5 api-internal + 12 indexer + 3 chain-layer; 45 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2405,6 +2405,81 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   Candle-vs-Swap math, chartShape api-vs-indexer shape
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
+
+Phase 7 slice 4d-scenarios-more (swapAmountsPositive + swapTimestampSensible) summary (this iteration on the api side):
+
+- **Data-shape pattern extends from Candle to Swap**.
+  Last iteration added `candleOHLCOrdering` +
+  `candleVolumesNonNegative` (validating Candle field
+  values). This iteration adds the analogous probes for
+  the Swap entity:
+  * `swapAmountsPositive` — `amountIn > 0` AND
+    `amountOut > 0`
+  * `swapTimestampSensible` — timestamp ∈ [2020-01-01,
+    now + 1 day]
+
+- **Bug classes caught (distinct from candle-shape probes)**:
+  * `swapAmountsPositive` failure: Algebra's Swap event
+    has SIGNED amount0/amount1 (the "from" token is
+    negative by convention). The indexer's handler must
+    derive UNSIGNED amountIn / amountOut by
+    Math.abs()-ing the signed value based on direction.
+    If the handler assigns the signed amount directly to
+    amountIn/Out, one of them is ≤ 0. Catches this
+    per-swap event-decoder bug — distinct from the
+    candle-volume aggregator bug catch.
+  * `swapTimestampSensible` failure: indexer reads
+    timestamp from block context. If the event handler
+    decoder reads the wrong topic slot (off-by-one in
+    the decoder), timestamp lands at 0 or some massive
+    garbage value pulled from a hash slot. Sane range:
+    2020-01-01 (1577836800) to now + 1 day (clock skew).
+
+- **Vacuously true when no swaps**: same pattern as the
+  candle-shape probes. Cleanly separates "no swap data"
+  (candlesHasSwaps's concern) from "swap data is wrong".
+
+- **What was added to invariants.mjs**:
+  * `swapAmountsPositive` — query latest swap (orderBy
+    timestamp desc), parseFloat, check both > 0
+  * `swapTimestampSensible` — query latest swap, validate
+    timestamp in [MIN_TS, MAX_TS], emit ISO datetime in
+    pass message for human-readable output
+
+- **Smoke fixture extension**: 3 new options
+  (`latestSwapAmountIn/AmountOut/Timestamp`); first swap
+  in the response array carries the field values
+  (subsequent rows just have id). Default timestamp is
+  "1 hour ago" so it's always in the sane range without
+  hardcoding.
+
+- **Smoke test coverage** — 6 new tests:
+  * swapAmountsPositive happy
+  * failure: amountOut ≤ 0 (signed-amount handler bug)
+  * vacuously true when 0 swaps
+  * swapTimestampSensible happy (recent timestamp)
+  * failure: timestamp = 0 (uninitialized — verifies
+    swapAmountsPositive STILL passes; distinguishes
+    timestamp bug from amount bug)
+  * failure: timestamp far future (garbage from wrong
+    topic slot)
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 45/45 pass (414ms — was
+    39/39)
+  * `npm run scenarios:dry` → exits 0; lists 20 invariants
+    in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: ~91% (21 of ~23 sub-slices total).
+  20 invariants now: 5 api-internal + 12 indexer (2
+  liveness + 6 data-aware coverage + 4 data-shape) + 3
+  chain-layer. Both Candle and Swap entities have
+  data-shape coverage (2 invariants each). Pool entity
+  could get the same treatment in a future iteration
+  (sane addresses, valid liquidity), but the indexer
+  produces minimal Pool data so the value-add is lower.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 

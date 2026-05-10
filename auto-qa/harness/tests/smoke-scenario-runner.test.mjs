@@ -64,6 +64,12 @@ function startFixture({
     latestCandleClose = '0.48',
     latestCandleVolumeToken0 = '100.0',
     latestCandleVolumeToken1 = '50.0',
+    // Latest-swap field values for amounts + timestamp invariants.
+    // Default values satisfy both; override to simulate event-decoder
+    // bugs.
+    latestSwapAmountIn = '10.5',
+    latestSwapAmountOut = '4.2',
+    latestSwapTimestamp = String(Math.floor(Date.now() / 1000) - 3600),  // 1h ago
     // Set to true to make the direct-indexer paths return 502, simulating
     // an indexer that's down even though the api passthrough still works
     // (e.g., api is caching).
@@ -135,8 +141,15 @@ function startFixture({
                     response.setHeader('content-type', 'application/json');
                     const pools = Array.from({ length: candlesPoolsCount },
                         (_, i) => ({ id: `mock-pool-${i}` }));
-                    const swaps = Array.from({ length: candlesSwapsCount },
-                        (_, i) => ({ id: `mock-swap-${i}` }));
+                    const swaps = Array.from({ length: candlesSwapsCount }, (_, i) => {
+                        const row = { id: `mock-swap-${i}` };
+                        if (i === 0) {
+                            row.amountIn = latestSwapAmountIn;
+                            row.amountOut = latestSwapAmountOut;
+                            row.timestamp = Number(latestSwapTimestamp);
+                        }
+                        return row;
+                    });
                     // Latest-candle fields (OHLC + volumes) populated on
                     // the FIRST element so candleOHLCOrdering and
                     // candleVolumesNonNegative can probe a real-shape
@@ -667,6 +680,88 @@ test('runAllInvariants — failure: candle volume0 < 0 (signed-amount aggregator
     }
 });
 
+test('runAllInvariants — swapAmountsPositive happy', async () => {
+    const fx = await startFixture();  // defaults: amountIn=10.5, amountOut=4.2
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'swapAmountsPositive');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /amountIn=10\.5, amountOut=4\.2 both > 0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: swap amountOut ≤ 0 (signed-amount handler bug)', async () => {
+    const fx = await startFixture({ latestSwapAmountOut: '-2.5' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'swapAmountsPositive');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /amountOut=-2\.5 ≤ 0|signed-amount handler bug/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — swapAmountsPositive vacuously true when no swaps', async () => {
+    const fx = await startFixture({ candlesSwapsCount: 0 });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'swapAmountsPositive');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /vacuously true/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — swapTimestampSensible happy: recent timestamp', async () => {
+    const fx = await startFixture();  // default: 1h ago
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'swapTimestampSensible');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /timestamp=\d+/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: swap timestamp = 0 (uninitialized)', async () => {
+    const fx = await startFixture({ latestSwapTimestamp: '0' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'swapTimestampSensible');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /timestamp=0 < 1577836800|uninitialized or wrong topic slot/);
+        // Other swap invariant still passes (only timestamp is broken)
+        const amounts = results.find((r) => r.name === 'swapAmountsPositive');
+        assert.equal(amounts.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: swap timestamp far future (garbage from wrong topic)', async () => {
+    // 100 years in the future — clearly garbage
+    const farFuture = Math.floor(Date.now() / 1000) + 100 * 365 * 86400;
+    const fx = await startFixture({ latestSwapTimestamp: String(farFuture) });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'swapTimestampSensible');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /likely garbage from wrong topic slot/);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('runAllInvariants — candlesHasPools happy: 1 pool indexed', async () => {
     const fx = await startFixture();  // default candlesPoolsCount=1
     try {
@@ -781,6 +876,8 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /candlesHasCandles/);
     assert.match(r.stdout, /candleOHLCOrdering/);
     assert.match(r.stdout, /candleVolumesNonNegative/);
+    assert.match(r.stdout, /swapAmountsPositive/);
+    assert.match(r.stdout, /swapTimestampSensible/);
     assert.match(r.stdout, /anvilBlockNumber/);
     assert.match(r.stdout, /anvilChainId/);
     assert.match(r.stdout, /rateSanity/);

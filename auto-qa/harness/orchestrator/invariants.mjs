@@ -432,6 +432,87 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'swapAmountsPositive',
+        description: 'latest swap has amountIn > 0 AND amountOut > 0 (vacuously true when no swaps)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Algebra's Swap event has SIGNED amount0/amount1 (the
+            // "from" token's amount is negative by convention). The
+            // indexer's handler should derive UNSIGNED amountIn /
+            // amountOut by taking |amount0| or |amount1| based on
+            // direction. If the handler assigns the signed amount
+            // directly to amountIn/Out, one of them is negative or
+            // zero — distinct bug class from candleVolumesNonNegative
+            // (which catches an aggregator bug; this catches a
+            // per-swap event-decoder bug).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ swaps(first: 1, orderBy: timestamp, orderDirection: desc) { id amountIn amountOut } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.swaps)) {
+                throw new Error(`unexpected swaps response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.swaps.length === 0) {
+                return { ok: true, detail: 'no swaps to check (vacuously true)' };
+            }
+            const s = j.data.swaps[0];
+            const ain = parseFloat(s.amountIn);
+            const aout = parseFloat(s.amountOut);
+            for (const [name, val] of [['amountIn', ain], ['amountOut', aout]]) {
+                if (!Number.isFinite(val)) {
+                    throw new Error(`swap ${s.id}: ${name}="${s[name]}" is not a finite number`);
+                }
+                if (val <= 0) {
+                    throw new Error(`swap ${s.id}: ${name}=${val} ≤ 0 (signed-amount handler bug)`);
+                }
+            }
+            return { ok: true, detail: `swap ${s.id}: amountIn=${ain}, amountOut=${aout} both > 0` };
+        },
+    },
+    {
+        name: 'swapTimestampSensible',
+        description: 'latest swap timestamp is in a sane range (catches event-topic-decoder bugs)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // The indexer reads timestamp from the block context. If
+            // the event handler reads the wrong topic slot (off-by-one
+            // in the decoder), timestamp lands at 0 or some massive
+            // value pulled from a hash. Sane range: between
+            // 2020-01-01 and now + 1 day clock skew.
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ swaps(first: 1, orderBy: timestamp, orderDirection: desc) { id timestamp } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.swaps)) {
+                throw new Error(`unexpected swaps response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.swaps.length === 0) {
+                return { ok: true, detail: 'no swaps to check (vacuously true)' };
+            }
+            const s = j.data.swaps[0];
+            const t = Number(s.timestamp);
+            if (!Number.isFinite(t)) {
+                throw new Error(`swap ${s.id}: timestamp="${s.timestamp}" is not a finite number`);
+            }
+            const MIN_TS = 1_577_836_800;             // 2020-01-01 UTC
+            const MAX_TS = Math.floor(Date.now() / 1000) + 86_400;  // now + 1 day clock skew
+            if (t < MIN_TS) {
+                throw new Error(`swap ${s.id}: timestamp=${t} < ${MIN_TS} (2020-01-01 — likely uninitialized or wrong topic slot)`);
+            }
+            if (t > MAX_TS) {
+                throw new Error(`swap ${s.id}: timestamp=${t} > ${MAX_TS} (now + 1d — likely garbage from wrong topic slot)`);
+            }
+            const iso = new Date(t * 1000).toISOString();
+            return { ok: true, detail: `swap ${s.id}: timestamp=${t} (${iso})` };
+        },
+    },
+    {
         name: 'candleVolumesNonNegative',
         description: 'latest candle has volumeToken0 ≥ 0 AND volumeToken1 ≥ 0 (vacuously true when no candles)',
         layer: 'orchestrator↔candles',
