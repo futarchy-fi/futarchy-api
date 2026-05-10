@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 slices 1+2+3a landed on interface side. Slice 1: browser-injection smoke. Slice 2: in-page signing via `setupSigningTunnel` exposeBinding. Slice 3a: futarchy Next.js dev server in the loop — `flows/app-discovery.spec.mjs` confirms `window.ethereum.isHarness` is observable in the real app context (cold compile ~17s, test ~1.7s). 10/10 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 slices 1+2+3 landed on interface side. Slice 1: browser-injection smoke. Slice 2: in-page signing via `setupSigningTunnel` exposeBinding. Slice 3: futarchy Next.js dev server in the loop + RainbowKit Connect modal lists "Futarchy Harness Wallet" (EIP-6963 discovery confirmed end-to-end against the real app). 11/11 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -775,26 +775,29 @@ Summary of slice 1:
     eth_blockNumber forward test from a real http server to
     `context.route(...)` interception (chromium drops fetches from
     `about:blank` to local addresses regardless of CORS headers)
-- Slices 3b (RainbowKit Connect modal assertion) and 4 (DOM↔API
-  price invariant) still TODO
+- Slice 4 (DOM↔API price invariant — the canonical Phase 5
+  deliverable) is the remaining work.
 
-Slice 3a summary (this iteration on the interface side):
+Slice 3b summary (this iteration on the interface side):
 
-- `flows/app-discovery.spec.mjs` — first slice that drops
-  `HARNESS_NO_WEBSERVER` and lets Playwright launch the futarchy
-  Next.js dev server. Single test: navigate to `/`, assert
-  `window.ethereum.{isMetaMask,isHarness,selectedAddress}` are
-  set in the real app's page context. Cold compile + test:
-  ~20s wall-clock.
-- Bug fix: slice 1's webServer block had `npm --prefix ../../..`
-  (resolved to /Users/kas/, not the interface root). Corrected
-  to `../../`. Bumped webServer timeout to 180s for cold compile.
-- New scripts: `ui:full` / `ui:full:ui` in harness;
-  `auto-qa:e2e:ui:full` / `auto-qa:e2e:ui:full:ui` at root.
-- Knob: `HARNESS_FRONTEND_RPC_URL` overrides what the dev
-  server's NEXT_PUBLIC_RPC_URL points at. This iteration used
-  `https://rpc.gnosischain.com` so the app could hydrate cleanly
-  without needing a local anvil.
+- New test in `flows/app-discovery.spec.mjs`:
+    1. Install wallet stub (no signing tunnel — modal-listing
+       doesn't need signing)
+    2. Navigate to `/companies` (Header runs in `app` config
+       there; `/` is landing-only with just "Launch App")
+    3. Click the "Connect Wallet" button (text-based locator;
+       `.first()` because Header renders both desktop + mobile)
+    4. Assert "Futarchy Harness Wallet" appears in the
+       RainbowKit modal — proves the EIP-6963 announce reaches
+       RainbowKit's discovery against the REAL app, not just
+       a synthetic listener as in slice 1's EIP-6963 test
+- Test passed first try; both 3a + 3b run in 14.3s wall-clock
+  on a warm dev server (3.4s for 3b alone).
+- Stretch deferred: clicking the wallet to actually connect.
+  Skipped because post-click selectors are RainbowKit-version-
+  sensitive; revisit during Phase 6 scenario work.
+
+Slice 3a summary (previous iteration on the interface side):
 
 Slice 2 summary (previous iteration on the interface side):
 

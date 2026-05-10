@@ -264,7 +264,7 @@ freshly-generated addresses as recipients; documented in
            auto-mine-settles race), assert status=0x1, assert
            recipient balance == 0.5 XDAI
 
-**Phase 5 slice 3 (futarchy app in the loop) — PARTIAL:**
+**Phase 5 slice 3 (futarchy app in the loop) — DONE:**
 
 - [x] First test that drops `HARNESS_NO_WEBSERVER` and lets
       Playwright launch the Next.js dev server. Lives in
@@ -281,11 +281,22 @@ freshly-generated addresses as recipients; documented in
       to `/Users/kas/`, NOT the interface root. Corrected to
       `../../`. webServer timeout bumped from 120s to 180s for
       cold compile.
-- [ ] Confirm Wagmi/RainbowKit auto-discover the harness wallet
-      via the EIP-6963 announcement and "Connect" surfaces it.
-      Deferred to a follow-up sub-slice (3b): open the Connect
-      modal, assert "Futarchy Harness Wallet" appears in the list,
-      click it, assert successful connect.
+- [x] Confirm Wagmi/RainbowKit auto-discover the harness wallet
+      via the EIP-6963 announcement (slice 3b). Test: navigate
+      to `/companies` (Header in `app` config; landing only shows
+      "Launch App"), click the "Connect Wallet" button, assert
+      "Futarchy Harness Wallet" is visible in the RainbowKit
+      modal's wallet list. Validated end-to-end — the EIP-6963
+      announce reaches RainbowKit's discovery and our wallet
+      appears in the modal. Modal-open + wallet-list-render took
+      ~3.4s; full file (slice 3a + 3b) wall-clock ~14s on a
+      warm dev server.
+- [ ] Stretch: click "Futarchy Harness Wallet" in the modal,
+      assert successful connect (account address visible in the
+      header). Deferred — requires modal selectors that may be
+      RainbowKit-version-sensitive; revisit during Phase 6
+      scenario work when we actually need a connected wallet
+      to drive a swap.
 
 **Phase 5 slice 4 (DOM↔API invariant) — TODO:**
 
