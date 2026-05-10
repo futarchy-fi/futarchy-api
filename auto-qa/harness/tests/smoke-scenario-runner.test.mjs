@@ -92,6 +92,13 @@ function startFixture({
     // mock-pool-0. Tests use an array to simulate orphan-candle
     // bugs from broken period-aggregator FK derivation.
     candlePoolIds = null,
+    // Per-organization aggregator FK for
+    // organizationAggregatorReferentialIntegrity (slice 4d-
+    // scenarios-more). Indexed by organization position; null
+    // means every org defaults to mock-agg-0 (a real aggregator
+    // from buildRegistry). Tests pass an explicit array to
+    // simulate orphan-org bugs.
+    organizationAggregatorIds = null,
     // Set to true to make the direct-indexer paths return 502, simulating
     // an indexer that's down even though the api passthrough still works
     // (e.g., api is caching).
@@ -152,8 +159,16 @@ function startFixture({
     const buildRegistry = () => ({
         proposalEntities: Array.from({ length: registryProposalEntitiesCount },
             (_, i) => ({ id: `mock-prop-entity-${i}` })),
-        organizations: Array.from({ length: registryOrganizationsCount },
-            (_, i) => ({ id: `mock-org-${i}` })),
+        organizations: Array.from({ length: registryOrganizationsCount }, (_, i) => {
+            const row = { id: `mock-org-${i}` };
+            // FK to an Aggregator. Default mock-agg-0 (the first
+            // aggregator from buildRegistry, present when
+            // registryAggregatorsCount > 0). Tests override
+            // organizationAggregatorIds[i] to simulate orphan-org bugs.
+            const aggId = organizationAggregatorIds ? organizationAggregatorIds[i] : 'mock-agg-0';
+            row.aggregator = { id: aggId };
+            return row;
+        }),
         aggregators: Array.from({ length: registryAggregatorsCount },
             (_, i) => ({ id: `mock-agg-${i}` })),
     });
@@ -1331,6 +1346,76 @@ test('runAllInvariants — candleSwapTimeWindowConsistency vacuous: no candles',
     }
 });
 
+test('runAllInvariants — organizationAggregatorReferentialIntegrity happy: org references existing aggregator', async () => {
+    // Defaults: 1 aggregator (mock-agg-0), 1 organization defaulting
+    // to aggregator.id="mock-agg-0". FK intact.
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'organizationAggregatorReferentialIntegrity');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /organization mock-org-0 → aggregator mock-agg-0 \(FK intact/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — organizationAggregatorReferentialIntegrity vacuously true with no organizations', async () => {
+    const fx = await startFixture({ registryOrganizationsCount: 0 });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'organizationAggregatorReferentialIntegrity');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /no organizations to check \(vacuously true\)/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: organizationAggregatorReferentialIntegrity orphan org (FK derivation bug)', async () => {
+    // Org references a nonexistent aggregator — org-event handler
+    // computed FK wrong.
+    const fx = await startFixture({
+        registryAggregatorsCount: 2,
+        organizationAggregatorIds: ['nonexistent-aggregator-xyz'],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'organizationAggregatorReferentialIntegrity');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /references aggregator nonexistent-aggregator-xyz but no such aggregator|orphan org/);
+        // Existence checks still pass — the entities exist
+        // independently; only their relationship is broken
+        const orgs = results.find((r) => r.name === 'registryHasOrganizations');
+        assert.equal(orgs.ok, true);
+        const aggs = results.find((r) => r.name === 'registryHasAggregators');
+        assert.equal(aggs.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: organizationAggregatorReferentialIntegrity all aggregators deleted (orphan-storm)', async () => {
+    // Aggregators wiped (e.g., schema migration that dropped
+    // Aggregator rows without GC-ing Organizations).
+    const fx = await startFixture({
+        registryAggregatorsCount: 0,
+        registryOrganizationsCount: 1,
+        organizationAggregatorIds: ['mock-agg-0'],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'organizationAggregatorReferentialIntegrity');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /references aggregator mock-agg-0 but no such aggregator/);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('runAllInvariants — failure: candleSwapTimeWindowConsistency candle in future relative to latest swap (clock-skew bug)', async () => {
     // Candle exists for a period AHEAD of any observed swap. Bug
     // shape: aggregator's clock source skewed forward, OR indexer
@@ -1482,6 +1567,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /swapPoolReferentialIntegrity/);
     assert.match(r.stdout, /candlePoolReferentialIntegrity/);
     assert.match(r.stdout, /candleSwapTimeWindowConsistency/);
+    assert.match(r.stdout, /organizationAggregatorReferentialIntegrity/);
     assert.match(r.stdout, /anvilBlockNumber/);
     assert.match(r.stdout, /anvilChainId/);
     assert.match(r.stdout, /rateSanity/);

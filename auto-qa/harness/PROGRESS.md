@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 27 invariants — 5 api-internal + 19 indexer + 3 chain-layer; first cross-entity TIME-COHERENCE check landed; 73 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 28 invariants — 5 api-internal + 20 indexer + 3 chain-layer; cross-entity FK pattern now extends to registry's Organization → Aggregator link; 77 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,77 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (candleSwapTimeWindowConsistency) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (organizationAggregatorReferentialIntegrity) summary (this iteration on the api side):
+
+- **Cross-entity FK pattern now extends to the registry
+  indexer's FK chain**. Previous FK checks
+  (swapPoolReferentialIntegrity,
+  candlePoolReferentialIntegrity) only covered the
+  candles indexer's swap/candle → pool relationships.
+  This iteration ships the registry-side analog:
+  * `organizationAggregatorReferentialIntegrity` —
+    single GraphQL query reads `organizations(first: 1)
+    { id aggregator { id } } aggregators(first: 50)
+    { id }`; asserts `org.aggregator.id ∈
+    Set(aggregators.map(a => a.id))`.
+
+- **Pins the upper link of the registry FK chain**:
+  the registry has Aggregator ← Organization ←
+  ProposalEntity. This invariant pins the
+  Organization → Aggregator link; the remaining
+  ProposalEntity → Organization link is the natural
+  next iteration (parallel pattern).
+
+- **Bug shapes caught (registry-specific)**:
+  * Org-event handler derives aggregator id wrong
+    (wrong topic slot, mangled-by-transform address)
+  * Aggregator entity deleted/superseded but
+    organizations weren't garbage-collected (orphan
+    orgs)
+  * Schema migration that renamed Aggregator without
+    updating Organization's foreign key
+  * Handler dropped aggregator FK (returns null)
+
+- **Fixture extension**:
+  * Each organization row now gets `aggregator: {id}`
+    field.
+  * Default: `mock-agg-0` (matches buildRegistry's
+    first aggregator, FK intact in happy path).
+  * New `organizationAggregatorIds` array option for
+    tests to override per-org FK and simulate
+    orphan-org bugs (mirrors swapPoolIds /
+    candlePoolIds from prior slices).
+
+- **Smoke test coverage** — 4 new tests:
+  * happy: org references existing aggregator
+  * vacuously true with 0 organizations
+  * failure: orphan org from FK derivation bug;
+    verifies existence checks (registryHasOrganizations,
+    registryHasAggregators) STILL pass — distinguishes
+    "entities exist independently" from "entities
+    consistent with each other"
+  * failure: orphan-storm from all aggregators deleted
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 77/77 pass (886ms — was
+    73/73)
+  * `npm run scenarios:dry` → exits 0; lists 28
+    invariants in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: ~98% (28 of ~30 sub-slices total).
+  28 invariants now: 5 api-internal + 20 indexer (2
+  liveness + 6 data-aware coverage + 4 single-row
+  data-shape + 2 multi-row data-shape + 2 cross-layer
+  match + 3 cross-entity FK + 1 cross-entity time-
+  coherence) + 3 chain-layer. Three of the four
+  documented FK relationships in the system are now
+  covered (Swap→Pool, Candle→Pool, Organization→
+  Aggregator); ProposalEntity→Organization is the
+  remaining one. Symmetric build-out continues.
+
+Phase 7 slice 4d-scenarios-more (candleSwapTimeWindowConsistency) summary (previous iteration on the api side):
 
 - **First cross-entity TIME-COHERENCE check in the catalog**.
   Previous cross-entity invariants (FK checks) only

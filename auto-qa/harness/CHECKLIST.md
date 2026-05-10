@@ -750,25 +750,22 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 27 invariants:
-      5 api-internal + 19 indexer probes (2 `__typename`
+      PROGRESS.md's invariant tables). Now 28 invariants:
+      5 api-internal + 20 indexer probes (2 `__typename`
       liveness + 6 data-aware coverage + 4 single-row
       data-SHAPE + 2 multi-row data-SHAPE + 2 cross-layer
-      MATCH + 2 cross-entity FK + 1 CROSS-ENTITY TIME-
-      COHERENCE: `candleSwapTimeWindowConsistency` added
-      this slice — first invariant where both candle and
-      swap entities are checked against EACH OTHER (not
-      just per-row); asserts latestSwap.timestamp ≥
-      latestCandle.time. Catches future-period candle
-      creation from clock-skew, stale swap stream, time-
-      field misalignment between aggregator + handler.
-      Distinct from per-row time-shape probes which only
-      validate each entity's time field on its own terms;
-      this validates that the two entities' time fields
-      are MUTUALLY consistent. Establishes the multi-
-      entity-in-one-query pattern that candlesAggregation
-      will reuse with sum reconciliation) + 3 chain-layer
-      probes. 73 smoke tests green. Still to add:
+      MATCH + 3 cross-entity FK + 1 cross-entity TIME-
+      COHERENCE: `organizationAggregatorReferentialIntegrity`
+      added this slice — registry-side FK check, mirrors
+      the candles-side swap/candle FK pattern but for the
+      registry's Organization → Aggregator relationship.
+      Pins the upper link of the registry FK chain
+      (Aggregator ← Organization ← ProposalEntity); the
+      remaining ProposalEntity → Organization link is
+      next iteration. Catches orphan-org from FK
+      derivation bugs in the org-event handler) + 3
+      chain-layer probes. 77 smoke tests green. Still to
+      add: proposalEntity → organization FK, plus
       probabilityBounds, candlesAggregation (Candle.volume
       = sum of contained Swap amounts within period),
       chartShape (api unified-chart vs indexer raw),

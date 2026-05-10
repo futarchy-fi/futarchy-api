@@ -310,6 +310,68 @@ export const INVARIANTS = [
             return { ok: true, detail: `${apiCandles.length} candles match between api passthrough and direct indexer` };
         },
     },
+    {
+        name: 'organizationAggregatorReferentialIntegrity',
+        description: 'latest Organization references an Aggregator that exists in the registry indexer (catches orphan-org from FK derivation bugs)',
+        layer: 'orchestrator↔registry',
+        check: async (ctx) => {
+            // Registry-side analog of swapPoolReferentialIntegrity /
+            // candlePoolReferentialIntegrity. The registry has its
+            // own FK chain:
+            //
+            //   Aggregator ← Organization ← ProposalEntity
+            //
+            // (Each ProposalEntity belongs to an Organization;
+            // each Organization belongs to an Aggregator.) This
+            // invariant pins the upper link — Organization →
+            // Aggregator — so a registry indexer with a broken
+            // org-event handler that derives the wrong aggregator
+            // FK lights up here. Distinct from the existence
+            // invariants (registryHasOrganizations,
+            // registryHasAggregators) which only assert each
+            // entity has rows independently.
+            //
+            // Bug shapes caught:
+            //   * Org-event handler derives aggregator id wrong
+            //     (reads wrong topic slot, address mangled by
+            //     transform)
+            //   * Aggregator entity deleted/superseded but its
+            //     organizations weren't garbage-collected (orphan
+            //     orgs)
+            //   * Schema migration that renamed Aggregator without
+            //     updating Organization's foreign key
+            //   * Handler dropped aggregator FK (returns null)
+            //
+            // Vacuous when no organizations exist. Distinct from
+            // "no aggregators but orgs>0" which is an integrity
+            // FAIL (every org is orphan), NOT vacuous.
+            const j = await fetchJson(ctx.registryUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ organizations(first: 1) { id aggregator { id } } aggregators(first: 50) { id } }',
+                }),
+            });
+            const organizations = j?.data?.organizations;
+            const aggregators = j?.data?.aggregators;
+            if (!Array.isArray(organizations) || !Array.isArray(aggregators)) {
+                throw new Error(`unexpected response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (organizations.length === 0) {
+                return { ok: true, detail: 'no organizations to check (vacuously true)' };
+            }
+            const org = organizations[0];
+            const refAggId = org?.aggregator?.id;
+            if (typeof refAggId !== 'string' || refAggId.length === 0) {
+                throw new Error(`organization ${org.id}: aggregator.id missing or non-string (handler dropped FK; got ${JSON.stringify(org.aggregator)})`);
+            }
+            const aggIds = new Set(aggregators.map((a) => a.id));
+            if (!aggIds.has(refAggId)) {
+                throw new Error(`organization ${org.id}: references aggregator ${refAggId} but no such aggregator in aggregators(first: 50) — orphan org (FK derivation bug or aggregator deletion)`);
+            }
+            return { ok: true, detail: `organization ${org.id} → aggregator ${refAggId} (FK intact; ${aggregators.length} aggregator(s) total)` };
+        },
+    },
     // ── Direct-indexer probes ───────────────────────────────────────
     // The two below bypass the api and hit the indexer GraphQL
     // endpoints directly. They validate that the orchestrator
