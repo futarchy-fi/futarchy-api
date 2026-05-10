@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire** on api side (per-service `extends:` replaces the `include:` block; indexers dual-homed on harness-net + their own networks; api depends_on registry-checkpoint + checkpoint declared). 30/30 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep** on api side (interface-dev stub fixed: path, port, anvil dep, install/host-binding command, Node version; activation is now atomic 4c-activate). 30/30 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -1406,6 +1406,86 @@ Phase 7 slice 4b-network-wire summary (this iteration on the api side):
   Next: slice 4b-verify (daemon-required smoke test, mostly
   human) OR slice 4c (interface-dev block — Next.js dev
   server in compose).
+
+Phase 7 slice 4c-prep summary (this iteration on the api side):
+
+- Slice 4c (Next.js dev server in compose) starts with prep
+  work surfacing + fixing FIVE bugs in the Phase 0
+  `interface-dev` stub. Same pattern as slice 4a-prep: the
+  stub couldn't be activated as-is; the prep slice fixes the
+  stub in place (still commented) so 4c-activate becomes a
+  one-step uncomment.
+
+- **Bug catalog** (interface-dev block, Phase 0 stub vs reality):
+
+  (i) **Path bug**: stub had
+      `${INTERFACE_PATH:-../../../../interface}`. From
+      `auto-qa/harness/`, four levels up = `/`. The bind mount
+      would have failed at compose-up time (no `interface` dir
+      at /). Corrected to `../../../interface` (= the standard
+      sibling-clone layout at `/Users/kas/interface`). Same
+      kind of "one too many ..s" issue as slice 4a's
+      `context: ../../..` bug.
+
+  (ii) **Port bug**: stub had `NEXT_PUBLIC_API_URL:
+      http://api:3000`. The api binds to 3031 (Dockerfile
+      EXPOSE 3031 + src/index.js:25 hardcoded; see slice
+      4a-prep). Corrected to `http://api:3031`.
+
+  (iii) **Missing anvil dep**: stub only had `depends_on:
+      api`. But the dev server reads `NEXT_PUBLIC_RPC_URL:
+      http://anvil:8545` and Wagmi needs anvil reachable
+      before the page can mount. Added
+      `depends_on: anvil: { condition: service_healthy }`
+      alongside the api dep.
+
+  (iv) **Bare `npm run dev` won't work in fresh container**:
+      stub had `command: ["npm", "run", "dev"]`. With only
+      a bind mount of the source repo (no node_modules),
+      this would fail with "missing dependencies". Replaced
+      with a `sh -c` script that conditionally runs
+      `npm install` if node_modules is empty, then
+      `exec npx next dev --hostname 0.0.0.0 --port 3000`.
+      The `--hostname 0.0.0.0` is critical — `next dev`
+      defaults to localhost-only binding which isn't
+      reachable from outside the container; without it,
+      compose-internal traffic from `api:3031` → `interface-dev:3000`
+      would silently fail.
+
+  (v) **Node version mismatch**: stub had
+      `image: node:20-bookworm-slim`. The harness convention
+      (per api Dockerfile + CI workflows that use node 22)
+      is node:22. Standardized on `node:22-alpine` to match.
+
+- **Top-level addition: `interface-node-modules` named
+  volume**. Required to keep the container's node_modules
+  separate from the host's. The host's node_modules has
+  macOS/darwin binaries that wouldn't run in the Linux
+  container; mounting them in via the bind would shadow
+  any valid Linux installs from `npm install`. The named
+  volume gives the container its own Linux-native
+  node_modules tree without polluting the host.
+
+- **Why STAGED not active**: even with all five bugs fixed,
+  Next.js dev-in-container has known caveats worth a careful
+  smoke test: file watching across bind mounts can be
+  unreliable (chokidar polling fallback might be needed),
+  HMR over the docker network has its own quirks, and the
+  first-run `npm install` of ~1000+ deps can take minutes.
+  Pinned as 4c-activate (one-step uncomment now that the
+  stub is correct) + 4c-verify (daemon smoke + dev-loop
+  validation, human task).
+
+- **Validation**: `docker compose config --quiet` succeeds;
+  `--services` still returns 6 (interface-dev block remains
+  a YAML comment, no runtime delta). Top-level
+  `interface-node-modules` volume is declared eagerly so
+  4c-activate is purely a service-block uncomment.
+
+- Slice 4 progress: ~50% done (7 of ~12+ sub-slices total —
+  slice 4c now decomposes into 4c-prep + 4c-activate +
+  potentially 4c-verify). Next: 4c-activate (uncomment) OR
+  return to slice 4b-verify (daemon-required smoke).
 
 Slice 4c v3b summary (previous iteration on the interface side):
 

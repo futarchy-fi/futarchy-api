@@ -670,11 +670,31 @@ freshly-generated addresses as recipients; documented in
       probe `curl -s http://localhost:3003/graphql` for
       `{__typename}`. Will reveal whether the bridge approach
       works end-to-end.
-- [ ] **4c — uncomment compose interface-dev block.** Mounts
-      sibling interface clone at INTERFACE_PATH. Wires
-      NEXT_PUBLIC_RPC_URL → http://anvil:8545 and
-      NEXT_PUBLIC_API_URL → http://api:3031 (note the port
-      change from the original compose comment).
+- [x] **4c-prep — fixed FIVE bugs in the interface-dev stub
+      while keeping it commented out.** Bugs surfaced + fixed:
+      (i) path was `../../../../interface` (4 levels up = `/`);
+      corrected to `../../../interface` (= /Users/kas/interface).
+      (ii) `NEXT_PUBLIC_API_URL` pointed at `http://api:3000`
+      but api binds to 3031 — same port discovery as slice
+      4a-prep. (iii) Missing `depends_on: anvil` (Wagmi reads
+      NEXT_PUBLIC_RPC_URL → http://anvil:8545). (iv) Bare
+      `npm run dev` won't work in fresh container (bind mount
+      provides source but no node_modules); replaced with a
+      conditional `npm install` + `next dev --hostname 0.0.0.0`
+      shell script (the `--hostname 0.0.0.0` is critical
+      because next dev defaults to localhost-only binding).
+      (v) Image was node:20-bookworm-slim; standardized on
+      node:22-alpine to match the api Dockerfile + CI
+      workflows. Also added a top-level `interface-node-modules`
+      named volume to keep Linux node_modules separate from
+      the host's macOS-binary tree.
+- [ ] **4c-activate — uncomment the (now-correct)
+      interface-dev service block.** A one-step uncomment;
+      no edits needed thanks to 4c-prep. Activation gate:
+      `INTERFACE_PATH` env var (defaults to
+      `../../../interface` = sibling clone). Adds a 7th
+      service to the stack: `interface-dev`. Doesn't activate
+      anything else (anvil + api + indexers stay as-is).
 - [ ] **4d — orchestrator service** (compose driver for the
       cross-layer assertions).
 - [ ] **4e — single `docker compose up -d`** brings the full
