@@ -339,13 +339,16 @@ export async function proxyCandlesQuery(query, variables = {}, chainId = 100) {
         }
     }
 
-    // Adapt query: replace periodStartUnix with time, period "3600" with period 3600
+    // Adapt query: only normalize the BigInt-style `period: "3600"` literal
+    // to Checkpoint's Int form. We DO NOT rewrite `periodStartUnix` to `time`
+    // anymore — Checkpoint exposes both as separate fields:
+    //   • `time`             = raw last-swap timestamp (e.g. 1778344370 = 18:32)
+    //   • `periodStartUnix`  = period-snapped boundary (e.g. 1778342400 = 18:00)
+    // The old rewrite collapsed them, returning raw `time` to clients that
+    // asked for `periodStartUnix` and breaking any consumer that tried to
+    // align candles to hour boundaries (e.g. carry-forward fill).
     let adaptedQuery = query
-        .replace(/periodStartUnix_gte/g, 'time_gte')
-        .replace(/periodStartUnix_lte/g, 'time_lte')
-        .replace(/periodStartUnix/g, 'time')
-        .replace(/period:\s*"3600"/g, 'period: 3600')
-        .replace(/orderBy:\s*periodStartUnix/g, 'orderBy: time');
+        .replace(/period:\s*"3600"/g, 'period: 3600');
 
     // Prefix inline pool/proposal IDs in the query string. Catches:
     //   - scalar filter:        pool: "0xabc..." | proposal: "0xabc..."
@@ -372,8 +375,8 @@ export async function proxyCandlesQuery(query, variables = {}, chainId = 100) {
 
     // Normalize response:
     //   - Strip "<chainId>-" prefix from any `id` field (frontend expects plain
-    //     addresses).
-    //   - Convert candle `time` back to `periodStartUnix` for downstream.
+    //     addresses). No longer synthesize `periodStartUnix` from `time` —
+    //     callers should select the field they actually want.
     const normalizedData = stripPrefixesAndNormalize(rawData);
     return { data: normalizedData };
 }
@@ -398,10 +401,6 @@ function stripPrefixesAndNormalize(value) {
             } else {
                 out[k] = stripPrefixesAndNormalize(v);
             }
-        }
-        // Add Graph-Node-compatible periodStartUnix when we have `time` only
-        if (out.time !== undefined && out.periodStartUnix === undefined) {
-            out.periodStartUnix = String(out.time);
         }
         return out;
     }
