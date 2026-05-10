@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **33 invariants** — 8 api-internal + 21 indexer + 4 chain-layer; first chain-layer time-shape probe landed; 97 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **34 invariants** — 8 api-internal + 22 indexer + 4 chain-layer; **first ECONOMIC invariant landed** (probabilityBounds — close ∈ [0, 1] for PREDICTION pools); 101 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,111 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (anvilLatestBlockSensible) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (probabilityBounds) summary (this iteration on the api side):
+
+- **First ECONOMIC INVARIANT in the catalog**. PROGRESS's
+  "Economic invariants (always-on)" table lists 5
+  invariants (Conservation, Monotonicity, Probability,
+  No phantom mints, Rate sanity); Rate sanity already
+  shipped earlier (rateSanity); this iteration adds
+  Probability:
+  * `probabilityBounds` — for PREDICTION-type pools,
+    asserts `latestCandle.close ∈ [0, 1]`.
+
+- **Why economic invariants are a distinct category**:
+  Existing invariants validate STRUCTURAL correctness
+  — "data exists", "shape matches contract", "FK
+  resolves". Economic invariants validate ECONOMIC
+  truths — "this number can only be in this range
+  because of how AMMs work". Distinct value because
+  a structural-only check passes when raw uint256
+  values leak into the response (close=1e18 has the
+  right shape but is wildly out of range).
+
+- **Type-aware filtering**: only PREDICTION pools have
+  prices that are probabilities. CONDITIONAL pools
+  (YES_TOKEN/YES_CURRENCY ratios) and EXPECTED_VALUE
+  pools (projected token values) have prices that
+  CAN exceed 1 legitimately. The invariant filters
+  via `candle.pool.type` from the indexer schema.
+  Vacuous when type is not PREDICTION OR field is
+  missing (older indexer / schema migration in
+  progress). Test 2 verifies the vacuous-on-
+  CONDITIONAL behavior.
+
+- **Bug shapes caught (distinct from
+  candleOHLCOrdering)**:
+  * Indexer raw uint256 leak — close=1e18 (raw
+    BigInt instead of decimal-converted string).
+    Test 3 verifies this case AND verifies
+    candleOHLCOrdering STILL passes (low=high=open=
+    close = 1e18 satisfies "low ≤ high"); this is
+    THE poster-child case for why magnitude bounds
+    are distinct from ordering bounds.
+  * Sustained close > 1 — market thinks "more than
+    certain" (UI/AMM math bug); briefly possible
+    during fee imbalance, sustained means a bug.
+  * close < 0 — sign-bit leak from signed-arithmetic
+    in price-derivation handler; impossible by AMM
+    construction.
+
+- **Fixture extension**:
+  * Pools now carry a `type` field (default
+    `PREDICTION` — the most common futarchy market
+    type, makes the invariant active in happy path).
+  * candle.pool object also carries `type`.
+  * New `poolType` knob lets tests override to
+    CONDITIONAL / EXPECTED_VALUE for the vacuous
+    branch, OR null for the schema-missing-field
+    case (also vacuous).
+
+- **Smoke test coverage** — 4 new tests:
+  * happy: PREDICTION pool, close=0.48 ∈ [0, 1]
+  * vacuous: CONDITIONAL pool, close=2.5 (skipped
+    correctly — CONDITIONAL prices aren't
+    probabilities)
+  * failure: raw uint256 leak (close=1e18); verifies
+    candleOHLCOrdering STILL passes — distinguishes
+    magnitude bug from ordering bug
+  * failure: negative close (sign bug)
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 101/101 pass (1255ms
+    — was 97/97); crossed the 100-test mark
+  * `npm run scenarios:dry` → exits 0; lists 34
+    invariants in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: 34 invariants now. Catalog
+  composition by KIND of correctness checked:
+  * Existence (8): apiHealth, apiWarmer, registry/
+    candles direct probes, *Has* checks
+  * Validation (1): apiSpotCandlesValidates
+  * Data-plane shape (3): all 3 /api/v* shape probes
+  * Single-row data shape (5): OHLC, volumes,
+    swap amounts, swap ts, latest block
+  * Multi-row data shape (2): candle/swap time
+    monotonic
+  * Cross-layer match (2): api↔direct for candles
+    + registry
+  * Cross-entity FK (4): all 4 documented
+    relationships
+  * Cross-entity time coherence (1): swap/candle
+    window
+  * Chain-layer (4): count, identity, time-shape,
+    contract state
+  * Passthrough liveness (3): apiCanReach* +
+    chainId
+  * **ECONOMIC (1): probabilityBounds — NEW THIS
+    SLICE**
+  Remaining bot-doable economic invariants per
+  PROGRESS.md: candlesAggregation, conservation,
+  monotonicity (TWAP). Plus full chartShape match
+  cross-layer. Each addresses a different correctness
+  dimension.
+
+Phase 7 slice 4d-scenarios-more (anvilLatestBlockSensible) summary (previous iteration on the api side):
 
 - **First chain-layer TIME-SHAPE probe**. Mirrors the
   pattern that already exists at the indexer layer

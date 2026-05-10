@@ -750,22 +750,27 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 33 invariants:
-      8 api-internal + 21 indexer probes + 4 chain-layer.
-      `anvilLatestBlockSensible` added this slice —
-      first chain-layer time-shape probe, mirrors the
-      pattern of swapTimestampSensible / candleTimeMonotonic
-      at the chain layer. Calls eth_getBlockByNumber(latest)
-      and asserts hash is a valid 0x+64hex string and
-      timestamp ∈ [2020-01-01, now+1d]. Catches
-      stuck-clock bugs, wrong-fork-era misconfiguration,
-      and garbage block responses that the count-only
-      anvilBlockNumber probe misses. 97 smoke tests
-      green. Still to add: probabilityBounds,
-      candlesAggregation (Candle.volume = sum of
-      contained Swap amounts within period), chartShape
-      full match (api unified-chart vs indexer raw),
-      conservation, cross-run monotonicity on rateSanity.
+      PROGRESS.md's invariant tables). Now 34 invariants:
+      8 api-internal + 22 indexer probes + 4 chain-layer.
+      `probabilityBounds` added this slice — FIRST
+      ECONOMIC INVARIANT from PROGRESS's economic-
+      invariants table. For PREDICTION-type pools
+      (filtered via candle.pool.type), latest candle
+      close ∈ [0, 1]. The close IS the probability of
+      YES outcome; values outside this range are bugs.
+      Vacuously skips CONDITIONAL/EXPECTED_VALUE pools
+      whose prices aren't probabilities. Catches raw
+      uint256 leaks (close=1e18), real probability
+      bugs (close > 1 = "more than certain"), and sign
+      bugs (close < 0). Distinct from candleOHLCOrdering
+      which only checks per-row ordering — bounds-on-
+      magnitude catches a different class. 101 smoke
+      tests green. Still to add: candlesAggregation
+      (Candle.volume = sum of contained Swap amounts
+      within period), chartShape full match (api
+      unified-chart vs indexer raw), conservation
+      (∑YES + ∑NO = ∑sDAI), cross-run monotonicity
+      on rateSanity.
 - [x] **4d-activate — orchestrator block UNCOMMENTED.**
       Replaced the `tail -f /dev/null` placeholder with
       `node orchestrator/scenario-runner.mjs`. Dropped the

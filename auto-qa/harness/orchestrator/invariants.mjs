@@ -1213,6 +1213,80 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'probabilityBounds',
+        description: 'for PREDICTION-type pools, latest candle close ∈ [0, 1] (the close IS the probability of YES; values outside this range are bugs)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // First ECONOMIC invariant from PROGRESS.md's economic-
+            // invariants table. Most futarchy markets use PREDICTION-
+            // type pools where the candle's close represents
+            // P(YES outcome) — by AMM construction, this MUST be in
+            // [0, 1] (since 1 YES token can redeem for at most 1
+            // unit of collateral on resolution).
+            //
+            // Distinct from candleOHLCOrdering (per-row shape):
+            // OHLC ordering can pass while the absolute values are
+            // still wrong — e.g., low=1e18, high=2e18 satisfies
+            // "low ≤ high" but is wildly out of probability range.
+            // This invariant catches the magnitude bugs that
+            // ordering-only checks miss.
+            //
+            // FILTERED to PREDICTION pool type — CONDITIONAL pools
+            // have prices like YES_TOKEN/YES_CURRENCY ratios
+            // (often >1), and EXPECTED_VALUE pools have projected
+            // token values (any positive number). Bounds-checking
+            // those would produce false positives. The pool.type
+            // field comes from the indexer schema; if it's missing
+            // (older indexer version, schema migration in progress)
+            // the invariant treats it as vacuous rather than
+            // false-failing.
+            //
+            // Bug shapes caught:
+            //   * Indexer emits raw uint256 prices instead of
+            //     decimal-converted strings (close=1e18 is a
+            //     ~12-orders-of-magnitude red flag)
+            //   * Real probability bug — sustained close > 1 means
+            //     market thinks "more than certain" (a possibility
+            //     briefly during fee imbalance, but persistent
+            //     means a UI/AMM math bug)
+            //   * Sign bug — close < 0 from signed-arithmetic leak
+            //     in the price-derivation handler
+            //
+            // Vacuous when no candles OR no PREDICTION pool — that's
+            // a distinct concern (existence checks).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ candles(first: 1, orderBy: time, orderDirection: desc) { id close pool { type } } }',
+                }),
+            });
+            const candles = j?.data?.candles;
+            if (!Array.isArray(candles)) {
+                throw new Error(`unexpected response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (candles.length === 0) {
+                return { ok: true, detail: 'no candles to check (vacuously true)' };
+            }
+            const candle = candles[0];
+            const poolType = candle?.pool?.type;
+            if (poolType !== 'PREDICTION') {
+                return { ok: true, detail: `latest candle pool type=${poolType ?? 'null'} is not PREDICTION; bounds don't apply (vacuously true)` };
+            }
+            const close = parseFloat(candle.close);
+            if (!Number.isFinite(close)) {
+                throw new Error(`candle ${candle.id}: close="${candle.close}" not a finite number (raw int leak?)`);
+            }
+            if (close < 0) {
+                throw new Error(`candle ${candle.id}: close=${close} < 0 (sign bug in price-derivation handler — probabilities can't be negative)`);
+            }
+            if (close > 1) {
+                throw new Error(`candle ${candle.id}: close=${close} > 1 (PREDICTION pool close represents P(YES), can't exceed 1; raw uint256 leak OR sustained "more than certain" UI/math bug)`);
+            }
+            return { ok: true, detail: `candle ${candle.id} (PREDICTION): close=${close} ∈ [0, 1]` };
+        },
+    },
+    {
         name: 'candleVolumesNonNegative',
         description: 'latest candle has volumeToken0 ≥ 0 AND volumeToken1 ≥ 0 (vacuously true when no candles)',
         layer: 'orchestrator↔candles',

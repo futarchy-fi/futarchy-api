@@ -125,6 +125,13 @@ function startFixture({
     // mock-pool-0. Tests use an array to simulate orphan-candle
     // bugs from broken period-aggregator FK derivation.
     candlePoolIds = null,
+    // Pool type for probabilityBounds (slice 4d-scenarios-more).
+    // Default PREDICTION (the most common futarchy market type;
+    // makes the invariant active in the happy path). Tests can
+    // override to CONDITIONAL or EXPECTED_VALUE to exercise the
+    // vacuous branch (or null/undefined for the "schema missing
+    // field" case).
+    poolType = 'PREDICTION',
     // Per-organization aggregator FK for
     // organizationAggregatorReferentialIntegrity (slice 4d-
     // scenarios-more). Indexed by organization position; null
@@ -182,7 +189,7 @@ function startFixture({
     // candleTimes get full control.
     const candleTimeAnchor = Math.floor(Date.now() / 1000) - 7200;
     const buildPools = () => Array.from({ length: candlesPoolsCount },
-        (_, i) => ({ id: `mock-pool-${i}` }));
+        (_, i) => ({ id: `mock-pool-${i}`, type: poolType }));
     const buildSwaps = () => Array.from({ length: candlesSwapsCount }, (_, i) => {
         const row = { id: `mock-swap-${i}` };
         if (i === 0) {
@@ -240,8 +247,13 @@ function startFixture({
             : candleTimeAnchor - i * candleTimeStep;
         // FK to a Pool — same pattern as buildSwaps. Default
         // mock-pool-0; candlePoolIds[i] override for orphan tests.
+        // Pool object also carries `type` for probabilityBounds
+        // (slice 4d-scenarios-more) — defaults to PREDICTION via
+        // the poolType fixture knob; overrides via that knob, not
+        // per-candle, since type is a property of the pool not the
+        // candle.
         const poolId = candlePoolIds ? candlePoolIds[i] : 'mock-pool-0';
-        row.pool = { id: poolId };
+        row.pool = { id: poolId, type: poolType };
         return row;
     });
 
@@ -1370,6 +1382,87 @@ test('runAllInvariants — failure: candle volume0 < 0 (signed-amount aggregator
     }
 });
 
+test('runAllInvariants — probabilityBounds happy: PREDICTION pool, close=0.48 ∈ [0, 1]', async () => {
+    // Defaults: poolType='PREDICTION', latestCandleClose='0.48'.
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'probabilityBounds');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /candle mock-candle-0 \(PREDICTION\): close=0\.48 ∈ \[0, 1\]/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — probabilityBounds vacuously true for CONDITIONAL pools (price isn\'t a probability)', async () => {
+    // CONDITIONAL pools are YES_TOKEN/YES_CURRENCY ratios, often >1.
+    // The invariant SHOULD skip them rather than false-fail.
+    const fx = await startFixture({
+        poolType: 'CONDITIONAL',
+        latestCandleClose: '2.5',
+        latestCandleHigh: '3.0',
+        latestCandleLow: '2.0',
+        latestCandleOpen: '2.2',
+    });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'probabilityBounds');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /CONDITIONAL.*not PREDICTION|bounds don't apply/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: probabilityBounds raw uint256 leak (close=1e18)', async () => {
+    // Indexer regression that returns raw uint256 as decimal string.
+    // 1e18 = 1000000000000000000 — vastly outside [0, 1].
+    const fx = await startFixture({
+        latestCandleClose: '1000000000000000000',
+        // Set high/low to satisfy OHLC ordering so this isolates
+        // the magnitude bug from the ordering bug
+        latestCandleHigh: '1000000000000000000',
+        latestCandleLow: '1000000000000000000',
+        latestCandleOpen: '1000000000000000000',
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'probabilityBounds');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /close=1000000000000000000 > 1|raw uint256 leak/);
+        // OHLC ordering passes — distinguishes magnitude bug from
+        // ordering bug
+        const ohlc = results.find((r) => r.name === 'candleOHLCOrdering');
+        assert.equal(ohlc.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: probabilityBounds negative close (sign-bug leak)', async () => {
+    // Sign bug in price-derivation handler — probability landed at
+    // a negative value. Impossible by AMM construction; clear bug.
+    const fx = await startFixture({
+        latestCandleClose: '-0.25',
+        // OHLC ordering preserved
+        latestCandleHigh: '0.10',
+        latestCandleLow: '-0.30',
+        latestCandleOpen: '-0.20',
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'probabilityBounds');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /close=-0\.25 < 0|sign bug|probabilities can't be negative/);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('runAllInvariants — swapAmountsPositive happy', async () => {
     const fx = await startFixture();  // defaults: amountIn=10.5, amountOut=4.2
     try {
@@ -2023,6 +2116,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /candlesHasCandles/);
     assert.match(r.stdout, /candleOHLCOrdering/);
     assert.match(r.stdout, /candleVolumesNonNegative/);
+    assert.match(r.stdout, /probabilityBounds/);
     assert.match(r.stdout, /swapAmountsPositive/);
     assert.match(r.stdout, /swapTimestampSensible/);
     assert.match(r.stdout, /candleTimeMonotonic/);
