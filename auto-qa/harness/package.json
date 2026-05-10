@@ -1,0 +1,15 @@
+{
+    "name": "@futarchy-api/replay-harness-server",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "description": "Server-side scaffold of the Forked Replay Harness (anvil + indexer + api). See PROGRESS.md.",
+    "scripts": {
+        "phase-status": "node -e \"console.log('Forked Replay Harness — Phase 0 (scaffold). See auto-qa/harness/PROGRESS.md');\"",
+        "fork": "echo 'TODO Phase 1 — anvil fork launcher' && exit 1",
+        "replay": "echo 'TODO Phase 6 — scenario replay runner' && exit 1",
+        "test": "echo 'TODO Phase 2 — cross-layer test runner' && exit 1"
+    },
+    "dependencies": {},
+    "devDependencies": {}
+}

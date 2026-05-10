@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 0 — not started |
+| Phase | 0 — in progress (scaffold slice 1: README + package.json + npm script wiring) |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -112,4 +112,20 @@ Single docker-compose starts all four services. Orchestrator owns the clock.
 
 ## Iteration log
 
-_(updated as phases land — currently empty; Phase 0 not started)_
+### Phase 0 — Scaffold
+
+- **slice 1** (this commit) — README, harness package.json with stub
+  scripts, .gitignore, root `npm run auto-qa:e2e` wired through
+  `npm --prefix auto-qa/harness run phase-status`. Verified the stub
+  prints the phase status from the repo root. No deps installed yet.
+
+**Next slices for Phase 0:**
+
+- slice 2 — docker-compose.yml skeleton (anvil service stub only)
+- slice 3 — `scripts/start-fork.mjs` placeholder (just argument
+  parsing + help text; no anvil yet)
+- slice 4 — Sister-repo handshake: top-level `harness/ARCHITECTURE.md`
+  in each repo with the cross-repo invariant table + a "how to clone
+  the sister repo" snippet
+- slice 5 — Decision doc: pick foundry vs hardhat (write a 1-page
+  ADR-style note in `docs/`)
