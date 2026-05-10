@@ -225,3 +225,32 @@ export async function startLocalApi({
 export async function stopAll(handles) {
     await Promise.allSettled(handles.map((h) => h?.stop?.()));
 }
+
+/**
+ * Stop service handles in dependency order — earlier handles in the
+ * array are stopped FIRST. Each step waits for the previous to complete.
+ *
+ * Use this for stacks where ordering matters:
+ *   - Indexer must stop BEFORE anvil (otherwise it loops trying to
+ *     reach a dead RPC until its retry budget exhausts)
+ *   - Api can stop BEFORE indexer (no retry-on-RPC-down behavior)
+ *   - Stub-indexer is stop-anywhere (no upstream)
+ *
+ * Recommended order for the full Phase 3+ stack:
+ *   stopOrdered([interfaceDev, api, indexer, anvil])
+ *
+ * Errors during one stop don't prevent later stops — each is wrapped
+ * in try/catch and logged to stderr.
+ */
+export async function stopOrdered(handles) {
+    for (const h of handles) {
+        if (!h?.stop) continue;
+        try {
+            await h.stop();
+        } catch (err) {
+            process.stderr.write(
+                `[stopOrdered] error stopping handle ${h.url || '<unknown>'}: ${err?.message}\n`,
+            );
+        }
+    }
+}

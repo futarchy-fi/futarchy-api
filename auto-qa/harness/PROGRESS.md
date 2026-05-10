@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 3 — slice 1 landed (ADR-002 decision made: build-from-source via futarchy-indexers sibling clone). Background spike running on START_BLOCK / anvil RPC compat. |
+| Phase | 3 — slices 1+1.5 landed + Spike-001 complete (RPC compat ✓, bootstrap path identified). 11 smoke tests pass + 1 skip. Slice 2 unblocked. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -387,19 +387,97 @@ Phase 2 slice 4 — multi-spawn stress (3 cycles) ✓ ~8.2s
   is a pre-existing mismatch in production code; the harness sets
   `CANDLES_URL=http://localhost:3001/graphql` explicitly to bridge.
 
-**Phase 3 wrap-up — remaining (gated on spike):**
+- **slice 1.5** (this iteration) — Spike-independent infrastructure
+  that prepares for Phase 3 slices 2-5.
 
-- slice 2 — Compose extension: add `registry-indexer` + `candles-indexer`
-  services that `extends:` from the futarchy-indexers compose, with
-  RPC pointed at our anvil. Wire `INDEXERS_PATH` env for the sibling
-  clone location.
-- slice 3 — `orchestrator/services.mjs` `startLocalIndexers({reset})`
-  helper with readiness probe (poll `{__typename}` until 200).
-- slice 4 — START_BLOCK bootstrap (per spike outcome). Likely either
-  env-var override on the indexer, OR a one-shot init container that
-  pre-seeds postgres `last_indexed_block`.
-- slice 5 — `tests/smoke-indexer-roundtrip.test.mjs`: anvil event →
-  wait for indexer → query → assert. **THE Phase 3 invariant.**
+  - `scripts/detect-indexers.mjs` (new): mirror of `detect-anvil.mjs`
+    for the indexer sibling clone. Walks candidate paths, validates
+    both indexer subdirs (`futarchy-complete/checkpoint/` registry +
+    `proposals-candles/checkpoint/` candles) have docker-compose +
+    Dockerfile, reports git HEAD + dirty state. Exposes
+    `detectIndexers()` returning structured info, and
+    `requireIndexers()` throwing with a `git clone` hint. CLI mode
+    prints a 4-line summary or `--json`.
+    **Validated**: found at `/Users/kas/futarchy-indexers @ ce908a1`.
+
+  - `INDEXERS_PATH` is treated as an OVERRIDE (not a candidate) —
+    if set, no fallback search. This semantic was discovered + fixed
+    when the smoke test caught the bug.
+
+  - `orchestrator/services.mjs` — added `stopOrdered(handles)` helper
+    that stops services in dependency order (interface → api →
+    indexer → anvil), wrapping each in try/catch so one failure
+    doesn't block subsequent stops. Addresses the Phase 3
+    container-shutdown-order risk: indexer must stop BEFORE anvil
+    or it loops on dead RPC until retry budget exhausts.
+
+  - `tests/smoke-detect-indexers.test.mjs` (new): 2 cases — happy
+    path (clone present, both subdirs valid, git HEAD reads) and
+    error path (`requireIndexers` throws `INDEXERS_NOT_FOUND` with
+    a `git clone` hint when `INDEXERS_PATH` points at a bad path).
+    Both pass in 0.6s.
+
+  - npm scripts: `detect:indexers`, `smoke:detect:indexers` in
+    harness; corresponding `auto-qa:e2e:detect:indexers` +
+    `auto-qa:e2e:smoke:detect:indexers` shortcuts at root.
+
+**Smoke summary (post-Phase 3 slices 1+1.5):**
+
+```
+[Phase 1]
+  start-fork + block-clock                        ✓ ~3s
+  setNextTimestamp                                ✓ ~2.5s
+  setBalance                                      ✓ ~2.5s
+  impersonateAccount                              ✓ ~3s
+  compose smoke                                    ⊘ skipped (daemon down)
+[Phase 2]
+  orchestrator dual-source                         ✓ ~3.5s
+  passthrough verbatim                             ✓ ~280ms
+  passthrough 500                                  ✓ ~280ms
+  passthrough 502 unreachable                      ✓ ~270ms
+  multi-spawn stress (3 cycles)                   ✓ ~8.2s
+[Phase 3]
+  detect-indexers (happy path)                     ✓ ~25ms
+  detect-indexers (missing override)               ✓ ~1ms
+                                       TOTAL: 11 pass + 1 skip
+```
+
+**Spike-001 result (`docs/spike-001-checkpoint-anvil-compat.md`):**
+
+- **No `START_BLOCK` env** on `@snapshot-labs/checkpoint`. But
+  `getStartBlockNum()` in `container.js:335` reads
+  `_metadatas.last_indexed_block` from postgres — pre-seeding that
+  row after `RESET=true` is the clean bootstrap path.
+- **`GNOSIS_BLOCK_RANGE`** is the per-batch `eth_getLogs` window
+  (set via the futarchy patch in `patch-graphnode-style.js:296-305`).
+  For the harness, set small (~100) so the indexer doesn't try to
+  scan beyond what anvil knows.
+- **RPC compatibility is COMPLETE** — Checkpoint only calls
+  `eth_chainId`, `eth_blockNumber`, `eth_getBlockByNumber`, and
+  `eth_getLogs`. All standard, all supported by anvil. **No blockers
+  for the build-from-source path.**
+- **Cold-start estimate**: 50-90s per indexer (Docker build + npm
+  install dominate).
+- **Recommended bootstrap**: wrapper script that runs `RESET=true`
+  → injects the `last_indexed_block` row → invokes `npm run dev`.
+
+**Phase 3 wrap-up — remaining (now unblocked):**
+
+- slice 2 — Compose extension: add `registry-indexer` +
+  `registry-postgres` + `candles-indexer` + `candles-postgres`
+  services that `extends:` from the futarchy-indexers compose,
+  with `RPC_URL`/`GNOSIS_RPC_URL` pointed at our anvil and
+  `GNOSIS_BLOCK_RANGE=100`. Wire `INDEXERS_PATH` env for the
+  sibling clone location.
+- slice 3 — `orchestrator/services.mjs` `startLocalIndexers({reset,
+  startBlock})` helper. Calls compose, then injects
+  `_metadatas.last_indexed_block = startBlock` via psql connection,
+  then waits for readiness via GraphQL probe.
+- slice 4 — `tests/smoke-indexer-roundtrip.test.mjs` (THE Phase 3
+  invariant): anvil event → wait for indexer → query both indexer
+  GraphQL AND api passthrough → assert agreement.
+- slice 5 — Cold-start optimization: explore pre-warmed postgres
+  image strategy if cold-start exceeds 90s on CI.
 
 **Phase 3 risks tracked:**
 

@@ -15,12 +15,14 @@
         "auto-qa:test": "node --test 'auto-qa/tests/**/*.test.mjs'",
         "auto-qa:e2e": "npm --prefix auto-qa/harness run phase-status",
         "auto-qa:e2e:detect": "npm --prefix auto-qa/harness run detect",
+        "auto-qa:e2e:detect:indexers": "npm --prefix auto-qa/harness run detect:indexers",
         "auto-qa:e2e:fork": "npm --prefix auto-qa/harness run fork",
         "auto-qa:e2e:smoke": "npm --prefix auto-qa/harness run smoke",
         "auto-qa:e2e:smoke:compose": "npm --prefix auto-qa/harness run smoke:compose",
         "auto-qa:e2e:smoke:api": "npm --prefix auto-qa/harness run smoke:api",
         "auto-qa:e2e:smoke:passthrough": "npm --prefix auto-qa/harness run smoke:passthrough",
-        "auto-qa:e2e:smoke:stress": "npm --prefix auto-qa/harness run smoke:stress"
+        "auto-qa:e2e:smoke:stress": "npm --prefix auto-qa/harness run smoke:stress",
+        "auto-qa:e2e:smoke:detect:indexers": "npm --prefix auto-qa/harness run smoke:detect:indexers"
     },
     "dependencies": {
         "cors": "^2.8.5",

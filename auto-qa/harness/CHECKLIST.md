@@ -121,14 +121,15 @@ both layers in parallel and probe each via its native protocol.
       brittleness risk per PROGRESS.md)
 - [ ] Smoke test: write a Swap event on anvil → wait → query indexer
       via GraphQL → assert event present
-- [ ] **Open spike** — `START_BLOCK` env support on
-      `@snapshot-labs/checkpoint`. Must resolve before slice 4 (the
-      indexer can't scan blocks 0..N-1 from anvil; it must skip to
-      the fork block). Spike owned by background agent; results in
-      `docs/spike-001-checkpoint-anvil-compat.md` when complete.
-- [ ] **Open spike** — anvil RPC compatibility. Some indexers use
-      `trace_*` calls that anvil doesn't support. Must verify before
-      committing to the build-from-source path with anvil as RPC.
+- [x] **Spike resolved** — `START_BLOCK` env support: NO env, but
+      `_metadatas.last_indexed_block` postgres row IS the bootstrap
+      point (see `docs/spike-001-checkpoint-anvil-compat.md`).
+      Pre-seed that row after `RESET=true` to skip from genesis to
+      anvil's fork-block.
+- [x] **Spike resolved** — anvil RPC compatibility: COMPLETE.
+      Checkpoint only calls `eth_chainId`, `eth_blockNumber`,
+      `eth_getBlockByNumber`, `eth_getLogs` — all standard, all
+      supported by anvil. No blockers for build-from-source.
 
 ## Phase 4 — Synthetic wallet + first scripted swap
 
