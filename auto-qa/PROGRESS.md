@@ -9,11 +9,12 @@ is never modified — only tests on the `auto-qa` branch.
 | Field | Value |
 |---|---|
 | Branch | `auto-qa` (off `origin/main`) |
-| Iterations completed | 4 |
+| Iterations completed | 5 |
 | PRs catalogued | 9 / 9 (full history) |
 | PRs classified | 9 |
-| Tests added | 13 (2 path-prefix + 7 passthrough-contract + 4 unified-chart — all passing) |
+| Tests added | 16 (2 path-prefix + 7 passthrough-contract + 4 unified-chart + 3 multi-proposal-smoke — all passing) |
 | PRs covered by tests | **7 / 9** (#1, #4, #5, #6, #7, #8, #9 — all bug-fix PRs) |
+| Data-quality issues surfaced | 2 proposals (TSLA Mega Package, CIP-82) return zero prices + "TOKEN" fallback symbol — see below |
 | Test runner | `node --test` via `npm run auto-qa:test` |
 | Tooling backlog | see below |
 
@@ -114,6 +115,31 @@ npm run auto-qa:test
 
 Glob: `auto-qa/tests/**/*.test.mjs`. First green test:
 `auto-qa/tests/path-prefix.test.mjs` (covers PR #1).
+
+## Data-quality findings (iteration 5 — multi-proposal smoke)
+
+Spot-checked 3 fixtures via `/api/v2/proposals/:id/chart`. The endpoint
+*shape* is fine for all 3 (contract test passes). But two return empty/zero data:
+
+| Proposal | Address | Yes Price | No Price | Base Token | Status |
+|---|---|---|---|---|---|
+| GIP-150 v2 | `0x1a0f209f…` | 111.21 | 107.37 | GNO | ✅ healthy |
+| TSLA Mega Package | `0xf1b12f03…` | 0 | 0 | "TOKEN" (fallback) | ⚠️ no data |
+| CIP-82 (CoW DAO Grants) | `0xb0e6bc18…` | 0 | 0 | "TOKEN" (fallback) | ⚠️ no data |
+
+Per /loop directive: NOT fixed. Likely root cause: these proposals don't
+have CONDITIONAL pools indexed yet (or the indexer missed them), and
+the EXPECTED_VALUE / PREDICTION fallback isn't kicking in for these
+specific fixtures. Worth investigating in a real fix-pass:
+
+  1. Are CONDITIONAL pools deployed on-chain for these proposals?
+  2. Did the candles indexer skip the pool-creation events?
+  3. If only EXPECTED_VALUE / PREDICTION pools exist, is the fallback
+     in unified-chart.js actually picking them up?
+
+The "TOKEN" string is the post-PR-#6 default (formerly "PNK"), so
+PR #6 IS working — symbol resolution is just falling all the way
+through to the default for these proposals.
 
 ## Cross-repo notes
 
