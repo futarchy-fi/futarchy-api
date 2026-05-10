@@ -264,12 +264,28 @@ freshly-generated addresses as recipients; documented in
            auto-mine-settles race), assert status=0x1, assert
            recipient balance == 0.5 XDAI
 
-**Phase 5 slice 3 (futarchy app in the loop) — TODO:**
+**Phase 5 slice 3 (futarchy app in the loop) — PARTIAL:**
 
-- [ ] First test that drops `HARNESS_NO_WEBSERVER` and lets
-      Playwright launch the Next.js dev server
+- [x] First test that drops `HARNESS_NO_WEBSERVER` and lets
+      Playwright launch the Next.js dev server. Lives in
+      `flows/app-discovery.spec.mjs`; runs via the new
+      `npm run auto-qa:e2e:ui:full` (root) /
+      `npm --prefix auto-qa/harness run ui:full` (harness) script.
+      Cold compile + first navigation: ~20s end-to-end. Validated
+      `window.ethereum` is observable in the actual futarchy
+      page context with `isMetaMask + isHarness + selectedAddress`
+      all set correctly.
+- [x] Bug fix discovered while exercising the webServer for the
+      first time: slice 1's `playwright.config.mjs` had
+      `npm --prefix ../../..` which from the harness dir resolves
+      to `/Users/kas/`, NOT the interface root. Corrected to
+      `../../`. webServer timeout bumped from 120s to 180s for
+      cold compile.
 - [ ] Confirm Wagmi/RainbowKit auto-discover the harness wallet
-      via the EIP-6963 announcement and "Connect" surfaces it
+      via the EIP-6963 announcement and "Connect" surfaces it.
+      Deferred to a follow-up sub-slice (3b): open the Connect
+      modal, assert "Futarchy Harness Wallet" appears in the list,
+      click it, assert successful connect.
 
 **Phase 5 slice 4 (DOM↔API invariant) — TODO:**
 

@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 slices 1+2 landed on interface side. Slice 1: browser-injection smoke. Slice 2: in-page signing via `setupSigningTunnel` exposeBinding (personal_sign + eth_signTypedData_v4 + eth_sendTransaction live-anvil broadcast). 9/9 browser tests green in ~5.6s. Phase 4 slices 1+2+3 prior. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 slices 1+2+3a landed on interface side. Slice 1: browser-injection smoke. Slice 2: in-page signing via `setupSigningTunnel` exposeBinding. Slice 3a: futarchy Next.js dev server in the loop — `flows/app-discovery.spec.mjs` confirms `window.ethereum.isHarness` is observable in the real app context (cold compile ~17s, test ~1.7s). 10/10 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -775,10 +775,28 @@ Summary of slice 1:
     eth_blockNumber forward test from a real http server to
     `context.route(...)` interception (chromium drops fetches from
     `about:blank` to local addresses regardless of CORS headers)
-- Slices 3 (futarchy app + Wagmi auto-discovery) and 4 (DOM↔API
+- Slices 3b (RainbowKit Connect modal assertion) and 4 (DOM↔API
   price invariant) still TODO
 
-Slice 2 summary (this iteration on the interface side):
+Slice 3a summary (this iteration on the interface side):
+
+- `flows/app-discovery.spec.mjs` — first slice that drops
+  `HARNESS_NO_WEBSERVER` and lets Playwright launch the futarchy
+  Next.js dev server. Single test: navigate to `/`, assert
+  `window.ethereum.{isMetaMask,isHarness,selectedAddress}` are
+  set in the real app's page context. Cold compile + test:
+  ~20s wall-clock.
+- Bug fix: slice 1's webServer block had `npm --prefix ../../..`
+  (resolved to /Users/kas/, not the interface root). Corrected
+  to `../../`. Bumped webServer timeout to 180s for cold compile.
+- New scripts: `ui:full` / `ui:full:ui` in harness;
+  `auto-qa:e2e:ui:full` / `auto-qa:e2e:ui:full:ui` at root.
+- Knob: `HARNESS_FRONTEND_RPC_URL` overrides what the dev
+  server's NEXT_PUBLIC_RPC_URL points at. This iteration used
+  `https://rpc.gnosischain.com` so the app could hydrate cleanly
+  without needing a local anvil.
+
+Slice 2 summary (previous iteration on the interface side):
 
 - In-page SIGNING_METHODS now route through a Playwright
   `exposeBinding` named `__harnessSign`, wired by
