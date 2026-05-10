@@ -348,11 +348,21 @@ export async function proxyCandlesQuery(query, variables = {}, chainId = 100) {
         .replace(/orderBy:\s*periodStartUnix/g, 'orderBy: time');
 
     // Prefix inline pool/proposal IDs in the query string. Catches:
-    //   - filter syntax:        pool: "0xabc..." | proposal: "0xabc..."
-    //   - entity-lookup syntax: pool(id: "0xabc...") | proposal(id: "0xabc...")
+    //   - scalar filter:        pool: "0xabc..." | proposal: "0xabc..."
+    //   - list filter:          pool_in: ["0x...", "0x..."] | proposal_in: [...]
+    //   - id lookup:            pool(id: "0xabc...") | proposal(id: "0xabc...")
+    //   - id list lookup:       id_in: ["0xabc...", "0xabc..."]
     adaptedQuery = adaptedQuery
         .replace(/(pool|proposal):\s*"(0x[a-fA-F0-9]{40})"/g,
             (_m, field, addr) => `${field}: "${addChainPrefix(addr, chainId)}"`)
+        .replace(/(pool_in|proposal_in|id_in):\s*\[([^\]]+)\]/g,
+            (_m, field, list) => {
+                const rewritten = list.replace(
+                    /"(0x[a-fA-F0-9]{40})"/g,
+                    (_mm, addr) => `"${addChainPrefix(addr, chainId)}"`
+                );
+                return `${field}: [${rewritten}]`;
+            })
         .replace(/(pool|proposal)\s*\(\s*id\s*:\s*"(0x[a-fA-F0-9]{40})"/g,
             (_m, entity, addr) => `${entity}(id: "${addChainPrefix(addr, chainId)}"`);
 
@@ -368,6 +378,9 @@ export async function proxyCandlesQuery(query, variables = {}, chainId = 100) {
     return { data: normalizedData };
 }
 
+// Pattern for Checkpoint-style chain-prefixed identifiers ("100-0xabc...").
+const CHAIN_PREFIXED_RE = /^\d+-0x[a-fA-F0-9]{40}$/;
+
 function stripPrefixesAndNormalize(value) {
     if (Array.isArray(value)) {
         return value.map(stripPrefixesAndNormalize);
@@ -375,7 +388,12 @@ function stripPrefixesAndNormalize(value) {
     if (value && typeof value === 'object') {
         const out = {};
         for (const [k, v] of Object.entries(value)) {
-            if (typeof v === 'string' && (k === 'id' || k === 'proposal' || k === 'pool')) {
+            // Strip "<chainId>-" from any string field that holds a Checkpoint
+            // entity reference (id, proposal, pool, tokenIn, tokenOut, …).
+            // Detection by VALUE shape avoids missing future fields and is
+            // safe — no plain-text response field happens to look like
+            // "<digits>-0x<40-hex>".
+            if (typeof v === 'string' && CHAIN_PREFIXED_RE.test(v)) {
                 out[k] = stripChainPrefix(v);
             } else {
                 out[k] = stripPrefixesAndNormalize(v);
