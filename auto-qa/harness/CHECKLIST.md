@@ -750,23 +750,25 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 25 invariants:
-      5 api-internal + 17 indexer probes (2 `__typename`
+      PROGRESS.md's invariant tables). Now 26 invariants:
+      5 api-internal + 18 indexer probes (2 `__typename`
       liveness + 6 data-aware coverage + 4 single-row
       data-SHAPE + 2 multi-row data-SHAPE + 2 cross-layer
-      MATCH + 1 CROSS-ENTITY FK: `swapPoolReferentialIntegrity`
-      added this slice — first cross-entity-within-indexer
-      check; query latest swap with `pool { id }` plus
-      pools list, assert swap.pool.id ∈ pools. Catches
-      orphan-swap from FK derivation bugs, schema migration
-      that dropped Pool but left Swap.pool intact, etc.
-      Distinct from existence checks: pools and swaps
-      individually exist but their relationship is broken)
-      + 3 chain-layer probes. 65 smoke tests green. Still
-      to add: probabilityBounds, candlesAggregation
-      (Candle aggregates derive correctly from contained
-      Swaps), chartShape (api unified-chart vs indexer raw),
-      conservation, cross-run monotonicity on rateSanity.
+      MATCH + 2 CROSS-ENTITY FK: `swapPoolReferentialIntegrity`
+      (previous slice) + `candlePoolReferentialIntegrity`
+      added this slice — same FK pattern but for Candle
+      entity. The two checks together pin the FK contract
+      on BOTH entity-emit paths: per-event from swap
+      handler AND per-bucket from period-aggregator. An
+      indexer with correct swap-handler FK derivation but
+      broken period-aggregator FK derivation passes the
+      first and fails the second) + 3 chain-layer probes.
+      69 smoke tests green. Still to add: probabilityBounds,
+      candlesAggregation (Candle.volume = sum of contained
+      Swap amounts within period — combines cross-entity
+      FK with quantitative reconciliation), chartShape
+      (api unified-chart vs indexer raw), conservation,
+      cross-run monotonicity on rateSanity.
 - [x] **4d-activate — orchestrator block UNCOMMENTED.**
       Replaced the `tail -f /dev/null` placeholder with
       `node orchestrator/scenario-runner.mjs`. Dropped the

@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 25 invariants — 5 api-internal + 17 indexer + 3 chain-layer; first cross-entity FK check landed; 65 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 26 invariants — 5 api-internal + 18 indexer + 3 chain-layer; both swap + candle FK checks landed (full per-entity-emit-path FK coverage); 69 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,85 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (swapPoolReferentialIntegrity) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (candlePoolReferentialIntegrity) summary (this iteration on the api side):
+
+- **Cross-entity FK pattern extends from Swap to Candle**.
+  Last iteration shipped `swapPoolReferentialIntegrity`
+  (first cross-entity FK check). This iteration ships
+  the candle analog:
+  * `candlePoolReferentialIntegrity` — single GraphQL
+    query reads `candles(first: 1, ..., orderBy: time)
+    { id pool { id } } pools(first: 50) { id }`;
+    asserts `candle.pool.id ∈ Set(pools.map(p => p.id))`.
+
+- **Why TWO FK checks (swap + candle) vs ONE generic
+  check**: the FK on swaps and the FK on candles are
+  set by DIFFERENT code paths in the indexer:
+  * Swap.pool: set by the swap-event handler, one
+    derivation per Swap event
+  * Candle.pool: set by the period-aggregator, one
+    derivation per Candle bucket
+  An indexer with a correct swap-handler FK derivation
+  but broken period-aggregator FK derivation would
+  pass swapPoolReferentialIntegrity and FAIL
+  candlePoolReferentialIntegrity. The two together
+  pin the FK contract on both entity-emit paths;
+  one alone leaves a gap.
+
+- **Bug shapes caught (in addition to the swap-side
+  ones)**:
+  * Period-aggregator picks wrong pool when bucketing
+    swaps (e.g., uses last-seen pool ref instead of
+    each swap's own pool — would also light up
+    candlesAggregation when that lands)
+  * Pool entity deleted/superseded but candle
+    aggregates weren't garbage-collected (orphan
+    candles — distinct from orphan swaps because
+    aggregators may emit independently of swap
+    ingestion)
+  * Aggregator handler returns null pool (FK dropped)
+
+- **Fixture extension** (this iteration):
+  * Every candle row now gets `pool: {id}` field.
+  * Default: `mock-pool-0` (matches buildPools' first
+    pool, FK intact in happy path).
+  * New `candlePoolIds` array option for tests to
+    override per-candle FK and simulate orphan-candle
+    scenarios (mirrors swapPoolIds option from
+    previous slice).
+
+- **Smoke test coverage** — 4 new tests:
+  * happy: candle references existing pool
+  * vacuously true with 0 candles
+  * failure: orphan candle from period-aggregator FK
+    bug; verifies swap FK STILL passes — distinguishes
+    "aggregator FK bug" from "swap-handler FK bug"
+  * failure: orphan-storm from all pools deleted
+    (mirrors swap-side scenario)
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 69/69 pass (673ms — was
+    65/65)
+  * `npm run scenarios:dry` → exits 0; lists 26
+    invariants in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: ~96% (26 of ~27 sub-slices total).
+  26 invariants now: 5 api-internal + 18 indexer (2
+  liveness + 6 data-aware coverage + 4 single-row
+  data-shape + 2 multi-row data-shape + 2 cross-layer
+  match + 2 cross-entity FK) + 3 chain-layer. Both
+  entity-emit paths (swap-handler + period-aggregator)
+  now have FK coverage. Symmetric build-out continues
+  the slice 4d pattern: cross-layer match got both
+  candles and registry; cross-entity FK now has both
+  swap and candle. Next steps: candlesAggregation
+  (Candle.volume = sum of contained Swap amounts —
+  combines THE FK we just verified with quantitative
+  reconciliation), conservation, probabilityBounds.
+
+Phase 7 slice 4d-scenarios-more (swapPoolReferentialIntegrity) summary (previous iteration on the api side):
 
 - **First cross-entity FK check in the catalog**. All
   previous indexer probes were either (a) single-entity

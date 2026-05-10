@@ -86,6 +86,12 @@ function startFixture({
     // buildPools). Tests pass an explicit array to simulate
     // orphan-swap bugs (e.g. ['nonexistent-pool']).
     swapPoolIds = null,
+    // Per-candle pool FK for candlePoolReferentialIntegrity (slice
+    // 4d-scenarios-more). Same pattern as swapPoolIds — indexed
+    // by candle position; null means every candle defaults to
+    // mock-pool-0. Tests use an array to simulate orphan-candle
+    // bugs from broken period-aggregator FK derivation.
+    candlePoolIds = null,
     // Set to true to make the direct-indexer paths return 502, simulating
     // an indexer that's down even though the api passthrough still works
     // (e.g., api is caching).
@@ -159,6 +165,10 @@ function startFixture({
         row.time = candleTimes
             ? Number(candleTimes[i])
             : candleTimeAnchor - i * candleTimeStep;
+        // FK to a Pool — same pattern as buildSwaps. Default
+        // mock-pool-0; candlePoolIds[i] override for orphan tests.
+        const poolId = candlePoolIds ? candlePoolIds[i] : 'mock-pool-0';
+        row.pool = { id: poolId };
         return row;
     });
 
@@ -1205,6 +1215,78 @@ test('runAllInvariants — failure: swapPoolReferentialIntegrity all pools delet
     }
 });
 
+test('runAllInvariants — candlePoolReferentialIntegrity happy: candle references existing pool', async () => {
+    // Defaults: 1 pool ("mock-pool-0"), 1 candle defaulting to
+    // pool.id="mock-pool-0". FK intact.
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'candlePoolReferentialIntegrity');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /candle mock-candle-0 → pool mock-pool-0 \(FK intact/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — candlePoolReferentialIntegrity vacuously true with no candles', async () => {
+    const fx = await startFixture({ candlesCandlesCount: 0 });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'candlePoolReferentialIntegrity');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /no candles to check \(vacuously true\)/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candlePoolReferentialIntegrity orphan candle (period-aggregator FK bug)', async () => {
+    // Candle's pool FK derived wrong by the aggregator. Distinct
+    // failure mode from the swap-side equivalent: even if every
+    // swap's FK is intact, the aggregator's per-bucket FK can be
+    // independently wrong.
+    const fx = await startFixture({
+        candlesPoolsCount: 2,
+        candlePoolIds: ['orphan-candle-pool-id'],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candlePoolReferentialIntegrity');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /references pool orphan-candle-pool-id but no such pool|orphan candle/);
+        // SWAP FK still intact — distinguishes "aggregator FK bug"
+        // from "swap handler FK bug"
+        const swapInv = results.find((r) => r.name === 'swapPoolReferentialIntegrity');
+        assert.equal(swapInv.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candlePoolReferentialIntegrity all pools deleted (orphan-storm)', async () => {
+    // Pools wiped while candle aggregates remain. Catches schema
+    // migration that dropped Pool rows without GC-ing Candles —
+    // distinct from the swap version because aggregator may
+    // emit candles to disk independently of swap-event ingestion.
+    const fx = await startFixture({
+        candlesPoolsCount: 0,
+        candlesCandlesCount: 1,
+        candlePoolIds: ['mock-pool-0'],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candlePoolReferentialIntegrity');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /references pool mock-pool-0 but no such pool/);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('runAllInvariants — candlesHasPools happy: 1 pool indexed', async () => {
     const fx = await startFixture();  // default candlesPoolsCount=1
     try {
@@ -1326,6 +1408,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /candleTimeMonotonic/);
     assert.match(r.stdout, /swapTimeMonotonicNonStrict/);
     assert.match(r.stdout, /swapPoolReferentialIntegrity/);
+    assert.match(r.stdout, /candlePoolReferentialIntegrity/);
     assert.match(r.stdout, /anvilBlockNumber/);
     assert.match(r.stdout, /anvilChainId/);
     assert.match(r.stdout, /rateSanity/);

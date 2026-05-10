@@ -722,6 +722,65 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'candlePoolReferentialIntegrity',
+        description: 'latest Candle references a Pool that exists in the indexer (catches orphan candle aggregates from FK derivation bugs)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Mirror of swapPoolReferentialIntegrity (previous slice)
+            // but for the Candle entity. Distinct failure mode:
+            //
+            //   * swap FK is set per-event by the swap-event handler
+            //     (one FK derivation per Swap event)
+            //   * candle FK is set per-bucket by the period-aggregator
+            //     (one FK derivation per Candle aggregation)
+            //
+            // So an indexer where the swap handler is correct but
+            // the period-aggregator's FK derivation is broken would
+            // pass swapPoolReferentialIntegrity but fail this one.
+            // The two checks together pin the FK contract on both
+            // entity-emit paths.
+            //
+            // Bug shapes caught:
+            //   * Period-aggregator picks wrong pool when bucketing
+            //     swaps (e.g., uses last-seen pool instead of swap's
+            //     pool — would also light up candlesAggregation when
+            //     that lands)
+            //   * Pool entity deleted/superseded but candle aggregates
+            //     weren't garbage-collected (orphan candles)
+            //   * Schema migration that renamed Pool but didn't
+            //     update Candle's foreign key
+            //   * Aggregator handler returns null pool (FK dropped)
+            //
+            // Vacuous when no candles exist. Distinct from "no pools
+            // but candles>0" which is an integrity FAIL (orphan-storm).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ candles(first: 1, orderBy: time, orderDirection: desc) { id pool { id } } pools(first: 50) { id } }',
+                }),
+            });
+            const candles = j?.data?.candles;
+            const pools = j?.data?.pools;
+            if (!Array.isArray(candles) || !Array.isArray(pools)) {
+                throw new Error(`unexpected response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (candles.length === 0) {
+                return { ok: true, detail: 'no candles to check (vacuously true)' };
+            }
+            const candle = candles[0];
+            const refPoolId = candle?.pool?.id;
+            if (typeof refPoolId !== 'string' || refPoolId.length === 0) {
+                throw new Error(`candle ${candle.id}: pool.id missing or non-string (period-aggregator dropped FK; got ${JSON.stringify(candle.pool)})`);
+            }
+            const poolIds = new Set(pools.map((p) => p.id));
+            if (!poolIds.has(refPoolId)) {
+                throw new Error(`candle ${candle.id}: references pool ${refPoolId} but no such pool in pools(first: 50) — orphan candle (aggregator FK bug or pool deletion)`);
+            }
+            return { ok: true, detail: `candle ${candle.id} → pool ${refPoolId} (FK intact; ${pools.length} pool(s) total)` };
+        },
+    },
+    {
         name: 'swapPoolReferentialIntegrity',
         description: 'latest swap references a Pool that exists in the indexer (catches orphan swap rows from FK derivation bugs)',
         layer: 'orchestrator↔candles',
