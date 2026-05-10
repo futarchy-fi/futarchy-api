@@ -336,16 +336,26 @@ freshly-generated addresses as recipients; documented in
       that catches a different bug shape (a regression that
       drops the fallback would crash or render empty here, not
       in v1). Test: 1.4s.
-- [ ] Sub-slice 4c v3 — currency-formatted price ("$0.42" /
-      "42.00%" / "0.42 SDAI" / etc.). Real currency formatting
-      lives behind the candles/pool fetch pipeline (HighlightCards
-      uses `(v).toFixed(2) + ' ' + baseTokenSymbol` and
-      `(v * 100).toFixed(0) + '%'`). To test, would need to mock
-      both `api.futarchy.fi/registry/graphql` AND
-      `api.futarchy.fi/candles/graphql`, plus seed each proposal
-      with valid `prediction_pools` / `pools` references so the
-      collectAndFetchPoolPrices pipeline lands prices on the
-      right cards. Larger lift; staged for a dedicated iteration.
+- [x] Sub-slice 4c v3a — candles pipeline plumbing.
+      Mocks both endpoints (`api.futarchy.fi/registry/graphql` AND
+      `api.futarchy.fi/candles/graphql`), seeds the registry
+      response with a proposal whose `metadata.conditional_pools.{yes,no}.address`
+      matches our probe addresses, and asserts the candles endpoint
+      gets POSTed with at least one of those addresses. Proves the
+      `EventsHighlightCarousel` →
+      `fetchProposalsFromAggregator` →
+      `collectAndFetchPoolPrices` → `fetchPoolsBatch` chain
+      reaches the network with the right inputs. Test: 1.7s.
+      Foundation for v3b (DOM-level price assertion).
+- [ ] Sub-slice 4c v3b — DOM-level currency formatter assertion.
+      Now that v3a confirmed the candles endpoint is reachable
+      with the right pool addresses, return known prices (e.g.
+      0.42 / 0.58) and assert the formatted string ("0.42 SDAI",
+      "42% YES", or whatever the carousel card renders) appears
+      somewhere in the visible DOM. Will need to figure out which
+      card variant the carousel actually renders for our mocked
+      proposal (HighlightCards vs EventHighlightCard) and which
+      formatter is the visible one.
 - [ ] Sub-slice 4d — cross-protocol price reconciliation
       (Algebra / CoW / Sushi) mock — when multiple sources should
       agree, mock each to slightly-different values and assert the

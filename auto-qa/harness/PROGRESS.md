@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 slices 1+2+3+4a+4b+4c v1+4c v2 landed on interface side. Slices 1-3 prior. Slice 4a: string passthrough. Slice 4b: integer counts through filter. Slice 4c v1: int → enum mapping (chain=10 → "Optimism"). Slice 4c v2: enum FALLBACK formatter — template-literal branch (chain=999 → "Chain 999"). 15/15 browser tests green. Currency-formatted price (4c v3, needs candles pipeline) + cross-protocol reconciliation (4d) still ahead. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 slices 1-3 + 4a + 4b + 4c (v1, v2, v3a) landed on interface side. Latest: 4c v3a — candles pipeline plumbing. Mocks both api.futarchy.fi/{registry,candles}/graphql, seeds proposal with conditional_pools.{yes,no}.address; asserts the candles endpoint receives our probe pool address. Foundation for 4c v3b (DOM-level currency formatter assertion). 16/16 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -775,11 +775,40 @@ Summary of slice 1:
     eth_blockNumber forward test from a real http server to
     `context.route(...)` interception (chromium drops fetches from
     `about:blank` to local addresses regardless of CORS headers)
-- Slice 4 sub-slices remaining: 4c v3 (currency-formatted price
-  through the candles pipeline — mock both registry/graphql AND
-  candles/graphql endpoints), 4d (cross-protocol reconciliation).
+- Slice 4 sub-slices remaining: 4c v3b (DOM-level currency
+  formatter assertion building on v3a's plumbing), 4d (cross-
+  protocol reconciliation).
 
-Slice 4c v2 summary (this iteration on the interface side):
+Slice 4c v3a summary (this iteration on the interface side):
+
+- Splits the original 4c v3 ambition into two iterations: v3a
+  proves the network reaches the candles endpoint with the right
+  inputs; v3b (next) asserts the formatted DOM string. Plumbing-
+  first because the candles pipeline involves a SECOND fetcher
+  path (`fetchProposalsFromAggregator` from
+  useAggregatorProposals.js, not useAggregatorCompanies — they
+  query the same registry endpoint with different field
+  selections, then the carousel side calls
+  collectAndFetchPoolPrices which is the new bit).
+- New fixtures: CANDLES_GRAPHQL_URL constant; PROBE_POOL_YES /
+  PROBE_POOL_NO / PROBE_PROPOSAL_ADDRESS distinctive addresses;
+  `fakePoolBearingProposal({...})` builds a proposal in the
+  carousel-side shape with conditional_pools metadata;
+  `makeCandlesMockHandler({prices, onCall})` parses the bulk
+  fetcher's `pools(where: id_in: [...])` query and returns only
+  the pools the test seeded.
+- Test asserts the candles endpoint receives at least one POST
+  whose query mentions PROBE_POOL_YES — proves the carousel
+  pipeline routes our mocked proposal's metadata through to the
+  bulk price fetcher.
+- 1 test, 1.7s; full dom-api-invariant suite: 24.4s. UI smoke:
+  25 pass + 0 skip.
+- Deliberately deferred to v3b: the DOM-level price assertion.
+  The carousel might render a card variant that doesn't display
+  the YES price for our placeholder-address proposal; v3b will
+  trace which card path renders and assert the formatter output.
+
+Slice 4c v2 summary (previous iteration on the interface side):
 
 - Same `flows/dom-api-invariant.spec.mjs`, fourth test added.
   Mock `metadata.chain = '999'` → flows through parseInt →
