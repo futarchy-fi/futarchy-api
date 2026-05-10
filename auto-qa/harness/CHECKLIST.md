@@ -750,20 +750,21 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 22 invariants:
-      5 api-internal + 14 indexer probes (2 `__typename`
+      PROGRESS.md's invariant tables). Now 23 invariants:
+      5 api-internal + 15 indexer probes (2 `__typename`
       liveness + 6 data-aware coverage + 4 single-row
-      data-SHAPE: candleOHLC + candleVolumes +
-      swapAmountsPositive + swapTimestampSensible + 2
-      MULTI-ROW data-SHAPE: `candleTimeMonotonic` +
-      `swapTimeMonotonicNonStrict` added this slice — first
-      cross-row checks in the catalog; strict for candles
-      because each row is a unique period, non-strict for
-      swaps because multiple swaps can share a block
-      timestamp) + 3 chain-layer probes. 51 smoke tests
-      green. Still to add: probabilityBounds, candlesAggregation
-      (cross-layer Candle vs Swap), chartShape, conservation,
-      cross-run monotonicity on rateSanity.
+      data-SHAPE + 2 multi-row data-SHAPE + 1 CROSS-LAYER
+      MATCH: `apiCandlesMatchesDirect` added this slice —
+      first true api↔indexer agreement check; queries the
+      same candles via api passthrough AND direct in
+      parallel, asserts ids + times match. Catches api
+      caching drift, adapter rewriting, schema-translation
+      bugs that no existing invariant can see) + 3
+      chain-layer probes. 56 smoke tests green. Still
+      to add: probabilityBounds, candlesAggregation
+      (Candle aggregates derive correctly from contained
+      Swaps), chartShape, conservation, cross-run
+      monotonicity on rateSanity.
 - [x] **4d-activate — orchestrator block UNCOMMENTED.**
       Replaced the `tail -f /dev/null` placeholder with
       `node orchestrator/scenario-runner.mjs`. Dropped the

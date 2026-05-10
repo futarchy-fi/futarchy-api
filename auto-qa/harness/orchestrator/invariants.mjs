@@ -190,6 +190,70 @@ export const INVARIANTS = [
             return { ok: true, detail: 'candles returned __typename=Query via api passthrough' };
         },
     },
+    {
+        name: 'apiCandlesMatchesDirect',
+        description: 'latest Candle returned via api passthrough matches the one returned by direct indexer query (catches api caching drift, adapter rewriting, schema translation bugs)',
+        layer: 'api↔candles',
+        check: async (ctx) => {
+            // Issues the SAME GraphQL query against the api passthrough
+            // (/candles/graphql) AND the direct candles indexer
+            // endpoint, then compares the responses. Bug shapes caught:
+            //
+            //  * api-side caching gone stale (api serves an old
+            //    snapshot while direct shows fresh data)
+            //  * adapter transformation drops/rewrites fields (the
+            //    candles-adapter's schema-translation layer mutates
+            //    output unexpectedly)
+            //  * schema-mismatch between api's expectation of the
+            //    upstream schema and what the indexer actually emits
+            //
+            // This is the FIRST true api↔indexer match invariant in
+            // the catalog. Existing api↔* probes only assert "api
+            // can reach the indexer" (via __typename); existing
+            // candles* probes only assert "indexer has data". This
+            // probe asserts they AGREE, which is a strictly stronger
+            // check than either alone.
+            //
+            // Vacuous when both sides return zero candles (no data
+            // to compare). If one side has data and the other doesn't,
+            // that's a real divergence and fails.
+            const query = JSON.stringify({
+                query: '{ candles(first: 5, orderBy: time, orderDirection: desc) { id time } }',
+            });
+            const fetchOpts = {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: query,
+            };
+            const [viaApi, viaDirect] = await Promise.all([
+                fetchJson(`${ctx.apiUrl}/candles/graphql`, fetchOpts),
+                fetchJson(ctx.candlesUrl, fetchOpts),
+            ]);
+            const apiCandles = viaApi?.data?.candles;
+            const directCandles = viaDirect?.data?.candles;
+            if (!Array.isArray(apiCandles) || !Array.isArray(directCandles)) {
+                throw new Error(`response shape mismatch: api=${JSON.stringify(viaApi)?.slice(0, 80)}, direct=${JSON.stringify(viaDirect)?.slice(0, 80)}`);
+            }
+            if (apiCandles.length === 0 && directCandles.length === 0) {
+                return { ok: true, detail: 'both sides have 0 candles (vacuously matching)' };
+            }
+            if (apiCandles.length !== directCandles.length) {
+                throw new Error(`length mismatch: api returned ${apiCandles.length} candles, direct returned ${directCandles.length} (cache drift or pagination divergence)`);
+            }
+            for (let i = 0; i < apiCandles.length; i++) {
+                if (apiCandles[i].id !== directCandles[i].id) {
+                    throw new Error(`candles[${i}].id: api=${apiCandles[i].id} ≠ direct=${directCandles[i].id} (api may be serving cached/translated data inconsistent with indexer)`);
+                }
+                // Time field is the strongest match signal — ID match
+                // alone could miss a renamed-row scenario where the id
+                // happens to align by position.
+                if (Number(apiCandles[i].time) !== Number(directCandles[i].time)) {
+                    throw new Error(`candles[${i}].time: api=${apiCandles[i].time} ≠ direct=${directCandles[i].time} (id matches but time drifted — partial-cache or partial-rewrite bug)`);
+                }
+            }
+            return { ok: true, detail: `${apiCandles.length} candles match between api passthrough and direct indexer` };
+        },
+    },
     // ── Direct-indexer probes ───────────────────────────────────────
     // The two below bypass the api and hit the indexer GraphQL
     // endpoints directly. They validate that the orchestrator

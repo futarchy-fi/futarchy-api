@@ -85,6 +85,12 @@ function startFixture({
     // (e.g., api is caching).
     registryDirectDown = false,
     candlesDirectDown = false,
+    // Drift hook for apiCandlesMatchesDirect (slice 4d-scenarios-more):
+    // a callback that takes the candles array the direct endpoint would
+    // return and rewrites it BEFORE the api passthrough returns it. Use
+    // to simulate api caching stale data, adapter dropping fields,
+    // schema-translation drift, etc. Default identity (no drift).
+    apiCandlesDriftFn = (candles) => candles,
     // JSON-RPC mock at /rpc (slice 4d-scenarios-more rateSanity).
     // sDAIRateRaw is the BigInt raw rate to return; default is 1.2e18.
     // Set to 0n to simulate a broken contract; null to make eth_call error.
@@ -96,6 +102,41 @@ function startFixture({
     blockNumberHex = '0x123abc',  // some positive block
     chainIdHex = '0x64',           // 100 = Gnosis
 } = {}) {
+    // ── shared row builders ──────────────────────────────────────────
+    // Pulled out of the per-route handlers so the api passthrough
+    // (/candles/graphql) and the direct endpoint (/candles-direct/
+    // graphql) can return identical data by default. Tests that need
+    // drift between the two go through `apiCandlesDriftFn`.
+    const candleTimeAnchor = Math.floor(Date.now() / 1000);
+    const buildPools = () => Array.from({ length: candlesPoolsCount },
+        (_, i) => ({ id: `mock-pool-${i}` }));
+    const buildSwaps = () => Array.from({ length: candlesSwapsCount }, (_, i) => {
+        const row = { id: `mock-swap-${i}` };
+        if (i === 0) {
+            row.amountIn = latestSwapAmountIn;
+            row.amountOut = latestSwapAmountOut;
+        }
+        row.timestamp = swapTimestamps
+            ? Number(swapTimestamps[i])
+            : Number(latestSwapTimestamp) - i * swapTimestampStep;
+        return row;
+    });
+    const buildCandles = () => Array.from({ length: candlesCandlesCount }, (_, i) => {
+        const row = { id: `mock-candle-${i}` };
+        if (i === 0) {
+            row.open = latestCandleOpen;
+            row.high = latestCandleHigh;
+            row.low = latestCandleLow;
+            row.close = latestCandleClose;
+            row.volumeToken0 = latestCandleVolumeToken0;
+            row.volumeToken1 = latestCandleVolumeToken1;
+        }
+        row.time = candleTimes
+            ? Number(candleTimes[i])
+            : candleTimeAnchor - i * candleTimeStep;
+        return row;
+    });
+
     return new Promise((res) => {
         const server = createServer((req, response) => {
             const chunks = [];
@@ -125,8 +166,30 @@ function startFixture({
                     return;
                 }
                 if (req.url === '/candles/graphql' && req.method === 'POST') {
+                    // The api passthrough used to return ONLY __typename
+                    // (sufficient for apiCanReachCandles). For
+                    // apiCandlesMatchesDirect we now return the SAME
+                    // shape as /candles-direct/graphql by default
+                    // (because the api literally forwards the query),
+                    // BUT routed through apiCandlesDriftFn so tests
+                    // can simulate adapter drift / cache staleness.
                     response.setHeader('content-type', 'application/json');
-                    response.end(JSON.stringify({ data: { __typename: candlesTypename } }));
+                    if (candlesDirectDown) {
+                        // If the upstream is down, the api still returns
+                        // its bare __typename probe — preserves the
+                        // existing apiCanReachCandles semantics.
+                        response.end(JSON.stringify({ data: { __typename: candlesTypename } }));
+                        return;
+                    }
+                    const candlesForApi = apiCandlesDriftFn(buildCandles());
+                    response.end(JSON.stringify({
+                        data: {
+                            __typename: candlesTypename,
+                            pools: buildPools(),
+                            swaps: buildSwaps(),
+                            candles: candlesForApi,
+                        },
+                    }));
                     return;
                 }
                 if (req.url === '/registry-direct/graphql' && req.method === 'POST') {
@@ -149,53 +212,13 @@ function startFixture({
                 if (req.url === '/candles-direct/graphql' && req.method === 'POST') {
                     if (candlesDirectDown) { response.statusCode = 502; response.end('indexer down'); return; }
                     response.setHeader('content-type', 'application/json');
-                    const pools = Array.from({ length: candlesPoolsCount },
-                        (_, i) => ({ id: `mock-pool-${i}` }));
-                    const swaps = Array.from({ length: candlesSwapsCount }, (_, i) => {
-                        const row = { id: `mock-swap-${i}` };
-                        if (i === 0) {
-                            row.amountIn = latestSwapAmountIn;
-                            row.amountOut = latestSwapAmountOut;
-                        }
-                        // Populate timestamp on EVERY swap so the
-                        // monotonicity invariant has multi-row data to
-                        // probe. Explicit array wins; otherwise generate
-                        // a non-strictly-decreasing series anchored at
-                        // latestSwapTimestamp.
-                        row.timestamp = swapTimestamps
-                            ? Number(swapTimestamps[i])
-                            : Number(latestSwapTimestamp) - i * swapTimestampStep;
-                        return row;
-                    });
-                    // Latest-candle fields (OHLC + volumes) populated on
-                    // the FIRST element so candleOHLCOrdering and
-                    // candleVolumesNonNegative can probe a real-shape
-                    // record. `id` is set on every element so
-                    // candlesHasCandles still works.
-                    // Anchor candle times at "now" (rounded down) so
-                    // the auto-generated series is sane out of the
-                    // box. Tests overriding candleTimes get full control.
-                    const candleTimeAnchor = Math.floor(Date.now() / 1000);
-                    const candles = Array.from({ length: candlesCandlesCount }, (_, i) => {
-                        const row = { id: `mock-candle-${i}` };
-                        if (i === 0) {
-                            row.open = latestCandleOpen;
-                            row.high = latestCandleHigh;
-                            row.low = latestCandleLow;
-                            row.close = latestCandleClose;
-                            row.volumeToken0 = latestCandleVolumeToken0;
-                            row.volumeToken1 = latestCandleVolumeToken1;
-                        }
-                        // Populate `time` on EVERY candle for
-                        // candleTimeMonotonic. Explicit array wins;
-                        // otherwise generate strictly-decreasing series.
-                        row.time = candleTimes
-                            ? Number(candleTimes[i])
-                            : candleTimeAnchor - i * candleTimeStep;
-                        return row;
-                    });
                     response.end(JSON.stringify({
-                        data: { __typename: candlesDirectTypename, pools, swaps, candles },
+                        data: {
+                            __typename: candlesDirectTypename,
+                            pools: buildPools(),
+                            swaps: buildSwaps(),
+                            candles: buildCandles(),
+                        },
                     }));
                     return;
                 }
@@ -359,6 +382,90 @@ test('runAllInvariants — failure: candles direct probe down', async () => {
         // Both api-passthrough invariants still pass
         const apiCandles = results.find((r) => r.name === 'apiCanReachCandles');
         assert.equal(apiCandles.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiCandlesMatchesDirect happy: api passthrough returns same data as direct', async () => {
+    const fx = await startFixture({ candlesCandlesCount: 3 });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'apiCandlesMatchesDirect');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /3 candles match between api passthrough and direct/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiCandlesMatchesDirect vacuously true when both sides empty', async () => {
+    const fx = await startFixture({ candlesCandlesCount: 0 });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'apiCandlesMatchesDirect');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /both sides have 0 candles/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiCandlesMatchesDirect length mismatch (api drops a candle — cache stale)', async () => {
+    // Simulate api caching: it returns 1 fewer candle than direct.
+    const fx = await startFixture({
+        candlesCandlesCount: 3,
+        apiCandlesDriftFn: (candles) => candles.slice(0, 2),  // api returns 2, direct returns 3
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiCandlesMatchesDirect');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /length mismatch.*api returned 2.*direct returned 3|cache drift/);
+        // Existence invariants still pass — distinguishes "api is
+        // stale" from "indexer is empty"
+        const direct = results.find((r) => r.name === 'candlesDirect');
+        assert.equal(direct.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiCandlesMatchesDirect id drift (adapter rewrote ids)', async () => {
+    // Simulate adapter bug: api rewrites the id of the first candle.
+    const fx = await startFixture({
+        candlesCandlesCount: 2,
+        apiCandlesDriftFn: (candles) => candles.map((c, i) =>
+            i === 0 ? { ...c, id: 'rewritten-by-adapter' } : c
+        ),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiCandlesMatchesDirect');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /candles\[0\]\.id: api=rewritten-by-adapter ≠ direct=mock-candle-0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiCandlesMatchesDirect time drift (id matches but time wrong)', async () => {
+    // Subtle bug: api returns candles with right ids but wrong times.
+    // This catches partial-cache or partial-rewrite drift that pure
+    // id matching would miss.
+    const fx = await startFixture({
+        candlesCandlesCount: 2,
+        apiCandlesDriftFn: (candles) => candles.map((c) => ({ ...c, time: c.time + 100 })),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiCandlesMatchesDirect');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /id matches but time drifted|partial-rewrite/);
     } finally {
         await fx.stop();
     }
@@ -995,6 +1102,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /apiSpotCandlesValidates/);
     assert.match(r.stdout, /apiCanReachRegistry/);
     assert.match(r.stdout, /apiCanReachCandles/);
+    assert.match(r.stdout, /apiCandlesMatchesDirect/);
     assert.match(r.stdout, /registryDirect/);
     assert.match(r.stdout, /candlesDirect/);
     assert.match(r.stdout, /registryHasProposalEntities/);

@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 22 invariants — 5 api-internal + 14 indexer + 3 chain-layer; first MULTI-ROW data-shape checks landed; 51 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 23 invariants — 5 api-internal + 15 indexer + 3 chain-layer; first true api↔indexer MATCH check landed; 56 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,88 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (candleTimeMonotonic + swapTimeMonotonicNonStrict) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (apiCandlesMatchesDirect) summary (this iteration on the api side):
+
+- **First true api↔indexer MATCH invariant in the catalog**.
+  Existing api↔* invariants (apiCanReachRegistry,
+  apiCanReachCandles) only assert "api can reach the
+  indexer" via __typename. Existing candles* invariants
+  (candlesHasPools, candlesHasSwaps, etc.) only assert
+  "indexer has data". Neither asserts the AGREE on the
+  data. This slice closes that gap:
+  * `apiCandlesMatchesDirect` — issues the SAME GraphQL
+    query (`{ candles(first: 5, orderBy: time,
+    orderDirection: desc) { id time } }`) against
+    `apiUrl/candles/graphql` AND `candlesUrl` in
+    PARALLEL (Promise.all), compares lengths, then
+    pair-wise compares both `id` AND `time` for every
+    returned candle.
+
+- **Bug classes caught (no other invariant catches
+  these)**:
+  * api-side caching gone stale — api serves an old
+    snapshot while direct shows fresh data. Existing
+    invariants pass (api responds, indexer has data),
+    but the user sees wrong numbers.
+  * adapter rewriting — the candles-adapter's
+    schema-translation layer mutates output unexpectedly
+    (e.g., a regression that drops fields or rewrites
+    ids).
+  * schema-mismatch — api expects upstream schema X,
+    indexer emits Y. Both endpoints respond fine
+    individually, but the data shape diverges.
+  * partial-rewrite — id matches but time drifted
+    (caught by the SECONDARY pair-wise time check).
+
+- **New invariant pattern**: PARALLEL queries to two
+  endpoints, then row-by-row comparison. This is the
+  template future cross-layer match invariants will
+  reuse:
+  * `apiRegistryMatchesDirect` (next slice candidate)
+  * `candlesAggregation` (Candle vs sum-of-Swaps)
+  * `chartShape` (api unified-chart vs indexer raw)
+
+- **Fixture refactor**: extracted shared `buildPools` /
+  `buildSwaps` / `buildCandles` row builders so that
+  /candles/graphql (api passthrough) and
+  /candles-direct/graphql (direct indexer) return
+  IDENTICAL data by default — modeling reality (api
+  literally forwards the query). New `apiCandlesDriftFn`
+  hook lets tests rewrite the api-side response BEFORE
+  it returns, simulating cache drift / adapter
+  rewriting. Default identity (no drift) means the
+  happy path is the no-op case.
+
+- **Smoke test coverage** — 5 new tests:
+  * apiCandlesMatchesDirect happy: 3 candles match
+    end-to-end
+  * vacuously true when both sides empty (0 candles)
+  * failure: length mismatch (api drops a candle —
+    cache stale; verifies candlesDirect STILL passes,
+    distinguishing api-stale from indexer-empty)
+  * failure: id drift (adapter rewrote ids on api side)
+  * failure: time drift (id matches but time wrong —
+    catches partial-rewrite)
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 56/56 pass (531ms — was
+    51/51)
+  * `npm run scenarios:dry` → exits 0; lists 23
+    invariants in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: ~93% (23 of ~25 sub-slices total).
+  23 invariants now: 5 api-internal + 15 indexer (2
+  liveness + 6 data-aware coverage + 4 single-row
+  data-shape + 2 multi-row data-shape + 1 cross-layer
+  MATCH) + 3 chain-layer. The cross-layer match
+  pattern unlocks the rest of the documented "Cross-
+  layer invariants" table from PROGRESS.md
+  (candlesAggregation, chartShape, plus the registry
+  analog).
+
+Phase 7 slice 4d-scenarios-more (candleTimeMonotonic + swapTimeMonotonicNonStrict) summary (previous iteration on the api side):
 
 - **First MULTI-ROW data-shape checks land in the catalog**.
   Previous data-shape invariants (candleOHLC, candleVolumes,
