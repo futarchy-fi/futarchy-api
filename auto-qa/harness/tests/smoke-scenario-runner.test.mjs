@@ -1366,6 +1366,93 @@ test('runAllInvariants — candleVolumesNonNegative happy', async () => {
     }
 });
 
+test('runAllInvariants — candlePricesNonNegative happy: all OHLC ≥ 0', async () => {
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'candlePricesNonNegative');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /OHLC all ≥ 0.*open=0\.45.*high=0\.5.*low=0\.4.*close=0\.48/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — candlePricesNonNegative vacuously true with no candles', async () => {
+    const fx = await startFixture({ candlesCandlesCount: 0 });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'candlePricesNonNegative');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /no candles to check \(vacuously true\)/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candlePricesNonNegative all-negative OHLC (ordering passes by accident)', async () => {
+    // All-negative satisfies "low ≤ open, close ≤ high" — ordering
+    // check is happy. probabilityBounds is vacuous for non-PREDICTION
+    // pool. This invariant catches what the others miss.
+    const fx = await startFixture({
+        poolType: 'CONDITIONAL',  // probabilityBounds vacuous
+        latestCandleLow: '-3.0',
+        latestCandleHigh: '-1.0',
+        latestCandleOpen: '-2.0',
+        latestCandleClose: '-2.5',
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candlePricesNonNegative');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /(open|high|low|close)=-?\d+(\.\d+)? < 0|sign-bug leak/);
+        // candleOHLCOrdering STILL passes — proves the gap exists
+        const ohlc = results.find((r) => r.name === 'candleOHLCOrdering');
+        assert.equal(ohlc.ok, true);
+        // probabilityBounds vacuous on CONDITIONAL — proves it doesn't
+        // help here either
+        const prob = results.find((r) => r.name === 'probabilityBounds');
+        assert.equal(prob.ok, true);
+        assert.match(prob.detail, /not PREDICTION/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candlePricesNonNegative mixed-sign OHLC (low<0 but high>0)', async () => {
+    // Subtler case: low is negative, high is positive. Ordering
+    // PASSES (low ≤ open ≤ high holds with open=-0.5 between -1 and 1).
+    // probabilityBounds catches close < 0 for PREDICTION pools, but
+    // close here is 0.5 (positive); only OPEN is negative. Universal
+    // sign check is the only one that catches this.
+    const fx = await startFixture({
+        // Keep pool type PREDICTION to show even this case slips
+        // probabilityBounds (since probabilityBounds only checks close)
+        poolType: 'PREDICTION',
+        latestCandleLow: '-1.0',
+        latestCandleHigh: '1.0',
+        latestCandleOpen: '-0.5',
+        latestCandleClose: '0.5',
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candlePricesNonNegative');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /open=-0\.5 < 0|sign-bug leak/);
+        // Ordering passes (low ≤ open ≤ high holds for negatives too)
+        const ohlc = results.find((r) => r.name === 'candleOHLCOrdering');
+        assert.equal(ohlc.ok, true);
+        // probabilityBounds passes — close=0.5 is in [0,1]
+        const prob = results.find((r) => r.name === 'probabilityBounds');
+        assert.equal(prob.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('runAllInvariants — failure: candle volume0 < 0 (signed-amount aggregator bug)', async () => {
     const fx = await startFixture({ latestCandleVolumeToken0: '-1.5' });
     try {
@@ -2116,6 +2203,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /candlesHasCandles/);
     assert.match(r.stdout, /candleOHLCOrdering/);
     assert.match(r.stdout, /candleVolumesNonNegative/);
+    assert.match(r.stdout, /candlePricesNonNegative/);
     assert.match(r.stdout, /probabilityBounds/);
     assert.match(r.stdout, /swapAmountsPositive/);
     assert.match(r.stdout, /swapTimestampSensible/);

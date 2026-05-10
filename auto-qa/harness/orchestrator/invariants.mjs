@@ -1287,6 +1287,75 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'candlePricesNonNegative',
+        description: 'latest candle OHLC values are all ≥ 0 (universal sanity that catches all-negative or mixed-sign OHLC bugs the ordering check allows)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Closes a gap left by candleOHLCOrdering +
+            // probabilityBounds:
+            //
+            //   * candleOHLCOrdering checks `low ≤ open, close ≤
+            //     high` — passes when low and high are both
+            //     negative (low=-3, high=-1, open=-2, close=-2 is
+            //     ORDERED but ALL negative) or mixed-sign with
+            //     ordering preserved.
+            //   * probabilityBounds catches close < 0, but ONLY
+            //     for PREDICTION-type pools. CONDITIONAL and
+            //     EXPECTED_VALUE pools (whose prices aren't
+            //     probabilities) skip that check, so a sign-bug
+            //     leak in their price-derivation handler goes
+            //     undetected.
+            //
+            // This invariant is the universal magnitude-sign check:
+            // all four OHLC fields ≥ 0 for ANY pool type. Bug
+            // shapes caught:
+            //   * Sign-bug leak in price derivation (signed
+            //     arithmetic without abs()) for non-PREDICTION
+            //     pools
+            //   * All-OHLC-negative aggregator bug (ordering
+            //     check passes by accident because low ≤ high is
+            //     true even for negatives)
+            //   * Defense-in-depth for PREDICTION pools (catches
+            //     negative open/high/low even when close happens
+            //     to round non-negative)
+            //
+            // Vacuous when no candles exist. Distinct concern
+            // from candleVolumesNonNegative which checks
+            // volumes (per-period sums) — this checks PRICES
+            // (per-period quotes).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ candles(first: 1, orderBy: time, orderDirection: desc) { id open high low close } }',
+                }),
+            });
+            const candles = j?.data?.candles;
+            if (!Array.isArray(candles)) {
+                throw new Error(`unexpected response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (candles.length === 0) {
+                return { ok: true, detail: 'no candles to check (vacuously true)' };
+            }
+            const c = candles[0];
+            const fields = [
+                ['open', parseFloat(c.open)],
+                ['high', parseFloat(c.high)],
+                ['low', parseFloat(c.low)],
+                ['close', parseFloat(c.close)],
+            ];
+            for (const [name, val] of fields) {
+                if (!Number.isFinite(val)) {
+                    throw new Error(`candle ${c.id}: ${name}="${c[name]}" is not a finite number`);
+                }
+                if (val < 0) {
+                    throw new Error(`candle ${c.id}: ${name}=${val} < 0 (price went negative — sign-bug leak in price-derivation handler; ordering check missed this because mixed/all-negative satisfies low ≤ high)`);
+                }
+            }
+            return { ok: true, detail: `candle ${c.id}: OHLC all ≥ 0 (${fields.map(([n, v]) => `${n}=${v}`).join(', ')})` };
+        },
+    },
+    {
         name: 'candleVolumesNonNegative',
         description: 'latest candle has volumeToken0 ≥ 0 AND volumeToken1 ≥ 0 (vacuously true when no candles)',
         layer: 'orchestrator↔candles',

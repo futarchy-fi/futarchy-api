@@ -750,27 +750,25 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 34 invariants:
-      8 api-internal + 22 indexer probes + 4 chain-layer.
-      `probabilityBounds` added this slice — FIRST
-      ECONOMIC INVARIANT from PROGRESS's economic-
-      invariants table. For PREDICTION-type pools
-      (filtered via candle.pool.type), latest candle
-      close ∈ [0, 1]. The close IS the probability of
-      YES outcome; values outside this range are bugs.
-      Vacuously skips CONDITIONAL/EXPECTED_VALUE pools
-      whose prices aren't probabilities. Catches raw
-      uint256 leaks (close=1e18), real probability
-      bugs (close > 1 = "more than certain"), and sign
-      bugs (close < 0). Distinct from candleOHLCOrdering
-      which only checks per-row ordering — bounds-on-
-      magnitude catches a different class. 101 smoke
-      tests green. Still to add: candlesAggregation
+      PROGRESS.md's invariant tables). Now 35 invariants:
+      8 api-internal + 23 indexer probes + 4 chain-layer.
+      `candlePricesNonNegative` added this slice —
+      universal price-sanity probe that closes a gap
+      left by candleOHLCOrdering + probabilityBounds.
+      OHLC ordering passes when low+high are both
+      negative (low ≤ high holds), and probabilityBounds
+      only fires for PREDICTION pools — so all-negative
+      or mixed-sign OHLC for non-PREDICTION pools went
+      undetected. This invariant asserts all four OHLC
+      ≥ 0 for ANY pool type. Defense-in-depth even for
+      PREDICTION pools (catches negative open/high/low
+      where probabilityBounds only checks close). 105
+      smoke tests green. Still to add: candlesAggregation
       (Candle.volume = sum of contained Swap amounts
       within period), chartShape full match (api
       unified-chart vs indexer raw), conservation
-      (∑YES + ∑NO = ∑sDAI), cross-run monotonicity
-      on rateSanity.
+      (∑YES + ∑NO = ∑sDAI), monotonicity (TWAP),
+      cross-run monotonicity on rateSanity.
 - [x] **4d-activate — orchestrator block UNCOMMENTED.**
       Replaced the `tail -f /dev/null` placeholder with
       `node orchestrator/scenario-runner.mjs`. Dropped the
