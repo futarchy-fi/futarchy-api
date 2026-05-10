@@ -420,31 +420,58 @@ freshly-generated addresses as recipients; documented in
 
 **Phase 6 slice 3 (catalog generator) — TODO:**
 
-- [ ] `scenarios:catalog` script that emits a `SCENARIOS.md`
-      index from each scenario's `bugShape`. Worth doing once we
-      have ≥3 scenarios.
-
-**Phase 6 slice 3 (replay framework / catalog) — TODO:**
-
-- [ ] Replay framework: not the original "feed scenario → drive
-      harness → assert end-state" — the wrapper spec from slice 2
-      already does that for the chosen format. Slice 3 instead
-      adds a `scenarios:catalog` script that reads every scenario's
-      `bugShape` and emits a `SCENARIOS.md` index listing the
-      bug-shape coverage (becomes valuable once we have ≥3 scenarios).
+- [ ] `scenarios:catalog` script that reads every scenario's
+      `bugShape` field and emits a `SCENARIOS.md` index listing
+      the bug-shape coverage. The wrapper spec already handles
+      replay (slice 2 closed that part of the original goal);
+      slice 3 is the human-readable catalog. Worth doing once
+      we have ≥3 scenarios — currently 2 (`01-stale-price-shape`,
+      `02-registry-down`).
 
 ## Phase 7 — Chaos injection + nightly CI
 
 **Goal:** production-shape resilience signal.
 
-- [ ] Chaos library: kill indexer mid-replay, return 502 from api,
-      RPC fault injection
-- [ ] Single docker-compose `up -d` brings the full 5-service stack
-      cleanly on a fresh checkout
-- [ ] CI workflow (nightly cron): runs at least one scenario end-to-end
-      with artifact capture on failure
+**Phase 7 slice 1 (first chaos primitive) — DONE:**
+
+- [x] Chaos library — first concrete primitive landed via the
+      Phase 6 scenario format. `scenarios/02-registry-down.scenario.mjs`
+      mocks REGISTRY GraphQL → 502 Bad Gateway, asserts /companies
+      degrades to "No organizations found" (the
+      `OrganizationsTable.jsx` empty-state branch). Demonstrates
+      that the existing scenario infrastructure composes with
+      chaos primitives — no format change needed; chaos
+      handlers reuse `mocks: {url: handler}` with handlers that
+      return 5xx instead of 200. Test: 2.4s.
+      Bug-shapes guarded: hard-crash on registry 5xx, hung-spinner
+      with no terminal state, raw error envelope leaked to UI,
+      silent broken state that fakes success.
+
+**Phase 7 slice 2 — TODO (more chaos primitives):**
+
+- [ ] CANDLES timeout / network error (assert prefetched-price
+      path falls through to per-pool fetcher OR shows
+      "0.00 SDAI" loading state, NOT a hung spinner)
+- [ ] WALLET RPC failure (assert wallet section shows error,
+      not an undefined account)
+- [ ] Mid-flight failure (succeeds first request, fails second
+      — pattern useful for per-call retry probes)
+
+**Phase 7 slice 3 — TODO (CI integration):**
+
+- [ ] CI workflow (nightly cron): runs at least one scenario
+      end-to-end with artifact capture on failure
 - [ ] Per-failure artifacts: anvil state dump, indexer logs, api
-      logs, Playwright trace + screenshots + video
+      logs, Playwright trace + screenshots + video (Playwright
+      already captures these per `playwright.config.mjs`'s
+      `trace: 'retain-on-failure'`, `screenshot: 'only-on-failure'`,
+      `video: 'retain-on-failure'`. The remaining work is the CI
+      step that uploads them as workflow artifacts.)
+
+**Phase 7 slice 4 — TODO (full-stack):**
+
+- [ ] Single docker-compose `up -d` brings the full 5-service
+      stack cleanly on a fresh checkout
 
 ## Acceptance gates (cross-cutting)
 

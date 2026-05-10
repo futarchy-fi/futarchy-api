@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 slices **1+2** landed on interface side. Slice 1: ADR-002 + scenarios/ structure. Slice 2: first scenario captured (`01-stale-price-shape.scenario.mjs` lifts slice 4c v3b's mocks + assertions into the Scenario format) + wrapper spec auto-discovers scenarios + mock helpers extracted to shared `fixtures/api-mocks.mjs`. **Phase 6's "first real bug shape replayable" gate is now met.** 18/18 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 done (slice 3 catalog deferred until ≥3 scenarios) + Phase **7 slice 1** landed on interface side. Phase 7 slice 1: first chaos primitive — `02-registry-down.scenario.mjs` mocks REGISTRY GraphQL → 502 and asserts /companies degrades to "No organizations found". Composes with the Phase 6 scenario format with no format change. 19/19 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -826,6 +826,30 @@ Phase 6 slice 2 summary (this iteration on the interface side):
   shape replayable" gate is met.
 - scenarios/README.md updated with a "Current scenarios" table.
   Becomes the human-readable bug-shape catalog.
+
+Phase 7 slice 1 summary (this iteration on the interface side):
+
+- First concrete chaos primitive landed:
+  scenarios/02-registry-down.scenario.mjs mocks REGISTRY
+  GraphQL → 502 Bad Gateway, asserts /companies degrades
+  gracefully to "No organizations found" (the
+  OrganizationsTable.jsx empty-state branch fires when both
+  useAggregatorCompanies AND fetchProposalsFromAggregator
+  return [] after their .catch branches handle the 502).
+- Composability proof: the Phase 6 wrapper spec auto-discovered
+  the new scenario without ANY code change. The Scenario
+  format's `mocks: {url: handler}` works for chaos because
+  Playwright's route handlers can return any HTTP status — no
+  format change needed; just a different handler.
+- Bug-shapes guarded: hard-crash on registry 5xx, hung-spinner
+  with no terminal state, raw error envelope leaked to UI,
+  silent broken state that fakes success.
+- 1 new scenario (2.4s); both 01 + 02 together: 20s wall-clock
+  with cold compile. UI smoke: 28 pass + 0 skip.
+- Phase 7 staging: slice 2 = more chaos primitives (CANDLES
+  timeout, WALLET RPC failure, mid-flight failure); slice 3 =
+  CI nightly cron + artifact upload; slice 4 = full-stack
+  docker-compose.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 
