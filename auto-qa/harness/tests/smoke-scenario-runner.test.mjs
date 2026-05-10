@@ -2277,6 +2277,84 @@ test('runAllInvariants — failure: candles checkpoint empty (sync not done)', a
     }
 });
 
+test('runAllInvariants — poolTypeIsValidEnum happy: PREDICTION pool', async () => {
+    // Defaults: 1 pool with type='PREDICTION'.
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'poolTypeIsValidEnum');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /1 pool\(s\) all have valid enum type \(saw: PREDICTION\)/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — poolTypeIsValidEnum happy: CONDITIONAL pool', async () => {
+    const fx = await startFixture({ poolType: 'CONDITIONAL' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'poolTypeIsValidEnum');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /saw: CONDITIONAL/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — poolTypeIsValidEnum vacuously true with no pools', async () => {
+    const fx = await startFixture({ candlesPoolsCount: 0 });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'poolTypeIsValidEnum');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /no pools to check \(vacuously true\)/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: poolTypeIsValidEnum typo (PRDICTION instead of PREDICTION)', async () => {
+    // Typo bug — passes existence + FK checks, slips probabilityBounds
+    // (which treats non-PREDICTION as vacuous), but is silently
+    // dropped by api's findPoolByOutcome() lookup. This invariant
+    // catches the typo at the indexer layer.
+    const fx = await startFixture({ poolType: 'PRDICTION' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'poolTypeIsValidEnum');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /type="PRDICTION" ∉|schema drift|typo|api adapter/);
+        // candlesHasPools STILL passes (existence is fine)
+        const exists = results.find((r) => r.name === 'candlesHasPools');
+        assert.equal(exists.ok, true);
+        // probabilityBounds STILL passes (vacuous on non-PREDICTION)
+        const prob = results.find((r) => r.name === 'probabilityBounds');
+        assert.equal(prob.ok, true);
+        assert.match(prob.detail, /not PREDICTION|bounds don't apply/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: poolTypeIsValidEnum null type (handler regression)', async () => {
+    // Indexer regression that drops the type field write — pool
+    // exists with null type. Passes every other check.
+    const fx = await startFixture({ poolType: null });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'poolTypeIsValidEnum');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /type=null ∉|schema drift|null/);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('runAllInvariants — candlesHasSwaps happy: 1 swap indexed', async () => {
     const fx = await startFixture();  // default candlesSwapsCount=1
     try {
@@ -2365,6 +2443,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /registryHasOrganizations/);
     assert.match(r.stdout, /registryHasAggregators/);
     assert.match(r.stdout, /candlesHasPools/);
+    assert.match(r.stdout, /poolTypeIsValidEnum/);
     assert.match(r.stdout, /candlesHasSwaps/);
     assert.match(r.stdout, /candlesHasCandles/);
     assert.match(r.stdout, /candleOHLCOrdering/);

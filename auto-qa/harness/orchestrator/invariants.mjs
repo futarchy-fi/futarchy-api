@@ -824,6 +824,61 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'poolTypeIsValidEnum',
+        description: 'all pools (first 50) have type ∈ {CONDITIONAL, PREDICTION, EXPECTED_VALUE} (catches schema drift, null types, and typos)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // First indexer-side enum validation in the catalog.
+            // Distinct from existing pool checks:
+            //   * candlesHasPools (existence count)
+            //   * swapPoolReferentialIntegrity / candlePoolRef…
+            //     (FK resolution)
+            //   * probabilityBounds (filters BY type, vacuous on
+            //     non-PREDICTION — so a typo'd type like
+            //     "PRDICTION" silently slips through)
+            //
+            // This invariant iterates ALL returned pools (new pattern
+            // — most other indexer checks look at first 1 or count-
+            // only) and asserts each has a recognized type enum
+            // value. The set of valid types is sourced from
+            // unified-chart.js's findPoolByOutcome() — those are
+            // the three the api consumes; any other value is a bug.
+            //
+            // Bug shapes caught:
+            //   * Schema migration adds a 4th type without updating
+            //     the api adapter (UI starts dropping pools)
+            //   * Indexer returns null type for some pools (handler
+            //     regression dropping the field write)
+            //   * Typo'd type value (e.g., "PRDICTION") — passes
+            //     existence + FK checks but breaks the api's
+            //     pool-type lookup
+            //   * String-vs-int encoding regression
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ pools(first: 50) { id type } }',
+                }),
+            });
+            const pools = j?.data?.pools;
+            if (!Array.isArray(pools)) {
+                throw new Error(`unexpected pools response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (pools.length === 0) {
+                return { ok: true, detail: 'no pools to check (vacuously true)' };
+            }
+            const VALID_TYPES = new Set(['CONDITIONAL', 'PREDICTION', 'EXPECTED_VALUE']);
+            const seen = new Set();
+            for (const p of pools) {
+                if (!VALID_TYPES.has(p.type)) {
+                    throw new Error(`pool ${p.id}: type=${JSON.stringify(p.type)} ∉ {CONDITIONAL, PREDICTION, EXPECTED_VALUE} (schema drift, null, or typo — api adapter's findPoolByOutcome() will silently drop this pool)`);
+                }
+                seen.add(p.type);
+            }
+            return { ok: true, detail: `${pools.length} pool(s) all have valid enum type (saw: ${[...seen].sort().join(', ')})` };
+        },
+    },
+    {
         name: 'candlesHasSwaps',
         description: 'candles checkpoint has ≥1 Swap indexed (event-level sync verified)',
         layer: 'orchestrator↔candles',

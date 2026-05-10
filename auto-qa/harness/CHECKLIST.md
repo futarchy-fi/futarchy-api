@@ -750,25 +750,25 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 37 invariants:
-      9 api-internal + 24 indexer probes + 4 chain-layer.
-      `swapAmountsBoundedAbove` added this slice —
-      magnitude-upper-bound for swap amounts. Closes
-      the swap-side magnitude gap (candle side already
-      has probabilityBounds + candlePricesNonNegative;
-      swap side only had >0 + range checks). Asserts
-      amountIn AND amountOut < 1e15 — catches raw
-      uint256 leaks (where parseFloat returns 1e18
-      instead of a decimal-formatted "1.0") and token-
-      decimal misalignment that scales values by 1e6x.
-      Distinct from swapAmountsPositive which only
-      checks sign. 113 smoke tests green. Still to
-      add: candlesAggregation (Candle.volume = sum of
-      contained Swap amounts within period), chartShape
-      full match (api unified-chart vs indexer raw,
-      ID-pair compare), conservation (∑YES + ∑NO =
-      ∑sDAI), monotonicity (TWAP), cross-run
-      monotonicity on rateSanity.
+      PROGRESS.md's invariant tables). Now 38 invariants:
+      9 api-internal + 25 indexer probes + 4 chain-layer.
+      `poolTypeIsValidEnum` added this slice — first
+      indexer-side enum validation. Iterates all pools
+      (first 50) and asserts each has type ∈
+      {CONDITIONAL, PREDICTION, EXPECTED_VALUE}.
+      Catches schema drift (4th type added without
+      consumer update), indexer regression returning
+      null type, and typos like "PRDICTION". Distinct
+      from probabilityBounds which treats non-PREDICTION
+      as vacuous (so a typo'd type silently slips
+      through). New pattern: iterate-all-rows enum check
+      (vs latest-row or count-only). 118 smoke tests
+      green. Still to add: candlesAggregation
+      (Candle.volume = sum of contained Swap amounts
+      within period), chartShape full match (api
+      unified-chart vs indexer raw, ID-pair compare),
+      conservation (∑YES + ∑NO = ∑sDAI), monotonicity
+      (TWAP), cross-run monotonicity on rateSanity.
 - [x] **4d-activate — orchestrator block UNCOMMENTED.**
       Replaced the `tail -f /dev/null` placeholder with
       `node orchestrator/scenario-runner.mjs`. Dropped the
