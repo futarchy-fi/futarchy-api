@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 3 — slices 1+1.5 landed + Spike-001 complete (RPC compat ✓, bootstrap path identified). 11 smoke tests pass + 1 skip. Slice 2 unblocked. |
+| Phase | 3 — slices 1+1.5+2 landed (sibling clone discovery + start-indexers wrapper + 5 contract tests). 16 smoke tests pass + 2 skips (compose-anvil + start-indexers daemon-up branch). Slice 3 next. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -461,23 +461,89 @@ Phase 2 slice 4 — multi-spawn stress (3 cycles) ✓ ~8.2s
 - **Recommended bootstrap**: wrapper script that runs `RESET=true`
   → injects the `last_indexed_block` row → invokes `npm run dev`.
 
-**Phase 3 wrap-up — remaining (now unblocked):**
+- **slice 2** (this iteration) — `scripts/start-indexers.mjs` (new):
+  brings up the two Checkpoint indexers via docker compose. Decision
+  made during implementation: rather than `extends:`/`include:` (both
+  awkward for the postgres dependency), drive each indexer compose
+  as a SEPARATE compose project (`futarchy-harness-registry` and
+  `futarchy-harness-candles`). The futarchy-indexers composes are
+  not modified — env vars `RPC_URL`/`GNOSIS_RPC_URL`/`RESET`/
+  `GNOSIS_BLOCK_RANGE` already exist on them and we drive via env.
 
-- slice 2 — Compose extension: add `registry-indexer` +
-  `registry-postgres` + `candles-indexer` + `candles-postgres`
-  services that `extends:` from the futarchy-indexers compose,
-  with `RPC_URL`/`GNOSIS_RPC_URL` pointed at our anvil and
-  `GNOSIS_BLOCK_RANGE=100`. Wire `INDEXERS_PATH` env for the
-  sibling clone location.
-- slice 3 — `orchestrator/services.mjs` `startLocalIndexers({reset,
-  startBlock})` helper. Calls compose, then injects
-  `_metadatas.last_indexed_block = startBlock` via psql connection,
-  then waits for readiness via GraphQL probe.
+  - **Networking**: indexers reach native anvil via
+    `host.docker.internal:<port>` (Mac/Windows). Linux requires
+    `ANVIL_HOST_URL=http://172.17.0.1:<port>` override (documented
+    in CLI help; auto-detection deferred).
+  - **Public surface**: `startIndexers({anvilPort, reset, blockRange,
+    registryOnly, candlesOnly})` returns `{registryUrl, candlesUrl,
+    stop()}`. `stopIndexers(handles?)` for cleanup.
+  - **CLI**: `node scripts/start-indexers.mjs [--anvil-port N]
+    [--reset|--no-reset] [--block-range N] [--stop]`. Env
+    `HARNESS_WAIT=1` opts into post-up GraphQL readiness polling.
+  - **Exit codes** documented (0 ok, 1 args, 2 indexers-not-found,
+    3 docker-down, 4 compose-up failed, 5 readiness timeout).
+
+  - `tests/smoke-start-indexers.test.mjs` (new): 6 cases covering
+    the dispatch + error-handling layer WITHOUT actually pulling
+    Docker images:
+      1. INDEXERS_NOT_FOUND with bad INDEXERS_PATH override
+      2. DOCKER_DOWN when daemon unreachable (skips when up)
+      3. stopIndexers no-args clean call
+      4. CLI --help prints usage + exits 0
+      5. CLI --stop exits 3 when daemon down
+      6. CLI exits 2 when INDEXERS_PATH bad AND daemon up (skips
+         when daemon down — the daemon-up branch we can't validate
+         without live docker)
+    5 pass + 1 skip in 2.3s.
+
+  - npm scripts: `smoke:start:indexers`, `indexers:start`,
+    `indexers:stop` in harness; corresponding `auto-qa:e2e:*`
+    shortcuts at root.
+
+  - CHECKLIST item ticked: "indexer launchable from harness" with
+    note about the SEPARATE compose project decision.
+
+**Smoke summary (post-Phase 3 slice 2):**
+
+```
+[Phase 1]
+  start-fork + block-clock                         ✓ ~3s
+  setNextTimestamp                                 ✓ ~2.5s
+  setBalance                                       ✓ ~2.5s
+  impersonateAccount                               ✓ ~3s
+  compose smoke                                     ⊘ skipped (daemon down)
+[Phase 2]
+  orchestrator dual-source                          ✓ ~3.5s
+  passthrough verbatim                              ✓ ~280ms
+  passthrough 500                                   ✓ ~280ms
+  passthrough 502 unreachable                       ✓ ~270ms
+  multi-spawn stress (3 cycles)                    ✓ ~8.2s
+[Phase 3]
+  detect-indexers (happy)                           ✓ ~25ms
+  detect-indexers (missing-override)                ✓ ~1ms
+  start-indexers INDEXERS_NOT_FOUND                 ✓ ~640ms
+  start-indexers DOCKER_DOWN                        ✓ ~330ms
+  stopIndexers no-args clean                        ✓ ~730ms
+  start-indexers CLI --help                         ✓ ~40ms
+  start-indexers CLI --stop daemon down             ✓ ~365ms
+  start-indexers CLI INDEXERS_NOT_FOUND daemon up   ⊘ skipped (daemon down)
+                                       TOTAL: 16 pass + 2 skip
+```
+
+**Phase 3 wrap-up — remaining:**
+
+- slice 3 — `last_indexed_block` postgres injection (per spike).
+  Add `bootstrapStartBlock(startBlock)` that runs `psql` against the
+  indexer's postgres and INSERTs/UPDATEs the `_metadatas` row before
+  the indexer's first scan. Then GraphQL readiness probe waits for
+  indexer head ≥ anvil head.
 - slice 4 — `tests/smoke-indexer-roundtrip.test.mjs` (THE Phase 3
   invariant): anvil event → wait for indexer → query both indexer
-  GraphQL AND api passthrough → assert agreement.
+  GraphQL AND api passthrough → assert agreement. **First true
+  cross-layer block invariant.**
 - slice 5 — Cold-start optimization: explore pre-warmed postgres
-  image strategy if cold-start exceeds 90s on CI.
+  image strategy if cold-start exceeds 90s on CI. Per Spike-001 the
+  expected cost is 50-90s per indexer; on CI may be slower.
 
 **Phase 3 risks tracked:**
 

@@ -116,7 +116,18 @@ both layers in parallel and probe each via its native protocol.
       `interface/`. See `docs/ADR-002-indexer-bootstrap.md`. The
       `stub-indexer` from Phase 2 is retained for fast unit-style
       cross-layer tests.
-- [ ] Indexer service in compose, depends on anvil healthcheck
+- [x] Indexer launchable from harness — implemented as `scripts/start-indexers.mjs`
+      driving the existing `futarchy-indexers` composes as SEPARATE
+      compose projects (`futarchy-harness-registry` +
+      `futarchy-harness-candles`). Each has its own postgres + network.
+      Reasoning: extends/include couldn't cleanly carry the postgres
+      dependency without modifying the upstream composes; running them
+      as independent projects keeps the indexer composes untouched
+      while the orchestrator coordinates lifecycle. Indexers reach the
+      native anvil via `host.docker.internal:<port>` (Mac/Windows) or
+      `ANVIL_HOST_URL` override (Linux). Validated via 5 contract
+      tests in `smoke-start-indexers.test.mjs` (skip branches for
+      daemon-up). Live runtime validation pending Docker Desktop start.
 - [ ] Schema migration cold-start time documented (this is the
       brittleness risk per PROGRESS.md)
 - [ ] Smoke test: write a Swap event on anvil → wait → query indexer
