@@ -2110,6 +2110,66 @@ export const INVARIANTS = [
             return { ok: true, detail: `anvil_impersonateAccount(0x0…0) accepted — impersonation extension available` };
         },
     },
+    {
+        name: 'anvilSnapshotCapabilityPresent',
+        description: 'evm_snapshot RPC method works and returns a non-empty snapshot id (catches forks/clients lacking the snapshot extension scenarios depend on for state rollback between tests)',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            // Sister to anvilImpersonationCapabilityPresent. Both
+            // probe ANVIL/GANACHE-LINEAGE extensions that the
+            // harness depends on. Together they form the minimal
+            // capability set scenarios need:
+            //   * impersonate → call function as arbitrary account
+            //   * snapshot/revert → roll back state between tests
+            //
+            // Note: evm_snapshot (and evm_revert) are part of the
+            // ganache lineage — supported by both anvil AND hardhat,
+            // but NOT by go-ethereum, erigon, reth, or other "real"
+            // clients. So this probe is more permissive than
+            // anvilImpersonationCapabilityPresent (which targets
+            // anvil-specific anvil_*); ANY ganache-compatible
+            // dev client passes here, but a wrong-fork client
+            // running geth/erigon would fail.
+            //
+            // Bug shapes caught (NOT caught by impersonation probe):
+            //   * Anvil started with --no-snapshot or similar flag
+            //     that disables the snapshot subsystem
+            //   * RPC layer with method-allowlisting that blocks
+            //     evm_* but allows anvil_* (or vice versa)
+            //   * Wrong-fork client (geth/erigon) — anvil
+            //     impersonation might be allowlisted, but evm_*
+            //     methods aren't supported at all
+            //   * Anvil version regression where the snapshot
+            //     subsystem reports "unsupported" or returns null
+            //
+            // Why we check the result is non-empty: the spec says
+            // evm_snapshot returns a quantity (hex string) that
+            // identifies the snapshot. A null/empty/non-hex
+            // response means the method is registered but the
+            // subsystem is broken — scenarios would call
+            // evm_revert(undefined) and silently fail.
+            //
+            // Note: this is a CAPABILITY probe, not a full
+            // snapshot/revert round-trip. We don't call evm_revert
+            // here — that's left to scenarios. This invariant
+            // catches the "method missing or returns garbage"
+            // failure mode before scenarios get that far.
+            let snapshotId;
+            try {
+                snapshotId = await rpcRequest(ctx.rpcUrl, 'evm_snapshot', []);
+            } catch (err) {
+                const msg = err?.message || String(err);
+                if (/method.*not (found|supported|mocked)|-32601/i.test(msg)) {
+                    throw new Error(`evm_snapshot unavailable (${msg.slice(0, 100)}) — wrong-fork client or method-allowlisting in the RPC layer; scenarios cannot roll back state between tests`);
+                }
+                throw err;
+            }
+            if (typeof snapshotId !== 'string' || !snapshotId.startsWith('0x')) {
+                throw new Error(`evm_snapshot returned non-hex result: ${JSON.stringify(snapshotId)?.slice(0, 60)} (snapshot subsystem broken — calling evm_revert with this id will silently fail)`);
+            }
+            return { ok: true, detail: `evm_snapshot returned id ${snapshotId} — snapshot/revert extension available` };
+        },
+    },
     // ── Economic invariants ─────────────────────────────────────────
     // Always-on truth properties from PROGRESS.md's "Economic
     // invariants" table. Each one validates a single chain-level

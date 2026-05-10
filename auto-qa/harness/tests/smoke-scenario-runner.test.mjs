@@ -220,6 +220,14 @@ function startFixture({
     // simulate the method existing but throwing a non-method-not-
     // found error (e.g., "internal error").
     anvilImpersonationSupported = true,
+    // evm_snapshot result for anvilSnapshotCapabilityPresent
+    // (slice 4d-scenarios-more). Default '0x1' = a successful
+    // snapshot id (anvil + ganache + hardhat all return hex
+    // quantities). Override to:
+    //   - false: method-not-found error (wrong-fork client like geth)
+    //   - 'rpc-error': method exists but throws -32603
+    //   - null / non-hex string: subsystem broken (registered but garbage)
+    snapshotResult = '0x1',
 } = {}) {
     // ── shared row builders ──────────────────────────────────────────
     // Pulled out of the per-route handlers so the api passthrough
@@ -499,6 +507,20 @@ function startFixture({
                                 jsonrpc: '2.0', id: parsed.id ?? 1,
                                 error: { code: -32601, message: 'method anvil_impersonateAccount not supported' },
                             }));
+                        case 'evm_snapshot':
+                            if (snapshotResult === false) {
+                                return response.end(JSON.stringify({
+                                    jsonrpc: '2.0', id: parsed.id ?? 1,
+                                    error: { code: -32601, message: 'method evm_snapshot not supported' },
+                                }));
+                            }
+                            if (snapshotResult === 'rpc-error') {
+                                return response.end(JSON.stringify({
+                                    jsonrpc: '2.0', id: parsed.id ?? 1,
+                                    error: { code: -32603, message: 'snapshot subsystem unavailable' },
+                                }));
+                            }
+                            return replyResult(snapshotResult);
                         default:
                             response.end(JSON.stringify({
                                 jsonrpc: '2.0', id: parsed.id ?? 1,
@@ -1274,6 +1296,72 @@ test('runAllInvariants — failure: anvilImpersonationCapabilityPresent method e
         // -32603 internal error doesn't match the method-not-found
         // pattern, so the original RPC error message propagates
         assert.match(inv.error, /RPC error.*internal error/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — anvilSnapshotCapabilityPresent happy: evm_snapshot returns 0x1 (default fixture)', async () => {
+    const fx = await startFixture();  // default snapshotResult='0x1'
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'anvilSnapshotCapabilityPresent');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /evm_snapshot returned id 0x1.*snapshot\/revert extension available/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilSnapshotCapabilityPresent method not supported (wrong-fork client)', async () => {
+    // Wrong-fork client like geth/erigon/reth — no evm_* extensions
+    // at all. anvilImpersonationCapabilityPresent might also fail
+    // (impersonation isn't supported on real clients either), but
+    // the failure modes are distinct: this is the snapshot subsystem
+    // missing, that one is the impersonate subsystem missing. They
+    // cover different scenario primitives — stub them independently.
+    const fx = await startFixture({ snapshotResult: false });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilSnapshotCapabilityPresent');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /evm_snapshot unavailable.*scenarios cannot roll back state/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilSnapshotCapabilityPresent subsystem broken (registered but returns null)', async () => {
+    // Method is registered (no method-not-found error) but the
+    // subsystem returns null — possibly --no-snapshot flag, or a
+    // version regression. Calling evm_revert(null) silently fails;
+    // this catches the issue at probe time before scenarios trip
+    // on it.
+    const fx = await startFixture({ snapshotResult: null });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilSnapshotCapabilityPresent');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /evm_snapshot returned non-hex result.*null.*snapshot subsystem broken/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilSnapshotCapabilityPresent method exists but errors (RPC layer issue)', async () => {
+    // Method is registered but throws -32603 internal error. Like
+    // the impersonation sister, the invariant only specially handles
+    // method-not-found errors; other RPC errors propagate.
+    const fx = await startFixture({ snapshotResult: 'rpc-error' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilSnapshotCapabilityPresent');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /RPC error.*snapshot subsystem unavailable/);
     } finally {
         await fx.stop();
     }

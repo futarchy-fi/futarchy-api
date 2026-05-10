@@ -774,10 +774,25 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). **Now 46 invariants**:
-      12 api-internal + 26 indexer probes + 8 chain-layer.
-      152 smoke tests green.
-      `anvilImpersonationCapabilityPresent` added this slice
+      PROGRESS.md's invariant tables). **Now 47 invariants**:
+      12 api-internal + 26 indexer probes + 9 chain-layer.
+      156 smoke tests green.
+      `anvilSnapshotCapabilityPresent` added this slice —
+      ninth chain-layer invariant; second chain-CAPABILITY
+      probe (sister to anvilImpersonationCapabilityPresent).
+      Together they form the MINIMAL CAPABILITY SET
+      scenarios depend on: impersonate (call as arbitrary
+      account) + snapshot/revert (roll back state between
+      tests). evm_snapshot is part of the GANACHE LINEAGE
+      (anvil + hardhat both support it; geth/erigon/reth
+      don't). Distinct failure modes: anvil_* missing →
+      wrong dev client (hardhat instead of anvil); evm_*
+      missing → real client (geth/erigon/reth). Also
+      catches subsystem-broken case — method registered
+      but returns null/non-hex (calling evm_revert with
+      that silently fails).
+
+      `anvilImpersonationCapabilityPresent` (previous slice)
       — eighth chain-layer invariant; first probe that
       exercises an ANVIL-SPECIFIC RPC method
       (anvil_impersonateAccount) rather than a standard

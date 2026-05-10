@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **46 invariants** — 12 api-internal + 26 indexer + 8 chain-layer; chain-CAPABILITY probe landed (anvil_impersonateAccount actually works, not just clientVersion saying "anvil"); 152 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent + anvilSnapshotCapabilityPresent)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **47 invariants** — 12 api-internal + 26 indexer + 9 chain-layer; second chain-CAPABILITY probe landed (evm_snapshot — pairs with anvil_impersonateAccount to form the minimal scenario primitive set); 156 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,70 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (anvilImpersonationCapabilityPresent) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (anvilSnapshotCapabilityPresent) summary (this iteration on the api side):
+
+- **Second chain-CAPABILITY probe** — ninth chain-layer
+  invariant. Sister to anvilImpersonationCapabilityPresent
+  (just shipped). Together they form the MINIMAL CAPABILITY
+  SET scenarios depend on:
+  * impersonate → call function as arbitrary account
+  * snapshot/revert → roll back state between tests
+  Without either, scenarios silently fail in qualitatively
+  different ways.
+
+- **47-invariant milestone**. Layer breakdown: 12 api-
+  internal + 26 indexer + 9 chain-layer (was 8).
+
+- **Why this is distinct from anvilImpersonationCapabilityPresent**:
+  evm_snapshot is part of the GANACHE LINEAGE — supported
+  by both anvil AND hardhat-compatible clients, but NOT by
+  go-ethereum, erigon, reth, or other "real" clients. So
+  this probe is more permissive: ANY ganache-lineage dev
+  client passes; a real client running geth/erigon fails.
+  anvil_impersonateAccount is anvil-specific. They're
+  complementary:
+  * anvil_*  missing → "wrong dev client (hardhat instead of anvil)"
+  * evm_*    missing → "real client (geth/erigon/reth)"
+  * both ok → minimal scenario capability satisfied
+
+- **Bug shapes caught (NOT caught by impersonation probe)**:
+  * Anvil started with --no-snapshot or similar flag that
+    disables the snapshot subsystem
+  * RPC layer with method-allowlisting that blocks evm_*
+    but allows anvil_* (or vice versa)
+  * Wrong-fork client (geth/erigon) — anvil impersonation
+    might be allowlisted via a custom plugin, but evm_*
+    methods aren't supported at all
+  * Anvil version regression where the snapshot subsystem
+    reports "unsupported" or returns null for snapshot id
+    (registered method but broken subsystem — caught
+    distinctly from method-not-found via the non-hex check)
+
+- **Why we check the result is non-empty hex**: the spec says
+  evm_snapshot returns a quantity (hex string) identifying
+  the snapshot. A null/empty/non-hex response means the
+  method is registered but the subsystem is broken —
+  scenarios would call evm_revert(undefined) and silently
+  fail.
+
+- **Smoke tests**: 4 new (default '0x1' happy; failure
+  method-not-supported wrong-fork client; failure subsystem
+  broken — null result; failure -32603 internal error
+  propagates as RPC error). 1 new fixture knob
+  (snapshotResult: '0x1' | false | null | 'rpc-error'). 1
+  new RPC dispatch case (evm_snapshot). 156/156 pass
+  (was 152).
+
+- Slice 4 progress: ~99% (33+ of ~30 sub-slices). Chain
+  layer now has NINE coverage points, with the final two
+  being CAPABILITY probes that test "does the RPC method
+  WORK" rather than "what does the chain SAY". The minimal
+  scenario primitive set (impersonate + snapshot) is now
+  fully sentinel-protected. Still to add (per CHECKLIST):
+  candlesAggregation, conservation, TWAP monotonicity,
+  cross-run rate monotonicity.
+
+Phase 7 slice 4d-scenarios-more (anvilImpersonationCapabilityPresent) summary (previous iteration on the api side):
 
 - **Chain-CAPABILITY probe** — eighth chain-layer
   invariant. First invariant that exercises an
