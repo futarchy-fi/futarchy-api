@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **42 invariants** — 11 api-internal + 26 indexer + 5 chain-layer; per-row time-pair check landed for unified-chart; 134 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **43 invariants** — 11 api-internal + 26 indexer + 6 chain-layer; chain-FEE-MARKET probe landed; 139 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,70 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (chartCandlesAreSubsetOfDirect) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (anvilGasPricePresent) summary (this iteration on the api side):
+
+- **Chain-FEE-MARKET probe** — sixth chain-layer invariant.
+  Companion to anvilLatestBlockSensible + anvilChainId
+  (which pin "chain reachable + right network"); this pins
+  the fee-market state, which can be independently broken.
+
+- **43-invariant milestone** — first FEE-MARKET probe in
+  the catalog. Layer breakdown: 11 api-internal + 26
+  indexer + 6 chain-layer (was 5).
+
+- **What it checks**: eth_gasPrice returns a 0x-prefixed
+  positive hex value (BigInt > 0). Three null/0/non-hex
+  failure modes are distinct and named in the error
+  message so triage can jump straight to the right
+  diagnosis:
+  * `null` → "EIP-1559-only mode? method deprecated?"
+  * `0x0` → "broken fee market — anvil --gas-price 0
+    misconfig?"
+  * non-hex → "RPC-layer regression — downstream BigInt
+    parsing will break"
+
+- **Bug shapes caught (NOT caught by other chain probes)**:
+  * Anvil started with a flag that disables legacy gas
+    pricing (EIP-1559-only mode). Tools that estimate
+    via legacy `eth_gasPrice` silently fail.
+  * Anvil started with `--gas-price 0` misconfig. All
+    transactions appear free; real-world gas accounting
+    bugs in scenarios get masked.
+  * Forking from a chain where `eth_gasPrice` was
+    deprecated entirely (some L2 forks).
+  * Anvil version regression where the method returns
+    a decimal number instead of a hex string.
+
+- **Why this matters for scenarios**: most futarchy
+  flows submit transactions (impersonateAccount + send).
+  Those need a working gas price for estimation; null/0/
+  garbage breaks them silently or produces transactions
+  stuck pending forever. Without this invariant, a
+  scenario would report "transaction failed at step N"
+  with no breadcrumb pointing to the chain-layer fee-
+  market issue.
+
+- **Smoke tests**: 5 new (default 5 gwei happy; edge low
+  1 wei happy; failure null EIP-1559-only — anvilChainId
+  STILL passes (chain identity fine, only fee market
+  broken); failure 0x0 broken fee market; failure number
+  5000000000 non-hex). 1 new fixture knob (gasPriceHex).
+  1 new RPC dispatch case (eth_gasPrice). 139/139 pass
+  (was 134).
+
+- Slice 4 progress: ~96% (29+ of ~30 sub-slices). Chain
+  layer now has SIX coverage points: existence
+  (anvilBlockNumber), identity-network (anvilChainId),
+  identity-client (anvilClientVersionMentionsAnvil),
+  block shape (anvilLatestBlockSensible), fee market
+  (anvilGasPricePresent — NEW), economic anchor
+  (rateSanity). Together they form a defense-in-depth
+  ring around the chain layer that scenarios depend on.
+  Still to add (per CHECKLIST): candlesAggregation,
+  conservation, TWAP monotonicity, cross-run rate
+  monotonicity.
+
+Phase 7 slice 4d-scenarios-more (chartCandlesAreSubsetOfDirect) summary (previous iteration on the api side):
 
 - **Per-row TIME-pair check** — STRENGTHENS the existing
   chartCandleCountsBoundedByDirect (count-bound) into a

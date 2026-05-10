@@ -1891,6 +1891,57 @@ export const INVARIANTS = [
             return { ok: true, detail: 'chain 100 (Gnosis) confirmed' };
         },
     },
+    {
+        name: 'anvilGasPricePresent',
+        description: 'eth_gasPrice returns a 0x-prefixed positive hex value (catches EIP-1559-only mode + broken fee market that silently breaks gas estimation in scenarios)',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            // Companion to anvilLatestBlockSensible + anvilChainId.
+            // Those pin "chain reachable + right network"; this
+            // pins the FEE-MARKET state, which can be independently
+            // broken:
+            //   * Anvil started in EIP-1559-only mode — eth_gasPrice
+            //     returns null (legacy gas pricing disabled). Tools
+            //     that estimate via legacy method silently fail.
+            //   * Fee market reports 0 — anvil flag misconfig
+            //     (e.g., --gas-price 0) makes transactions appear
+            //     free, masking real-world gas accounting bugs.
+            //   * Non-hex returned (number instead of hex string,
+            //     unprefixed value) — RPC-layer regression that
+            //     breaks downstream BigInt parsing.
+            //
+            // Bug shapes caught (NOT caught by other chain probes):
+            //   * Switching anvil flag in a way that disables
+            //     legacy gas-price RPC
+            //   * Forking from a chain where eth_gasPrice was
+            //     deprecated (some L2 forks)
+            //   * Anvil version regression where the method returns
+            //     a decimal number instead of a hex string
+            //
+            // Why this matters for scenarios: most futarchy flows
+            // submit transactions (impersonateAccount + send). Those
+            // need a working gas price for estimation; null/0/garbage
+            // breaks them silently or produces transactions stuck in
+            // pending forever.
+            const result = await rpcRequest(ctx.rpcUrl, 'eth_gasPrice', []);
+            if (result === null || result === undefined) {
+                throw new Error(`eth_gasPrice returned ${result === null ? 'null' : 'undefined'} — legacy gas pricing disabled (EIP-1559-only mode? method deprecated?)`);
+            }
+            if (typeof result !== 'string' || !result.startsWith('0x')) {
+                throw new Error(`eth_gasPrice returned non-hex-string: ${JSON.stringify(result)?.slice(0, 60)} (RPC-layer regression — downstream BigInt parsing will break)`);
+            }
+            let gasPrice;
+            try {
+                gasPrice = BigInt(result);
+            } catch {
+                throw new Error(`eth_gasPrice value ${JSON.stringify(result)} not parseable as BigInt`);
+            }
+            if (gasPrice <= 0n) {
+                throw new Error(`eth_gasPrice = ${gasPrice} (≤ 0; broken fee market — anvil --gas-price 0 misconfig? transactions appear free, masking gas-accounting bugs)`);
+            }
+            return { ok: true, detail: `gas price ${gasPrice} wei` };
+        },
+    },
     // ── Economic invariants ─────────────────────────────────────────
     // Always-on truth properties from PROGRESS.md's "Economic
     // invariants" table. Each one validates a single chain-level

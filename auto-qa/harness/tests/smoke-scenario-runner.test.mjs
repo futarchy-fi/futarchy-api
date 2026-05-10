@@ -193,6 +193,12 @@ function startFixture({
     // version string. Tests override to "geth/v1.13" etc. for the
     // wrong-client failure case.
     clientVersion = 'anvil/0.1.0',
+    // eth_gasPrice response for anvilGasPricePresent
+    // (slice 4d-scenarios-more). Default 0x12a05f200 = 5_000_000_000
+    // wei = 5 gwei (a sensible anvil-default-ish price). Tests override
+    // to null (EIP-1559-only mode), '0x0' (broken fee market), or a
+    // non-string (RPC-layer regression).
+    gasPriceHex = '0x12a05f200',
 } = {}) {
     // ── shared row builders ──────────────────────────────────────────
     // Pulled out of the per-route handlers so the api passthrough
@@ -452,6 +458,8 @@ function startFixture({
                             });
                         case 'web3_clientVersion':
                             return replyResult(clientVersion);
+                        case 'eth_gasPrice':
+                            return replyResult(gasPriceHex);
                         default:
                             response.end(JSON.stringify({
                                 jsonrpc: '2.0', id: parsed.id ?? 1,
@@ -1001,6 +1009,85 @@ test('runAllInvariants — failure: anvilClientVersionMentionsAnvil non-string r
         const inv = results.find((r) => r.name === 'anvilClientVersionMentionsAnvil');
         assert.equal(inv.ok, false);
         assert.match(inv.error, /returned non-string|null/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — anvilGasPricePresent happy: 5 gwei (default fixture)', async () => {
+    const fx = await startFixture();  // default gasPriceHex = '0x12a05f200' = 5 gwei
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'anvilGasPricePresent');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /gas price 5000000000 wei/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — anvilGasPricePresent happy: edge low (1 wei)', async () => {
+    // Sanity that any positive value passes — even 1 wei is "fee
+    // market alive". The invariant cares about > 0, not magnitude.
+    const fx = await startFixture({ gasPriceHex: '0x1' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'anvilGasPricePresent');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /gas price 1 wei/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilGasPricePresent EIP-1559-only mode (null)', async () => {
+    // Anvil started with a flag that disables legacy gas pricing —
+    // eth_gasPrice returns null. Tools that estimate via the legacy
+    // method silently break.
+    const fx = await startFixture({ gasPriceHex: null });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilGasPricePresent');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /returned null.*legacy gas pricing disabled/);
+        // anvilChainId STILL passes — chain identity is fine, only the
+        // fee market is broken. Demonstrates the value-add over
+        // chain-identity-only probes.
+        const chain = results.find((r) => r.name === 'anvilChainId');
+        assert.equal(chain.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilGasPricePresent broken fee market (0x0)', async () => {
+    // anvil --gas-price 0 misconfig. Transactions appear free,
+    // masking real-world gas accounting bugs in scenarios.
+    const fx = await startFixture({ gasPriceHex: '0x0' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilGasPricePresent');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /eth_gasPrice = 0.*broken fee market/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilGasPricePresent non-hex response (number)', async () => {
+    // RPC-layer regression: anvil version returns a decimal number
+    // instead of a hex string. Downstream BigInt parsing breaks.
+    const fx = await startFixture({ gasPriceHex: 5000000000 });  // number, not string
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilGasPricePresent');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /returned non-hex-string.*RPC-layer regression/);
     } finally {
         await fx.stop();
     }
