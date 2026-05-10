@@ -347,15 +347,23 @@ freshly-generated addresses as recipients; documented in
       `collectAndFetchPoolPrices` → `fetchPoolsBatch` chain
       reaches the network with the right inputs. Test: 1.7s.
       Foundation for v3b (DOM-level price assertion).
-- [ ] Sub-slice 4c v3b — DOM-level currency formatter assertion.
-      Now that v3a confirmed the candles endpoint is reachable
-      with the right pool addresses, return known prices (e.g.
-      0.42 / 0.58) and assert the formatted string ("0.42 SDAI",
-      "42% YES", or whatever the carousel card renders) appears
-      somewhere in the visible DOM. Will need to figure out which
-      card variant the carousel actually renders for our mocked
-      proposal (HighlightCards vs EventHighlightCard) and which
-      formatter is the visible one.
+- [x] Sub-slice 4c v3b — DOM-level currency formatter
+      assertion. **THE CANONICAL PHASE 5 INVARIANT, WIRED.**
+      Mock candles to return YES=0.42 → flows through
+      `fetchProposalsFromAggregator` → `collectAndFetchPoolPrices`
+      → `attachPrefetchedPrices` (mutates `event.prefetchedPrices`)
+      → carousel renders `<EventHighlightCard prefetchedPrices=…/>`
+      → `useLatestPoolPrices` short-circuits to prefetched →
+      `${prices.yes.toFixed(precision)} ${baseTokenSymbol}` →
+      DOM string "0.4200 SDAI" (precision=4 because YES<1
+      triggers the high-precision branch; baseTokenSymbol='SDAI'
+      because metadata.currencyTokens unset). Card variant
+      detection traced via reading
+      `EventsHighlightCarousel.jsx` (default `useNewCard=false`
+      → renders `EventHighlightCard`, NOT `HighlightCards`).
+      Test: 1.3s (when warm); full 6-test
+      dom-api-invariant suite: 22.6s wall-clock with cold
+      Next.js compile.
 - [ ] Sub-slice 4d — cross-protocol price reconciliation
       (Algebra / CoW / Sushi) mock — when multiple sources should
       agree, mock each to slightly-different values and assert the

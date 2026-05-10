@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 slices 1-3 + 4a + 4b + 4c (v1, v2, v3a) landed on interface side. Latest: 4c v3a — candles pipeline plumbing. Mocks both api.futarchy.fi/{registry,candles}/graphql, seeds proposal with conditional_pools.{yes,no}.address; asserts the candles endpoint receives our probe pool address. Foundation for 4c v3b (DOM-level currency formatter assertion). 16/16 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 slices 1-3 + 4a + 4b + 4c (v1, v2, v3a, **v3b**) landed on interface side. Latest: **4c v3b — THE CANONICAL PHASE 5 INVARIANT.** Mocked candles GraphQL returns YES=0.42 → flows through 6 layers of real React app code → DOM string "0.4200 SDAI". Phase 5 is now substantively done. 17/17 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -775,11 +775,37 @@ Summary of slice 1:
     eth_blockNumber forward test from a real http server to
     `context.route(...)` interception (chromium drops fetches from
     `about:blank` to local addresses regardless of CORS headers)
-- Slice 4 sub-slices remaining: 4c v3b (DOM-level currency
-  formatter assertion building on v3a's plumbing), 4d (cross-
-  protocol reconciliation).
+- **Phase 5 substantively COMPLETE.** The CHECKLIST goal
+  ("First DOM↔API check: navigate to a proposal page, scrape
+  the visible price, compare to the api response that produced
+  it") is met by slice 4c v3b. Remaining: 4d (cross-protocol
+  reconciliation) — more advanced bug-probe, not Phase 5
+  acceptance-critical.
 
-Slice 4c v3a summary (this iteration on the interface side):
+Slice 4c v3b summary (this iteration on the interface side):
+
+- Built directly on v3a's plumbing. Same two-endpoint mock
+  setup, but candles now returns a known YES price (0.42), and
+  the test asserts the formatter's exact output string
+  ("0.4200 SDAI") appears in the visible DOM.
+- Path traced (registry → candles → carousel → card → formatter
+  → DOM):
+  EventsHighlightCarousel → fetchEventHighlightData →
+  fetchProposalsFromAggregator (REGISTRY) → events with
+  poolAddresses → collectAndFetchPoolPrices (CANDLES) →
+  attachPrefetchedPrices → carousel renders
+  <EventHighlightCard prefetchedPrices=…/> →
+  useLatestPoolPrices short-circuits to prefetched →
+  ${prices.yes.toFixed(precision)} ${baseTokenSymbol} →
+  precision=4 (YES<1) + baseTokenSymbol='SDAI' (default) →
+  "0.4200 SDAI"
+- Test passed first try. Runtime: 1.3s parallel, 3.8s solo;
+  full 6-test suite 22.6s.
+- Bug-shapes caught: stale-price-but-API-healthy (PR #64
+  shape), formatter precision regressions, baseTokenSymbol
+  fallback regressions.
+
+Slice 4c v3a summary (previous iteration on the interface side):
 
 - Splits the original 4c v3 ambition into two iterations: v3a
   proves the network reaches the candles endpoint with the right
