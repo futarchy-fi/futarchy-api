@@ -203,6 +203,77 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'apiMarketEventsShape',
+        description: 'api /api/v1/market-events/proposals/:id/prices returns 200 + JSON with conditional_yes/no/spot/timeline structure (closes the 3-of-3 documented api endpoint coverage)',
+        layer: 'api',
+        check: async (ctx) => {
+            // Third (and final) of the three documented /api/v*
+            // endpoint shape probes. Pairs with apiSpotCandlesHappyPath
+            // (lightest path, candles only) and apiUnifiedChartShape
+            // (heaviest path, all 3 layers). market-events sits in
+            // the middle: registry resolve + pool fetch + currency
+            // rate, but no candle aggregation.
+            //
+            // The minimal contract this asserts (per a code survey
+            // of consumers in interface/):
+            //   * status: 'ok'
+            //   * conditional_yes: { price_usd, pool_id }
+            //   * conditional_no: { price_usd, pool_id }
+            //   * spot: { price_usd }
+            //   * timeline: { start, end }
+            // Other top-level fields (event_id, company_tokens,
+            // volume) are not part of the minimal contract — drop
+            // them and the consumer still works.
+            //
+            // Bug shapes caught:
+            //   * Pool resolve returned null AND error path emits
+            //     wrong shape (missing conditional_* keys —
+            //     interface dashboard crashes destructuring)
+            //   * status field renamed (the 'ok' literal used to
+            //     differ from other endpoints; a regression that
+            //     unifies could remove or rename it)
+            //   * timeline window collapsed (start === end means
+            //     the chart range is degenerate — UI shows blank)
+            //   * Status code regression
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/api/v1/market-events/proposals/harness-probe-proposal/prices`, { signal: ctrl.signal });
+                if (r.status !== 200) {
+                    throw new Error(`expected 200, got ${r.status} (data plane broken)`);
+                }
+                const ct = r.headers.get('content-type') || '';
+                if (!ct.includes('json')) {
+                    throw new Error(`expected JSON content-type, got "${ct}"`);
+                }
+                const j = await r.json();
+                if (j?.status !== 'ok') {
+                    throw new Error(`response.status expected 'ok', got ${JSON.stringify(j?.status)} (consumers branch on this literal)`);
+                }
+                for (const side of ['conditional_yes', 'conditional_no']) {
+                    if (!j[side] || typeof j[side] !== 'object') {
+                        throw new Error(`${side} missing or not object (UI dashboard crashes destructuring)`);
+                    }
+                    if (typeof j[side].price_usd !== 'number') {
+                        throw new Error(`${side}.price_usd missing or not a number (was ${typeof j[side].price_usd})`);
+                    }
+                    if (typeof j[side].pool_id !== 'string') {
+                        throw new Error(`${side}.pool_id missing or not a string`);
+                    }
+                }
+                if (!j.spot || typeof j.spot.price_usd !== 'number') {
+                    throw new Error(`spot.price_usd missing or not a number`);
+                }
+                if (!j.timeline || typeof j.timeline.start !== 'number' || typeof j.timeline.end !== 'number') {
+                    throw new Error(`timeline.{start,end} missing or not numbers (chart range broken)`);
+                }
+                return { ok: true, detail: `200 + status=ok, conditional_{yes,no}+spot+timeline shape valid (yes=$${j.conditional_yes.price_usd}, no=$${j.conditional_no.price_usd})` };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
         name: 'apiUnifiedChartShape',
         description: 'api /api/v2/proposals/:id/chart returns 200 + JSON with candles.{yes,no,spot} all arrays (data-plane reachable through proposal resolve → pool fetch → candle aggregation → response transform)',
         layer: 'api',

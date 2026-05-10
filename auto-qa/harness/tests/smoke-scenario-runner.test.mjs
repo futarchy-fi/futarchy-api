@@ -57,6 +57,21 @@ function startFixture({
         metadata: {},
         candles: { yes: [], no: [], spot: [] },
     }),
+    // Market-events happy-path (slice 4d-scenarios-more
+    // apiMarketEventsShape): /api/v1/market-events/proposals/
+    // <id>/prices defaults to 200 + the minimal contract
+    // consumers depend on (status, conditional_{yes,no},
+    // spot, timeline). Toggle status / body to simulate
+    // failures.
+    marketEventsStatus = 200,
+    marketEventsBody = JSON.stringify({
+        status: 'ok',
+        event_id: 'harness-probe-proposal',
+        conditional_yes: { price_usd: 0.55, pool_id: 'mock-pool-yes' },
+        conditional_no: { price_usd: 0.45, pool_id: 'mock-pool-no' },
+        spot: { price_usd: 1.05, pool_ticker: 'harness-probe-ticker' },
+        timeline: { start: 1700000000, end: 1700864000, chain_id: 100 },
+    }),
     registryTypename = 'Query',
     candlesTypename = 'Query',
     // Direct-indexer probes (slice 4d-scenarios-more) hit /registry-direct/graphql
@@ -256,6 +271,12 @@ function startFixture({
                         response.statusCode = spotCandlesNoTickerStatus;
                         response.end(spotCandlesNoTickerBody);
                     }
+                    return;
+                }
+                if (req.url?.match(/^\/api\/v1\/market-events\/proposals\/[^/]+\/prices/) && req.method === 'GET') {
+                    response.statusCode = marketEventsStatus;
+                    response.setHeader('content-type', 'application/json');
+                    response.end(marketEventsBody);
                     return;
                 }
                 if (req.url?.match(/^\/api\/v2\/proposals\/[^/]+\/chart/) && req.method === 'GET') {
@@ -1009,6 +1030,88 @@ test('runAllInvariants — failure: apiUnifiedChartShape missing yes array (refa
         const inv = results.find((r) => r.name === 'apiUnifiedChartShape');
         assert.equal(inv.ok, false);
         assert.match(inv.error, /candles\.yes missing or not array|UI consumers crash/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiMarketEventsShape happy: 200 + full contract shape', async () => {
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'apiMarketEventsShape');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /yes=\$0\.55, no=\$0\.45/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiMarketEventsShape data-plane error (500 from pool resolve)', async () => {
+    const fx = await startFixture({
+        marketEventsStatus: 500,
+        marketEventsBody: JSON.stringify({ error: 'pool resolve failed' }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiMarketEventsShape');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /expected 200, got 500|data plane broken/);
+        // OTHER api endpoints still pass — distinguishes per-endpoint
+        // failure from api-wide outage
+        const chart = results.find((r) => r.name === 'apiUnifiedChartShape');
+        assert.equal(chart.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiMarketEventsShape status field renamed', async () => {
+    // 'status' literal is the consumer branch point — if it's
+    // renamed (or removed when the api unifies envelope shapes
+    // across endpoints), every consumer's "status === 'ok'" branch
+    // breaks silently.
+    const fx = await startFixture({
+        marketEventsBody: JSON.stringify({
+            state: 'ok',  // wrong key
+            conditional_yes: { price_usd: 0.55, pool_id: 'mock-pool-yes' },
+            conditional_no: { price_usd: 0.45, pool_id: 'mock-pool-no' },
+            spot: { price_usd: 1.05 },
+            timeline: { start: 1700000000, end: 1700864000 },
+        }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiMarketEventsShape');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /response\.status expected 'ok'|consumers branch on this literal/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiMarketEventsShape conditional_yes missing (pool resolve null without proper error path)', async () => {
+    // Pool resolve returned null but the response shape didn't
+    // degrade gracefully — conditional_yes key just missing.
+    // UI dashboard crashes destructuring.
+    const fx = await startFixture({
+        marketEventsBody: JSON.stringify({
+            status: 'ok',
+            // conditional_yes intentionally missing
+            conditional_no: { price_usd: 0.45, pool_id: 'mock-pool-no' },
+            spot: { price_usd: 1.05 },
+            timeline: { start: 1700000000, end: 1700864000 },
+        }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiMarketEventsShape');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /conditional_yes missing or not object|UI dashboard crashes/);
     } finally {
         await fx.stop();
     }
@@ -1830,6 +1933,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /apiSpotCandlesValidates/);
     assert.match(r.stdout, /apiSpotCandlesHappyPath/);
     assert.match(r.stdout, /apiUnifiedChartShape/);
+    assert.match(r.stdout, /apiMarketEventsShape/);
     assert.match(r.stdout, /apiCanReachRegistry/);
     assert.match(r.stdout, /apiCanReachCandles/);
     assert.match(r.stdout, /apiCandlesMatchesDirect/);

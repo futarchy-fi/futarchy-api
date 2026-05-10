@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **31 invariants** — 7 api-internal + 21 indexer + 3 chain-layer; second api data-PLANE check landed (apiSpotCandlesHappyPath + apiUnifiedChartShape now form a paired data-plane probe set); 89 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **32 invariants** — 8 api-internal + 21 indexer + 3 chain-layer; **all 3 documented /api/v* endpoints now have shape coverage** (closes the api-endpoint-shape arc); 93 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,97 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (apiUnifiedChartShape) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (apiMarketEventsShape) summary (this iteration on the api side):
+
+- **Closes the api-endpoint-shape arc**. Three iterations
+  ago: apiSpotCandlesHappyPath. Two iterations ago:
+  apiUnifiedChartShape. This iteration: apiMarketEventsShape.
+  All 3 documented /api/v* endpoints now have shape
+  coverage:
+  * `/api/v1/spot-candles?ticker=…` — light path
+    (1 indexer touch, candles only)
+  * `/api/v1/market-events/proposals/:id/prices` —
+    THIS slice — middle path (registry resolve +
+    pool fetch + currency rate, no candle aggregation)
+  * `/api/v2/proposals/:id/chart` — heavy path
+    (all 3 layers + parallel candle fetch + transform)
+
+- **What this invariant asserts** (the minimal contract
+  every consumer in interface/ depends on, per code
+  survey):
+  * status: 'ok' (consumer branch literal — used to
+    differ from other endpoints; renaming silently
+    breaks every "if (response.status === 'ok')" check)
+  * conditional_yes: { price_usd: number, pool_id:
+    string }
+  * conditional_no: { price_usd: number, pool_id:
+    string }
+  * spot: { price_usd: number }
+  * timeline: { start: number, end: number }
+  Other top-level fields (event_id, company_tokens,
+  volume) are NOT part of the minimal contract — drop
+  them and consumers still work, so they're not
+  asserted.
+
+- **Bug shapes caught**:
+  * Pool resolve returned null AND error path emits
+    wrong shape (missing conditional_* keys → UI
+    dashboard crashes destructuring)
+  * status field renamed (the 'ok' literal silently
+    breaks every consumer's branch — extremely subtle
+    regression because status field still exists,
+    just with a wrong key like 'state')
+  * Status code regression
+  * Per-endpoint failure mode (test 2 — verifies
+    apiUnifiedChartShape STILL passes when this one
+    fails; distinguishes "this endpoint broken" from
+    "api wide outage")
+
+- **Fixture extension**:
+  * Routes matching `/api/v1/market-events/proposals/
+    <id>/prices` (regex match) return 200 + the
+    minimal valid response by default.
+  * New marketEventsStatus / marketEventsBody knobs
+    for drift simulation.
+  * Default body chose representative numeric values
+    (yes=0.55, no=0.45, spot=1.05) so the happy
+    detail line shows real-looking prices.
+
+- **Smoke test coverage** — 4 new tests:
+  * happy: 200 + full contract shape
+  * failure: data-plane error 500; verifies
+    apiUnifiedChartShape STILL passes
+  * failure: status field renamed (state instead of
+    status); verifies the literal-string check
+    catches subtle envelope drift
+  * failure: conditional_yes missing (pool resolve
+    null without graceful degradation); verifies
+    pair-wise field check catches partial envelope
+    rot
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 93/93 pass (1182ms — was
+    89/89)
+  * `npm run scenarios:dry` → exits 0; lists 32
+    invariants in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: 32 invariants now: 8 api-internal
+  (was 7 — apiMarketEventsShape added) + 21 indexer
+  + 3 chain-layer. Three of three documented api
+  endpoints now have shape probes. The api-endpoint-
+  shape arc is COMPLETE — every public /api/v* route
+  has at least a 200-and-shape-correct check.
+  Remaining invariants per CHECKLIST shift to deeper
+  semantic checks: probabilityBounds (price ∈ [0,1]),
+  candlesAggregation (volume sum reconciliation),
+  full chartShape match (api↔indexer cross-layer),
+  conservation (∑YES + ∑NO = ∑sDAI), cross-run
+  monotonicity. Each addresses a different
+  correctness dimension.
+
+Phase 7 slice 4d-scenarios-more (apiUnifiedChartShape) summary (previous iteration on the api side):
 
 - **Second api data-PLANE check, paired with last
   iteration's apiSpotCandlesHappyPath**. Both follow
