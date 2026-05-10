@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent + anvilSnapshotCapabilityPresent)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **47 invariants** — 12 api-internal + 26 indexer + 9 chain-layer; second chain-CAPABILITY probe landed (evm_snapshot — pairs with anvil_impersonateAccount to form the minimal scenario primitive set); 156 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent + anvilSnapshotCapabilityPresent + swapAmountsAllRowsPositive)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **48 invariants** — 12 api-internal + 27 indexer + 9 chain-layer; iterate-all-rows pattern extended to swap amounts (catches partial-rewrite/per-block-decoder bugs LATEST-only checks miss); 160 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,67 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (anvilSnapshotCapabilityPresent) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (swapAmountsAllRowsPositive) summary (this iteration on the api side):
+
+- **First iterate-all-rows extension on the swap side**.
+  Strengthens swapAmountsPositive (latest-only) into a
+  per-row check across the first 50 swaps. Mirrors the
+  poolTypeIsValidEnum pattern (iterate-all-rows enum
+  check at the indexer layer).
+
+- **48-invariant milestone**. Layer breakdown: 12 api-
+  internal + 27 indexer (was 26) + 9 chain-layer.
+
+- **Why both swapAmountsPositive AND this exist**:
+  * swapAmountsPositive (LATEST only) — cheap probe;
+    catches event-decoder bugs uniform across ALL
+    swaps. Most regressions land here first.
+  * THIS one (UP-TO-50 rows) — catches bugs that
+    affect SUBSETS of swaps without affecting the
+    latest. Different bug class entirely.
+
+- **Bug shapes caught (NOT caught by latest-only)**:
+  * Indexer reorg re-processed historical blocks and
+    corrupted those rows; latest is fine, old rows wrong
+  * Block-context-dependent decoder bug — decoder reads
+    a "decimals" field from the pool's CURRENT state
+    instead of the swap's block, so historical swaps
+    from before a decimals change get wrong amounts
+  * Partial-rewrite bug — a fix re-emitted only swaps
+    from a specific block range with the corrupted shape
+  * Pool-specific decoder bug — only swaps for a
+    particular pool get the wrong amounts (latest
+    happens to be a different pool)
+
+- **The 50-row cap**: keep the query cheap. If the
+  indexer has thousands of swaps and 49/50 are wrong,
+  that's already a strong signal; full-table iteration
+  would bloat smoke-test runtime without proportional
+  signal gain.
+
+- **Fixture extension**: `buildSwaps` now defaults
+  amountIn/amountOut to '1.0' for non-zero indices
+  (index 0 still uses latestSwap* for back-compat).
+  New per-row override knobs: `swapAmountIns`,
+  `swapAmountOuts` arrays.
+
+- **Smoke tests**: 4 new (5-swap happy default;
+  vacuous on 0 swaps; failure swap[2].amountIn=0
+  partial-rewrite — sister swapAmountsPositive STILL
+  passes (latest=index 0 unaffected); failure swap[1].
+  amountOut='not-a-number' block-context decoder bug).
+  160/160 pass (was 156).
+
+- Slice 4 progress: ~99% (34+ of ~30 sub-slices).
+  Indexer layer now has its first iterate-all-rows
+  check on the SWAP side (poolTypeIsValidEnum was the
+  pool-side equivalent). Coverage shape matures:
+  per-row checks catch SUBSET corruption that latest-
+  only checks miss. Still to add (per CHECKLIST):
+  candlesAggregation, conservation, TWAP monotonicity,
+  cross-run rate monotonicity.
+
+Phase 7 slice 4d-scenarios-more (anvilSnapshotCapabilityPresent) summary (previous iteration on the api side):
 
 - **Second chain-CAPABILITY probe** — ninth chain-layer
   invariant. Sister to anvilImpersonationCapabilityPresent

@@ -114,6 +114,13 @@ function startFixture({
     // bugs.
     latestSwapAmountIn = '10.5',
     latestSwapAmountOut = '4.2',
+    // Per-row swap amount overrides for swapAmountsAllRowsPositive
+    // (slice 4d-scenarios-more). When non-null, indexed by row
+    // position. When null, index 0 uses latestSwap*; non-zero
+    // indices default to '1.0' so iterate-all-rows checks see
+    // valid amounts everywhere.
+    swapAmountIns = null,
+    swapAmountOuts = null,
     latestSwapTimestamp = String(Math.floor(Date.now() / 1000) - 3600),  // 1h ago
     // Multi-row time/timestamp arrays for monotonicity invariants
     // (slice 4d-scenarios-more candleTimeMonotonic +
@@ -244,10 +251,18 @@ function startFixture({
         (_, i) => ({ id: `mock-pool-${i}`, type: poolType }));
     const buildSwaps = () => Array.from({ length: candlesSwapsCount }, (_, i) => {
         const row = { id: `mock-swap-${i}` };
-        if (i === 0) {
-            row.amountIn = latestSwapAmountIn;
-            row.amountOut = latestSwapAmountOut;
-        }
+        // amountIn / amountOut: per-row override via swapAmountIns /
+        // swapAmountOuts arrays (slice 4d-scenarios-more
+        // swapAmountsAllRowsPositive); else index-0 uses
+        // latestSwapAmountIn/Out (back-compat with single-swap
+        // checks); else default '1.0' so iterate-all-rows invariants
+        // see valid amounts on every row by default.
+        row.amountIn = swapAmountIns
+            ? String(swapAmountIns[i])
+            : (i === 0 ? latestSwapAmountIn : '1.0');
+        row.amountOut = swapAmountOuts
+            ? String(swapAmountOuts[i])
+            : (i === 0 ? latestSwapAmountOut : '1.0');
         row.timestamp = swapTimestamps
             ? Number(swapTimestamps[i])
             : Number(latestSwapTimestamp) - i * swapTimestampStep;
@@ -2564,6 +2579,75 @@ test('runAllInvariants — failure: swapAmountsBoundedAbove huge amountOut (toke
         const inv = results.find((r) => r.name === 'swapAmountsBoundedAbove');
         assert.equal(inv.ok, false);
         assert.match(inv.error, /amountOut=.*≥ 1000000000000000|raw uint256 leak/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — swapAmountsAllRowsPositive happy: 5 swaps all positive (default fixture)', async () => {
+    // Default per-row amount is '1.0' for non-zero indices; index 0
+    // uses latestSwapAmountIn/Out (10.5 / 4.2). All 5 rows have
+    // positive amounts.
+    const fx = await startFixture({ candlesSwapsCount: 5 });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'swapAmountsAllRowsPositive');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /5 swaps all have amountIn > 0 AND amountOut > 0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — swapAmountsAllRowsPositive vacuously true with no swaps', async () => {
+    const fx = await startFixture({ candlesSwapsCount: 0 });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'swapAmountsAllRowsPositive');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /vacuously true/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: swapAmountsAllRowsPositive non-latest swap has zero amountIn (partial-rewrite bug)', async () => {
+    // Scenario: indexer reorg re-processed historical blocks with a
+    // bug; swap[2] got amountIn=0. Latest swap (index 0) is fine,
+    // so swapAmountsPositive STILL passes — this iterate-all-rows
+    // check is what catches the historical corruption.
+    const fx = await startFixture({
+        candlesSwapsCount: 5,
+        swapAmountIns: ['10.5', '1.0', '0', '1.0', '1.0'],   // index 2 corrupted
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'swapAmountsAllRowsPositive');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /swap mock-swap-2: amountIn=0 ≤ 0.*latest swap is unaffected/);
+        // Sister probe STILL passes (only checks LATEST=index 0=10.5)
+        const sister = results.find((r) => r.name === 'swapAmountsPositive');
+        assert.equal(sister.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: swapAmountsAllRowsPositive non-latest amountOut not finite (block-context decoder bug)', async () => {
+    // Scenario: a per-block-context decoder bug — historical swap's
+    // amountOut got serialized as 'NaN' string. Latest is fine.
+    const fx = await startFixture({
+        candlesSwapsCount: 3,
+        swapAmountOuts: ['4.2', 'not-a-number', '1.0'],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'swapAmountsAllRowsPositive');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /swap mock-swap-1: amountOut="not-a-number" parseFloat = NaN/);
     } finally {
         await fx.stop();
     }

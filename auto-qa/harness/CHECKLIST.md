@@ -774,10 +774,24 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). **Now 47 invariants**:
-      12 api-internal + 26 indexer probes + 9 chain-layer.
-      156 smoke tests green.
-      `anvilSnapshotCapabilityPresent` added this slice —
+      PROGRESS.md's invariant tables). **Now 48 invariants**:
+      12 api-internal + 27 indexer probes + 9 chain-layer.
+      160 smoke tests green.
+      `swapAmountsAllRowsPositive` added this slice —
+      first iterate-all-rows extension on the swap side.
+      Strengthens swapAmountsPositive (latest-only) into
+      a per-row check across the first 50 swaps. Catches
+      bugs that affect SUBSETS of swaps without affecting
+      the latest: indexer reorg re-processing historical
+      blocks; block-context-dependent decoder bugs;
+      partial-rewrite bugs; pool-specific decoder bugs.
+      Sister probe still passes when latest is fine —
+      only the iterate-all-rows check catches historical
+      corruption. Fixture extended: buildSwaps now gives
+      every row '1.0'/'1.0' as defaults; per-row overrides
+      via new swapAmountIns/swapAmountOuts array knobs.
+
+      `anvilSnapshotCapabilityPresent` (previous slice) —
       ninth chain-layer invariant; second chain-CAPABILITY
       probe (sister to anvilImpersonationCapabilityPresent).
       Together they form the MINIMAL CAPABILITY SET

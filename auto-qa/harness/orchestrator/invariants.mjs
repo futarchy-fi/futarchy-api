@@ -1338,6 +1338,74 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'swapAmountsAllRowsPositive',
+        description: 'every swap (up to first 50) has amountIn > 0 AND amountOut > 0 (catches partial-rewrite or per-block-decoder bugs that LATEST-only checks miss)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // ITERATE-ALL-ROWS strengthening of swapAmountsPositive
+            // (which only checks the latest swap). Mirrors the
+            // poolTypeIsValidEnum pattern (iterate-all-rows enum
+            // check at the indexer layer).
+            //
+            // Why both invariants exist:
+            //   * swapAmountsPositive (LATEST only) — cheap probe
+            //     that catches event-decoder bugs uniform across
+            //     ALL swaps. Most regressions land here first.
+            //   * THIS one (UP-TO-50 rows) — catches bugs that
+            //     affect SUBSETS of swaps without affecting the
+            //     latest:
+            //       * Indexer reorg re-processed historical blocks
+            //         and corrupted those rows (latest is fine,
+            //         old rows wrong)
+            //       * Block-context-dependent decoder bug —
+            //         decoder reads a "decimals" field from the
+            //         pool's CURRENT state instead of the swap's
+            //         block, so historical swaps from before a
+            //         decimals change get wrong amounts
+            //       * Partial-rewrite bug — a fix re-emitted only
+            //             swaps from a specific block range with the
+            //             corrupted shape
+            //       * Pool-specific decoder bug — only swaps for
+            //         a particular pool get the wrong amounts
+            //         (latest happens to be a different pool)
+            //
+            // The 50-row cap: keep the query cheap. If the indexer
+            // has thousands of swaps and 49/50 are wrong, that's
+            // already a strong signal; full-table iteration would
+            // bloat the smoke-test runtime without proportional
+            // signal gain.
+            //
+            // Vacuous when no swaps. When ≥1 swap, every row's
+            // amountIn AND amountOut must be > 0.
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ swaps(first: 50, orderBy: timestamp, orderDirection: desc) { id amountIn amountOut } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.swaps)) {
+                throw new Error(`unexpected swaps response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.swaps.length === 0) {
+                return { ok: true, detail: 'no swaps to check (vacuously true)' };
+            }
+            for (const s of j.data.swaps) {
+                const ain = parseFloat(s.amountIn);
+                const aout = parseFloat(s.amountOut);
+                for (const [name, val] of [['amountIn', ain], ['amountOut', aout]]) {
+                    if (!Number.isFinite(val)) {
+                        throw new Error(`swap ${s.id}: ${name}="${s[name]}" parseFloat = ${val} (not finite — partial-rewrite or block-context decoder bug; latest swap is unaffected)`);
+                    }
+                    if (val <= 0) {
+                        throw new Error(`swap ${s.id}: ${name}=${val} ≤ 0 (signed-amount or per-block-decoder bug; this row was decoded with the wrong logic, latest swap is unaffected)`);
+                    }
+                }
+            }
+            return { ok: true, detail: `${j.data.swaps.length} swaps all have amountIn > 0 AND amountOut > 0` };
+        },
+    },
+    {
         name: 'swapTimestampSensible',
         description: 'latest swap timestamp is in a sane range (catches event-topic-decoder bugs)',
         layer: 'orchestrator↔candles',
