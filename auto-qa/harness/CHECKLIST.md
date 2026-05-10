@@ -93,6 +93,20 @@ both layers in parallel and probe each via its native protocol.
       Placeholder logged in `smoke-api-health.test.mjs` so the
       Phase 3 wiring point is obvious.
 
+**Phase 2 BONUS items (added during slices 2+4, not in the original goal):**
+
+- [x] Stub-indexer harness (`orchestrator/stub-indexer.mjs`) — pluggable
+      in-process Express stub for testing the api's passthrough layer
+      without a real indexer. Records call history; supports hot-swap
+      responder.
+- [x] Real cross-layer round-trip via passthrough — orchestrator →
+      api `/registry/graphql` → stub-indexer → response, with body
+      and status forwarded verbatim. Three cases pinned: 200
+      passthrough, 500 propagation, 502 envelope on unreachable.
+- [x] Multi-spawn robustness — 3 successive anvil+api cycles confirm
+      no port leaks (each cycle's ports are REFUSED after `stop()`)
+      and no orphaned processes.
+
 ## Phase 3 — Local Checkpoint indexer in-loop
 
 **Goal:** indexer reconciles with chain after each block.

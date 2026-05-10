@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 2 — slice 1 landed (orchestrator scaffold + dual-source liveness smoke). 5 harness smoke tests now pass; 2/3 Phase 2 CHECKLIST items ticked, 3rd reframed (api is indexer-backed; literal block-comparison defers to Phase 3). |
+| Phase | 2 — slices 1, 2, 4 landed. Stub-indexer enables real api↔upstream round-trip testing without a live indexer. 9 smoke tests pass + 1 skip (compose, daemon down). 2/3 original CHECKLIST items + 3 bonus items ticked. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -296,16 +296,63 @@ probes each via its native protocol.
   (the 3rd, literal block invariant, defers to Phase 3 with an
   explicit note).
 
-**Phase 2 wrap-up — remaining (queued for next iterations):**
+- **slice 2** (this iteration) — `orchestrator/stub-indexer.mjs` (new):
+  pluggable in-process http server that stands in for the Checkpoint
+  registry/candles indexer. Records call history; supports hot-swap
+  responder. The api is configured to point at it via the
+  `REGISTRY_URL` / `CANDLES_URL` env vars (discovered while reading
+  `src/config/endpoints.js` — both vars exist and are read on api
+  startup). New `tests/smoke-api-passthrough.test.mjs` runs 3 cases:
+  - **200 verbatim**: send query through api → stub returns canned
+    `{data: {proposals: [...]}}` → api forwards body+status both
+    verbatim. Verified stub received the EXACT body we sent.
+  - **500 propagation**: stub returns 500 → api passes through 500
+    with the original error envelope.
+  - **502 envelope on unreachable**: api configured with REGISTRY_URL
+    pointing at a port where nothing listens → api returns 502 with
+    `{errors:[{message:"[registry] upstream error: ..."}]}` per
+    `makeGraphQLPassthrough` contract.
+  All 3 pass in <1s total. **Real cross-layer integration validated.**
 
-- slice 2 — Add a second Phase 2 invariant that DOESN'T need the
-  indexer: orchestrator probes one of the api passthrough endpoints
-  (`/registry/graphql` is structured + returns deterministic
-  shape) and asserts the response envelope matches the documented
-  contract.
-- slice 3 — Document an "ethers v6 contract read via anvil RPC"
-  helper in `orchestrator/contracts.mjs` so Phase 4 (synthetic
-  swaps) inherits a clean contract-call surface.
-- slice 4 — Stress: spawn anvil + api 5 times in a row and confirm
-  no port leaks / no orphaned processes (catches handle-leak bugs
-  in `services.mjs`).
+- **slice 4** (this iteration) — `tests/smoke-multi-spawn.test.mjs`:
+  N successive anvil+api spawn/probe/stop cycles (default N=3,
+  override via `HARNESS_STRESS_CYCLES`). After each `stop()`, probes
+  the ports and asserts they are REFUSED (proof of release). Across
+  cycles, asserts heights are within 100 blocks of each other (sanity
+  check that we're hitting the same fork source). **Validated
+  2026-05-10 — 3 cycles in 8.2s, port release clean each time,
+  cycle heights 46104207-46104209 (range 2).**
+
+- npm scripts: `smoke:passthrough`, `smoke:stress` in harness;
+  `auto-qa:e2e:smoke:passthrough`, `auto-qa:e2e:smoke:stress` at root.
+
+**Smoke summary (post-Phase 2 slices 1+2+4):**
+
+```
+Phase 1 smoke — start-fork + block-clock        ✓ ~3s
+Phase 1 slice 3 — setNextTimestamp              ✓ ~2.5s
+Phase 1 slice 4 — setBalance                    ✓ ~2.5s
+Phase 1 slice 4 — impersonateAccount            ✓ ~3s
+Phase 1 slice 2 — compose smoke                  ⊘ skipped (daemon down)
+Phase 2 — orchestrator dual-source               ✓ ~3.5s
+Phase 2 slice 2 — passthrough verbatim           ✓ ~280ms
+Phase 2 slice 2 — passthrough 500                ✓ ~280ms
+Phase 2 slice 2 — passthrough 502 unreachable    ✓ ~270ms
+Phase 2 slice 4 — multi-spawn stress (3 cycles) ✓ ~8.2s
+                                       TOTAL: 9 pass + 1 skip
+```
+
+**Phase 2 wrap-up — remaining:**
+
+- slice 3 (deferred to Phase 4 entry) — `orchestrator/contracts.mjs`
+  ethers v6 helpers (`readContract`, `sendContractTx`). Better built
+  alongside the synthetic-swap work in Phase 4.
+
+**Phase 3 entry criteria (from CHECKLIST):**
+
+- [ ] Decision made: published Checkpoint image vs build-from-source
+- [ ] Indexer service in compose, depends on anvil healthcheck
+- [ ] Schema migration cold-start time documented (this is the
+      brittleness risk per PROGRESS.md)
+- [ ] Smoke test: write a Swap event on anvil → wait → query indexer
+      via GraphQL → assert event present

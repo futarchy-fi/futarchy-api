@@ -18,7 +18,9 @@
         "auto-qa:e2e:fork": "npm --prefix auto-qa/harness run fork",
         "auto-qa:e2e:smoke": "npm --prefix auto-qa/harness run smoke",
         "auto-qa:e2e:smoke:compose": "npm --prefix auto-qa/harness run smoke:compose",
-        "auto-qa:e2e:smoke:api": "npm --prefix auto-qa/harness run smoke:api"
+        "auto-qa:e2e:smoke:api": "npm --prefix auto-qa/harness run smoke:api",
+        "auto-qa:e2e:smoke:passthrough": "npm --prefix auto-qa/harness run smoke:passthrough",
+        "auto-qa:e2e:smoke:stress": "npm --prefix auto-qa/harness run smoke:stress"
     },
     "dependencies": {
         "cors": "^2.8.5",
