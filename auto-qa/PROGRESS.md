@@ -9,10 +9,11 @@ is never modified — only tests on the `auto-qa` branch.
 | Field | Value |
 |---|---|
 | Branch | `auto-qa` (off `origin/main`) |
-| Iterations completed | 3 |
+| Iterations completed | 4 |
 | PRs catalogued | 9 / 9 (full history) |
 | PRs classified | 9 |
-| Tests added | 9 (2 path-prefix + 7 passthrough-contract — all passing) |
+| Tests added | 13 (2 path-prefix + 7 passthrough-contract + 4 unified-chart — all passing) |
+| PRs covered by tests | **7 / 9** (#1, #4, #5, #6, #7, #8, #9 — all bug-fix PRs) |
 | Test runner | `node --test` via `npm run auto-qa:test` |
 | Tooling backlog | see below |
 
@@ -45,14 +46,14 @@ is never modified — only tests on the `auto-qa` branch.
 - **Hypothesis**: `unified-chart.js` / `market-events.js` only inspected `CONDITIONAL` pools to derive company/currency token symbols. New markets where CONDITIONAL pools weren't yet indexed (or didn't exist) fell through to the `'PNK'` hardcode → wrong ticker on charts. Fix: walk pools in priority `CONDITIONAL > EXPECTED_VALUE > PREDICTION` and parse the pool name regex.
 - **Ideal test**: Snapshot test against `GET /api/v2/proposals/:id/chart` for proposals representing each (CONDITIONAL+, EXPECTED_VALUE+, PREDICTION-only) state — assert `company_tokens.base.tokenSymbol` is plausible and is NEVER literally `"PNK"` unless the proposal really is for PNK.
 - **Tools needed**: HTTP client + fixtures for each market lifecycle stage. Hard part is finding/keeping a "PREDICTION-only" fixture stable.
-- **Test status**: not-started (TODO future iteration)
+- **Test status**: **landed-passing** (`auto-qa/tests/unified-chart.test.mjs` PR #6 case — asserts `base.tokenSymbol === "GNO"` and explicitly rejects `"PNK"`)
 
 ### PR #5 — fix(api): fall back to PREDICTION/EXPECTED_VALUE pools for new markets
 - **Class**: bug-fix
 - **Hypothesis**: Same family as #6 — endpoints assumed CONDITIONAL pools always existed. For new proposals where only PREDICTION/EXPECTED_VALUE pools are indexed yet, endpoints returned null prices.
 - **Ideal test**: subsumed by #6's snapshot suite — assert prices are non-null for every market lifecycle stage.
 - **Tools needed**: same as #6.
-- **Test status**: not-started (TODO future iteration)
+- **Test status**: **landed-passing** (`auto-qa/tests/unified-chart.test.mjs` PR #5 case — asserts both YES + NO `price_usd > 0`. TODO: add fixtures for EXPECTED_VALUE-only and PREDICTION-only markets to fully exercise the fallback chain.)
 
 ### PR #4 — fix(api): translate plain pool IDs in /candles/graphql passthrough
 - **Class**: bug-fix
