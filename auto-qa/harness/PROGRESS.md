@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 slices 1+2+3+4a+4b landed on interface side. Slices 1-3 prior. Slice 4a: DOM↔API mechanism (mock GraphQL → assert probe org name renders in DOM). Slice 4b: first NUMERIC value through the pipeline — mock 8 active + 3 hidden proposals → assert OrgRow cells show "8" / "11" (verifies `transformOrgToCard` visibility-filter logic). 13/13 browser tests green. Currency-formatted price + cross-protocol reconciliation still ahead. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 slices 1+2+3+4a+4b+4c v1 landed on interface side. Slices 1-3 prior. Slice 4a: DOM↔API mechanism (string passthrough). Slice 4b: integer counts through visibility filter ("8" / "11"). Slice 4c v1: int → enum mapping formatter (mock `metadata.chain='10'` → ChainBadge cell shows "Optimism"). 14/14 browser tests green. Currency-formatted price (4c v2) + cross-protocol reconciliation (4d) still ahead. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -775,10 +775,31 @@ Summary of slice 1:
     eth_blockNumber forward test from a real http server to
     `context.route(...)` interception (chromium drops fetches from
     `about:blank` to local addresses regardless of CORS headers)
-- Slice 4 sub-slices remaining: 4c (currency-formatted price
-  with formatter assertion), 4d (cross-protocol reconciliation).
+- Slice 4 sub-slices remaining: 4c v2 (currency-formatted price
+  with decimal/currency/rounding logic), 4d (cross-protocol
+  reconciliation).
 
-Slice 4b summary (this iteration on the interface side):
+Slice 4c v1 summary (this iteration on the interface side):
+
+- Same `flows/dom-api-invariant.spec.mjs`, third test added.
+  Mock `organizations[0].metadata = JSON.stringify({chain: '10'})`
+  → flows through `parseMetadata` → `parseInt('10', 10) = 10`
+  → `ChainBadge.CHAIN_CONFIG[10].shortName === 'Optimism'`,
+  asserted in the row's chain cell (`td.nth(4)`).
+- Different formatter class than 4a (string passthrough) and
+  4b (integer toString through filter logic): 4c v1 covers
+  int → enum lookup with a fallback case.
+- Refactor: extended `makeGraphqlMockHandler` to accept
+  `orgMetadata` (defaults to `null` so existing tests are
+  unaffected).
+- Bug-shapes this catches: any link in
+  parseMetadata → parseInt → CHAIN_CONFIG → ChainBadge that
+  breaks would shift the rendered text away from "Optimism".
+  E.g. CHAIN_CONFIG[10].shortName silently renamed to "Op", or
+  parseInt logic dropped (would default to 100 → "Gnosis").
+- 1 test, 1.4s. UI smoke: 23 pass + 0 skip.
+
+Slice 4b summary (previous iteration on the interface side):
 
 - Same `flows/dom-api-invariant.spec.mjs`, second test added.
   Mock 8 + 3 = 11 proposals (the 3 with

@@ -320,11 +320,20 @@ freshly-generated addresses as recipients; documented in
       archived from both, drops hidden from active) maps the API
       payload to the rendered counts correctly. Test: 2.3s; both
       slice 4 tests together: 15s wall-clock warm.
-- [ ] Sub-slice 4c — currency-formatted price (e.g., usePoolData /
-      candle aggregates → `$0.42` style format). 4b proved integer
-      counts; 4c should pin a value like `0.42424242` and assert the
-      DOM shows the formatter's exact rendering ("$0.42" or
-      "0.4242" or whatever the real formatter does).
+- [x] Sub-slice 4c v1 — first ENUM-mapping formatter through the
+      pipeline. Mock `organizations[0].metadata = {chain: '10'}` →
+      `parseMetadata` → `parseInt('10', 10) = 10` →
+      `ChainBadge.CHAIN_CONFIG[10].shortName === 'Optimism'`
+      rendered in the row's chain cell. Verifies a different
+      formatter class than 4b (string passthrough vs integer
+      toString vs int → enum mapping). Test: 1.4s.
+- [ ] Sub-slice 4c v2 — currency-formatted price ("$0.42" /
+      "0.4242" / whatever the real formatter does). Will pick a
+      concrete pool/price endpoint with known formatter chain
+      (decimals/currency/rounding) and assert the exact rendered
+      string. Likely uses the singleProposalTransformer's
+      `prices.{approval,refusal}_price` or usePoolData's spot
+      price derivation.
 - [ ] Sub-slice 4d — cross-protocol price reconciliation
       (Algebra / CoW / Sushi) mock — when multiple sources should
       agree, mock each to slightly-different values and assert the
