@@ -9,14 +9,14 @@ is never modified — only tests on the `auto-qa` branch.
 | Field | Value |
 |---|---|
 | Branch | `auto-qa` (off `origin/main`) |
-| Iterations completed | 15 |
+| Iterations completed | 16 |
 | PRs catalogued | 9 / 9 (full history) |
 | PRs classified | 9 |
-| Tests added | 82 (2 path-prefix + 7 passthrough-contract + 4 unified-chart + 3 multi-proposal-smoke + 3 spot-candles + 3 indexer-freshness + 4 registry-org-shape + 6 legacy-v1-prices + 3 operational-endpoints + 11 passthrough-smoke + 21 cors-headers + 6 cache-headers + 9 chart-window-invariants — 81 passing, 1 skipped) |
+| Tests added | 88 (2 path-prefix + 7 passthrough-contract + 4 unified-chart + 3 multi-proposal-smoke + 3 spot-candles + 3 indexer-freshness + 4 registry-org-shape + 6 legacy-v1-prices + 3 operational-endpoints + 11 passthrough-smoke + 21 cors-headers + 6 cache-headers + 9 chart-window-invariants + 6 legacy-subgraph-alias — 87 passing, 1 skipped) |
 | Cross-cutting catches | catastrophic-empty guards, indexer freshness bounds, metadata parseability, **parse-error status inconsistency between passthroughs**, CORS preflight + Apollo header allow-list + expose-headers, cache-layer disablement / stale-key / TTL drift |
 | Ops invariants tracked | indexer lag (candles + registry) bounded vs. Gnosis chain tip |
 | PRs covered by tests | **8 / 9** (#1, #3, #4, #5, #6, #7, #8, #9 — only #2 infra remains) |
-| API surfaces with smoke tests | **3 / 3** (`/api/v2/.../chart`, `/candles/graphql`, `/api/v1/spot-candles`) |
+| API surfaces with smoke tests | **4 / 4** (`/api/v2/.../chart`, `/candles/graphql`, `/api/v1/spot-candles`, `/subgraphs/name/algebra-proposal-candles-v1` legacy alias) |
 | Data-quality issues surfaced | 2 proposals (TSLA Mega Package, CIP-82) return zero prices + "TOKEN" fallback symbol — see below |
 | **Real bugs surfaced** | **`/candles/graphql` returns HTTP 502 on malformed query (should be 400 like /registry/graphql)** — pinned in `passthrough-smoke.test.mjs::PARSE_ERROR_STATUS` |
 | Test runner | `node --test` via `npm run auto-qa:test` |
@@ -103,6 +103,7 @@ is never modified — only tests on the `auto-qa` branch.
 | **CORS headers** | cors() middleware dropped, stricter origin allowlist, missing Apollo-Require-Preflight, expose-headers regression | `auto-qa/tests/cors-headers.test.mjs` (21 cases — preflight × origin matrix + actual-response CORS + Apollo header allow-list + X-Cache observability headers + pinned-policy ratchet) |
 | **Cache headers** | cache-layer silently disabled, X-Cache value drift, TTL = 0 / unbounded, cache key includes non-deterministic component, HIT path silently degraded | `auto-qa/tests/cache-headers.test.mjs` (6 cases — header presence + HIT/MISS literal + TTL bounds + Response-Time format + back-to-back HIT determinism + HIT-vs-MISS latency ceiling) |
 | **Chart window invariants** | window predicate flipped (>= ↔ <=), sort order inverted, default-window logic returning unbounded data, inverted/future/past windows crashing the upstream passthrough | `auto-qa/tests/chart-window-invariants.test.mjs` (9 cases — degenerate-window graceful handling + within-window invariant + strictly-ascending sort + candle shape parseability + 1-second snapping boundary) |
+| **Legacy subgraph alias** | `/subgraphs/name/algebra-proposal-candles-v1` removed (would silently 404 the Snapshot widget + pre-Cloud-Run integrations), legacy/modern routes drift, spotCandles injection lost | `auto-qa/tests/legacy-subgraph-alias.test.mjs` (6 cases — POST 200 + GET rejected + spotCandles injection invariant + negative confirmation that modern route does NOT inject + cross-route data shape parity + malformed-query envelope) |
 | **Operational endpoints** | /health stale, /warmer broken, edge cache freezing /health timestamp | `auto-qa/tests/operational-endpoints.test.mjs` |
 | **Indexer freshness** | candles + registry indexer stalls (lag vs. Gnosis chain tip) | `auto-qa/tests/indexer-freshness.test.mjs` |
 
