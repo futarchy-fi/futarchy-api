@@ -1059,6 +1059,11 @@ test('runAllInvariants — apiUnifiedChartShape happy: 200 + empty yes/no/spot a
 
 test('runAllInvariants — apiUnifiedChartShape happy: 200 + populated yes/no/spot arrays', async () => {
     const fx = await startFixture({
+        // Bump direct candles count so the chartCandleCountsBoundedByDirect
+        // invariant (which asserts api yes+no <= direct count) doesn't
+        // fire — apiUnifiedChartShape happy returns yes=2 + no=1 = 3
+        // candles, so direct needs ≥ 3.
+        candlesCandlesCount: 3,
         unifiedChartBody: JSON.stringify({
             metadata: { trading_contract_id: 'mock-contract' },
             candles: {
@@ -1096,6 +1101,100 @@ test('runAllInvariants — failure: apiUnifiedChartShape data-plane error (500 f
         assert.match(inv.error, /expected 200, got 500|data plane broken/);
         const health = results.find((r) => r.name === 'apiHealth');
         assert.equal(health.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — chartCandleCountsBoundedByDirect happy: 0 ≤ 1 (default fixture)', async () => {
+    // Default: api returns empty yes/no arrays, direct returns 1 candle.
+    // 0+0 ≤ 1 — passes naturally. This also represents the "fresh
+    // proposal, no candles yet but indexer has some" case.
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'chartCandleCountsBoundedByDirect');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /api yes=0 \+ no=0 = 0 ≤ direct 1/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — chartCandleCountsBoundedByDirect vacuous: both 0', async () => {
+    const fx = await startFixture({ candlesCandlesCount: 0 });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'chartCandleCountsBoundedByDirect');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /both api .* and direct return 0 candles \(vacuous\)/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — chartCandleCountsBoundedByDirect happy: api subset matches direct (1 yes + 1 no ≤ 5)', async () => {
+    const fx = await startFixture({
+        candlesCandlesCount: 5,
+        unifiedChartBody: JSON.stringify({
+            metadata: {},
+            candles: {
+                yes: [{ time: 1700000000, close: '0.42' }],
+                no: [{ time: 1700000000, close: '0.58' }],
+                spot: [],
+            },
+        }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'chartCandleCountsBoundedByDirect');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /api yes=1 \+ no=1 = 2 ≤ direct 5/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: chartCandleCountsBoundedByDirect filter regression (api returns more than direct)', async () => {
+    // The bug: api filter regressed — instead of returning only
+    // the proposal's candles, it returns 5 yes + 5 no = 10. But
+    // the indexer only has 1 candle. Impossible — flag it.
+    const fx = await startFixture({
+        candlesCandlesCount: 1,
+        unifiedChartBody: JSON.stringify({
+            metadata: {},
+            candles: {
+                yes: [
+                    { time: 1700000000, close: '0.42' },
+                    { time: 1700003600, close: '0.43' },
+                    { time: 1700007200, close: '0.44' },
+                    { time: 1700010800, close: '0.45' },
+                    { time: 1700014400, close: '0.46' },
+                ],
+                no: [
+                    { time: 1700000000, close: '0.58' },
+                    { time: 1700003600, close: '0.57' },
+                    { time: 1700007200, close: '0.56' },
+                    { time: 1700010800, close: '0.55' },
+                    { time: 1700014400, close: '0.54' },
+                ],
+                spot: [],
+            },
+        }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'chartCandleCountsBoundedByDirect');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /api candle count.*= 10.*> direct count.*1.*filter regression|fabrication/);
+        // apiUnifiedChartShape STILL passes — the SHAPE is fine
+        // (yes/no/spot are arrays); the gap is the COUNT relationship
+        // to direct, which only this invariant checks
+        const shape = results.find((r) => r.name === 'apiUnifiedChartShape');
+        assert.equal(shape.ok, true);
     } finally {
         await fx.stop();
     }
@@ -2188,6 +2287,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /apiSpotCandlesValidates/);
     assert.match(r.stdout, /apiSpotCandlesHappyPath/);
     assert.match(r.stdout, /apiUnifiedChartShape/);
+    assert.match(r.stdout, /chartCandleCountsBoundedByDirect/);
     assert.match(r.stdout, /apiMarketEventsShape/);
     assert.match(r.stdout, /apiCanReachRegistry/);
     assert.match(r.stdout, /apiCanReachCandles/);

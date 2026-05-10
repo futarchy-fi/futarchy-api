@@ -341,6 +341,74 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'chartCandleCountsBoundedByDirect',
+        description: 'sum of api unified-chart candles.{yes,no}.length ≤ direct candles indexer count (api filters by proposal pools so result is a strict subset)',
+        layer: 'api↔candles',
+        check: async (ctx) => {
+            // First cross-layer COUNT-CONSISTENCY check for the
+            // unified-chart endpoint. Mirrors apiCandlesMatchesDirect
+            // (which compares api passthrough vs direct on
+            // /candles/graphql) but for the higher-level chart
+            // endpoint, which performs FILTERING (only candles
+            // belonging to the proposal's YES + NO pools).
+            //
+            // The invariant: api candles ⊆ direct candles, so
+            // |api| ≤ |direct|. Catches:
+            //   * api fabricates extra candles (impossible — but
+            //     a transform regression could duplicate or
+            //     synthesize rows)
+            //   * Filter regression — api stops filtering and
+            //     returns ALL candles in the indexer instead of
+            //     just the proposal's. Result count blows up.
+            //   * Cache layer returns wrong dataset (e.g., cache
+            //     key mismatch returns a different proposal's
+            //     candles, possibly more than current direct
+            //     count if the cached proposal had more pools)
+            //
+            // Note: SPOT candles come from a different source
+            // (CoinGecko or spot-candles indexer), NOT the candles
+            // indexer — so spot is excluded from the comparison.
+            //
+            // Vacuous when direct returns no candles AND api
+            // returns no candles — nothing to compare. If api > 0
+            // but direct = 0, that's a real failure (api can't
+            // have candles the indexer doesn't).
+            const directBody = JSON.stringify({
+                query: '{ candles(first: 100) { id } }',
+            });
+            const [chartResp, directResp] = await Promise.all([
+                fetch(`${ctx.apiUrl}/api/v2/proposals/harness-probe-proposal/chart`),
+                fetchJson(ctx.candlesUrl, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: directBody,
+                }),
+            ]);
+            if (chartResp.status !== 200) {
+                throw new Error(`chart endpoint returned ${chartResp.status} (data plane down — apiUnifiedChartShape's domain)`);
+            }
+            const chart = await chartResp.json();
+            const apiYes = Array.isArray(chart?.candles?.yes) ? chart.candles.yes.length : null;
+            const apiNo = Array.isArray(chart?.candles?.no) ? chart.candles.no.length : null;
+            if (apiYes === null || apiNo === null) {
+                throw new Error(`chart response missing candles.{yes,no} arrays (apiUnifiedChartShape's domain)`);
+            }
+            const directCandles = directResp?.data?.candles;
+            if (!Array.isArray(directCandles)) {
+                throw new Error(`direct candles response shape: ${JSON.stringify(directResp)?.slice(0, 80)}`);
+            }
+            const apiTotal = apiYes + apiNo;
+            const directTotal = directCandles.length;
+            if (apiTotal > directTotal) {
+                throw new Error(`api candle count (yes=${apiYes} + no=${apiNo} = ${apiTotal}) > direct count (${directTotal}) — api can't return more than the indexer has (filter regression OR transform fabrication)`);
+            }
+            if (apiTotal === 0 && directTotal === 0) {
+                return { ok: true, detail: 'both api (yes+no) and direct return 0 candles (vacuous)' };
+            }
+            return { ok: true, detail: `api yes=${apiYes} + no=${apiNo} = ${apiTotal} ≤ direct ${directTotal} (subset relationship intact)` };
+        },
+    },
+    {
         name: 'apiCanReachRegistry',
         description: 'api /registry/graphql proxies the __typename probe to registry checkpoint',
         layer: 'api↔registry',

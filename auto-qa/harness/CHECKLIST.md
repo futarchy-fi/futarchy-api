@@ -750,23 +750,23 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 35 invariants:
-      8 api-internal + 23 indexer probes + 4 chain-layer.
-      `candlePricesNonNegative` added this slice —
-      universal price-sanity probe that closes a gap
-      left by candleOHLCOrdering + probabilityBounds.
-      OHLC ordering passes when low+high are both
-      negative (low ≤ high holds), and probabilityBounds
-      only fires for PREDICTION pools — so all-negative
-      or mixed-sign OHLC for non-PREDICTION pools went
-      undetected. This invariant asserts all four OHLC
-      ≥ 0 for ANY pool type. Defense-in-depth even for
-      PREDICTION pools (catches negative open/high/low
-      where probabilityBounds only checks close). 105
-      smoke tests green. Still to add: candlesAggregation
-      (Candle.volume = sum of contained Swap amounts
-      within period), chartShape full match (api
-      unified-chart vs indexer raw), conservation
+      PROGRESS.md's invariant tables). Now 36 invariants:
+      9 api-internal + 23 indexer probes + 4 chain-layer.
+      `chartCandleCountsBoundedByDirect` added this
+      slice — first true cross-layer count check for
+      the unified-chart endpoint. Asserts
+      `sum(api.candles.{yes,no}.length) ≤ direct
+      candle count`. Catches api filter regression
+      (returns ALL candles instead of pool-filtered
+      subset) or transform fabrication (api invents
+      candles not in indexer). Bridges to the
+      documented full chartShape invariant — that
+      future iteration extends count to ID-by-ID
+      pair-wise compare. 109 smoke tests green. Still
+      to add: candlesAggregation (Candle.volume = sum
+      of contained Swap amounts within period),
+      chartShape full match (api unified-chart vs
+      indexer raw, ID-pair compare), conservation
       (∑YES + ∑NO = ∑sDAI), monotonicity (TWAP),
       cross-run monotonicity on rateSanity.
 - [x] **4d-activate — orchestrator block UNCOMMENTED.**
