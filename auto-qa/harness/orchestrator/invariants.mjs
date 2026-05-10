@@ -722,6 +722,61 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'swapPoolReferentialIntegrity',
+        description: 'latest swap references a Pool that exists in the indexer (catches orphan swap rows from FK derivation bugs)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // First cross-entity FK check in the catalog. Different
+            // failure mode from any single-entity probe:
+            //
+            //   * candlesHasPools / candlesHasSwaps assert each
+            //     entity has data, independently
+            //   * apiCandlesMatchesDirect asserts api↔indexer agree
+            //     on each entity, independently
+            //   * THIS asserts the entities are CONSISTENT WITH EACH
+            //     OTHER — swap.pool.id must exist in the pools table
+            //
+            // Bug shapes caught:
+            //   * Indexer's swap-event handler derives pool id wrong
+            //     (e.g., reads the wrong topic slot, or applies a
+            //     transform that mangles the address)
+            //   * Pool entity got deleted/superseded but its swaps
+            //     weren't garbage-collected (orphan rows)
+            //   * Schema migration that renamed Pool but didn't
+            //     update Swap's foreign key
+            //
+            // Vacuous when no swaps exist (no FK to check).
+            // Distinct vacuous case from "no pools" — if pools=[]
+            // but swaps>0, that's an integrity failure (every swap
+            // is orphan), NOT vacuous.
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ swaps(first: 1, orderBy: timestamp, orderDirection: desc) { id pool { id } } pools(first: 50) { id } }',
+                }),
+            });
+            const swaps = j?.data?.swaps;
+            const pools = j?.data?.pools;
+            if (!Array.isArray(swaps) || !Array.isArray(pools)) {
+                throw new Error(`unexpected response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (swaps.length === 0) {
+                return { ok: true, detail: 'no swaps to check (vacuously true)' };
+            }
+            const swap = swaps[0];
+            const refPoolId = swap?.pool?.id;
+            if (typeof refPoolId !== 'string' || refPoolId.length === 0) {
+                throw new Error(`swap ${swap.id}: pool.id missing or non-string (handler dropped FK; got ${JSON.stringify(swap.pool)})`);
+            }
+            const poolIds = new Set(pools.map((p) => p.id));
+            if (!poolIds.has(refPoolId)) {
+                throw new Error(`swap ${swap.id}: references pool ${refPoolId} but no such pool in pools(first: 50) — orphan swap (FK derivation bug or pool deletion)`);
+            }
+            return { ok: true, detail: `swap ${swap.id} → pool ${refPoolId} (FK intact; ${pools.length} pool(s) total)` };
+        },
+    },
+    {
         name: 'candleVolumesNonNegative',
         description: 'latest candle has volumeToken0 ≥ 0 AND volumeToken1 ≥ 0 (vacuously true when no candles)',
         layer: 'orchestrator↔candles',

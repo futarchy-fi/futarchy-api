@@ -80,6 +80,12 @@ function startFixture({
     candleTimeStep = 3600,            // 1 hour between candles when auto-generated
     swapTimestamps = null,
     swapTimestampStep = 12,            // 1 block (~12s) between swaps when auto-generated
+    // Per-swap pool FK for swapPoolReferentialIntegrity (slice
+    // 4d-scenarios-more). Indexed by swap position. If null,
+    // every swap auto-references mock-pool-0 (a real pool from
+    // buildPools). Tests pass an explicit array to simulate
+    // orphan-swap bugs (e.g. ['nonexistent-pool']).
+    swapPoolIds = null,
     // Set to true to make the direct-indexer paths return 502, simulating
     // an indexer that's down even though the api passthrough still works
     // (e.g., api is caching).
@@ -124,6 +130,12 @@ function startFixture({
         row.timestamp = swapTimestamps
             ? Number(swapTimestamps[i])
             : Number(latestSwapTimestamp) - i * swapTimestampStep;
+        // FK to a Pool. Default: every swap points at mock-pool-0
+        // (the first pool produced by buildPools, guaranteed to
+        // exist when candlesPoolsCount > 0). Tests override
+        // swapPoolIds[i] to simulate orphan-swap bugs.
+        const poolId = swapPoolIds ? swapPoolIds[i] : 'mock-pool-0';
+        row.pool = { id: poolId };
         return row;
     });
     const buildRegistry = () => ({
@@ -1123,6 +1135,76 @@ test('runAllInvariants — failure: swapTimeMonotonicNonStrict timestamp goes BA
     }
 });
 
+test('runAllInvariants — swapPoolReferentialIntegrity happy: swap references existing pool', async () => {
+    // Defaults: 1 pool ("mock-pool-0"), 1 swap defaulting to
+    // pool.id="mock-pool-0". FK intact.
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'swapPoolReferentialIntegrity');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /swap mock-swap-0 → pool mock-pool-0 \(FK intact/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — swapPoolReferentialIntegrity vacuously true with no swaps', async () => {
+    const fx = await startFixture({ candlesSwapsCount: 0 });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'swapPoolReferentialIntegrity');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /no swaps to check \(vacuously true\)/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: swapPoolReferentialIntegrity orphan swap (FK derivation bug)', async () => {
+    // Swap references a nonexistent pool — handler computed FK wrong.
+    const fx = await startFixture({
+        candlesPoolsCount: 2,                           // mock-pool-0, mock-pool-1
+        swapPoolIds: ['nonexistent-pool-xyz'],          // FK points nowhere
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'swapPoolReferentialIntegrity');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /references pool nonexistent-pool-xyz but no such pool|orphan swap/);
+        // Existence checks still pass — the entities exist
+        // independently; only their relationship is broken
+        const pools = results.find((r) => r.name === 'candlesHasPools');
+        assert.equal(pools.ok, true);
+        const swaps = results.find((r) => r.name === 'candlesHasSwaps');
+        assert.equal(swaps.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: swapPoolReferentialIntegrity all pools deleted (orphan-storm)', async () => {
+    // Pools wiped (e.g., schema migration that dropped Pool rows
+    // without GC-ing Swaps). Existence check for pools fails too;
+    // referential integrity catches the orphaned swap directly.
+    const fx = await startFixture({
+        candlesPoolsCount: 0,
+        candlesSwapsCount: 1,
+        swapPoolIds: ['mock-pool-0'],  // FK points at a no-longer-existing pool
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'swapPoolReferentialIntegrity');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /references pool mock-pool-0 but no such pool/);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('runAllInvariants — candlesHasPools happy: 1 pool indexed', async () => {
     const fx = await startFixture();  // default candlesPoolsCount=1
     try {
@@ -1243,6 +1325,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /swapTimestampSensible/);
     assert.match(r.stdout, /candleTimeMonotonic/);
     assert.match(r.stdout, /swapTimeMonotonicNonStrict/);
+    assert.match(r.stdout, /swapPoolReferentialIntegrity/);
     assert.match(r.stdout, /anvilBlockNumber/);
     assert.match(r.stdout, /anvilChainId/);
     assert.match(r.stdout, /rateSanity/);

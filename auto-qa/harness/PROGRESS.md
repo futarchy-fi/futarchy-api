@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 24 invariants — 5 api-internal + 16 indexer + 3 chain-layer; both candles + registry now have api↔direct MATCH coverage; 61 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 25 invariants — 5 api-internal + 17 indexer + 3 chain-layer; first cross-entity FK check landed; 65 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,89 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (apiRegistryMatchesDirect) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (swapPoolReferentialIntegrity) summary (this iteration on the api side):
+
+- **First cross-entity FK check in the catalog**. All
+  previous indexer probes were either (a) single-entity
+  (existence + data-shape) or (b) cross-layer
+  (api↔direct match). This one is cross-entity within
+  the SAME indexer:
+  * `swapPoolReferentialIntegrity` — single GraphQL
+    query reads `swaps(first: 1, ...) { id pool { id } }
+    pools(first: 50) { id }` in one round-trip; asserts
+    `swap.pool.id ∈ Set(pools.map(p => p.id))`.
+
+- **Why FK integrity is a separate failure class**:
+  * `candlesHasPools` + `candlesHasSwaps` (existence
+    checks) pass when both entities have rows
+    independently — but say nothing about whether they
+    REFERENCE each other correctly.
+  * `apiCandlesMatchesDirect` (cross-layer match)
+    asserts api↔indexer agree on each entity, but
+    each is checked independently — agreement on
+    orphan rows is still agreement.
+  * `swapPoolReferentialIntegrity` is the first
+    invariant where existence + match BOTH pass and
+    THIS one still catches the bug.
+
+- **Bug shapes caught**:
+  * Indexer's swap-event handler derives pool id wrong
+    (wrong topic slot, mangled-by-transform, etc.)
+  * Pool entity got deleted/superseded but its swaps
+    weren't garbage-collected (orphan rows)
+  * Schema migration that renamed Pool but didn't
+    update Swap's foreign key
+  * Handler dropped pool FK entirely (returns null)
+
+- **Vacuous case nuance**: invariant is vacuously true
+  when SWAPS=0 (no FK to check). DISTINCT from "pools=0
+  but swaps>0" — that's a referential integrity FAIL,
+  not vacuous (every swap is orphan). Test case
+  4 verifies this.
+
+- **Fixture extension**:
+  * Every swap row now gets `pool: {id: ...}`.
+  * Default: every swap points at `mock-pool-0` (the
+    first pool from buildPools, guaranteed to exist
+    when candlesPoolsCount > 0). Happy path with
+    default fixture passes.
+  * New `swapPoolIds` array option lets tests override
+    the FK per swap to simulate orphan-swap bugs (e.g.,
+    `swapPoolIds: ['nonexistent-pool-xyz']`).
+
+- **Smoke test coverage** — 4 new tests:
+  * happy: swap references existing pool (FK intact)
+  * vacuously true with 0 swaps
+  * failure: orphan swap from FK derivation bug;
+    verifies existence checks (candlesHasPools,
+    candlesHasSwaps) STILL pass — distinguishes
+    "entities exist independently" from "entities
+    are consistent with each other"
+  * failure: all pools deleted, swap FK points at the
+    deleted one (orphan-storm scenario)
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 65/65 pass (862ms — was
+    61/61)
+  * `npm run scenarios:dry` → exits 0; lists 25
+    invariants in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: ~95% (25 of ~27 sub-slices total).
+  25 invariants now: 5 api-internal + 17 indexer (2
+  liveness + 6 data-aware coverage + 4 single-row
+  data-shape + 2 multi-row data-shape + 2 cross-layer
+  match + 1 cross-entity FK) + 3 chain-layer. The new
+  cross-entity pattern unlocks a class of invariants
+  the catalog didn't have before — relationships
+  between entities, not just per-entity correctness.
+  Next steps: candlesAggregation (Candle.volume = sum
+  of contained Swap amounts within period — combines
+  cross-entity FK with quantitative reconciliation),
+  conservation (∑YES + ∑NO = ∑sDAI across positions).
+
+Phase 7 slice 4d-scenarios-more (apiRegistryMatchesDirect) summary (previous iteration on the api side):
 
 - **Cross-layer MATCH pattern extends from candles to registry**.
   Last iteration shipped `apiCandlesMatchesDirect` (first true
