@@ -110,6 +110,12 @@ function startFixture({
     // and /candles-direct/graphql so we can distinguish "via api" from
     // "direct" in the same fixture.
     registryDirectTypename = 'Query',
+    // __schema introspection types for registryIndexerSchemaHasRequiredTypes
+    // (slice 4d-scenarios-more). Default lists ProposalEntity,
+    // Organization, Aggregator (the three types the harness uses).
+    // Tests override to simulate schema rename or type drop. Set to
+    // null to omit __schema entirely (introspection-disabled servers).
+    registrySchemaTypes = ['Query', 'ProposalEntity', 'Organization', 'Aggregator'],
     candlesDirectTypename = 'Query',
     // __schema introspection types for candlesIndexerSchemaHasRequiredTypes
     // (slice 4d-scenarios-more). Default lists Pool, Swap, Candle (the
@@ -503,9 +509,17 @@ function startFixture({
                 if (req.url === '/registry-direct/graphql' && req.method === 'POST') {
                     if (registryDirectDown) { response.statusCode = 502; response.end('indexer down'); return; }
                     response.setHeader('content-type', 'application/json');
-                    response.end(JSON.stringify({
-                        data: { __typename: registryDirectTypename, ...buildRegistry() },
-                    }));
+                    // Blanket response — fixture doesn't dispatch on
+                    // query body. Includes __schema for the slice
+                    // 4d-scenarios-more registryIndexerSchemaHasRequiredTypes
+                    // probe; other invariants ignore it. Set
+                    // registrySchemaTypes=null to omit __schema entirely
+                    // (simulates introspection-disabled servers).
+                    const data = { __typename: registryDirectTypename, ...buildRegistry() };
+                    if (registrySchemaTypes !== null) {
+                        data.__schema = { types: registrySchemaTypes.map((name) => ({ name })) };
+                    }
+                    response.end(JSON.stringify({ data }));
                     return;
                 }
                 if (req.url === '/candles-direct/graphql' && req.method === 'POST') {
@@ -2375,6 +2389,77 @@ test('runAllInvariants — registryHasProposalEntities happy: 1 proposal indexed
         const inv = results.find((r) => r.name === 'registryHasProposalEntities');
         assert.equal(inv.ok, true);
         assert.match(inv.detail, /sample id: mock-prop-entity-0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — registryIndexerSchemaHasRequiredTypes happy: ProposalEntity, Organization, Aggregator all present (default fixture)', async () => {
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'registryIndexerSchemaHasRequiredTypes');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /registry schema has all required types: ProposalEntity, Organization, Aggregator.*out of 4 total types/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: registryIndexerSchemaHasRequiredTypes ProposalEntity renamed to Proposal (schema regen)', async () => {
+    // Schema regeneration renamed ProposalEntity → Proposal. Data
+    // probes querying `proposalEntities` would surface as
+    // "Cannot query field 'proposalEntities'" — looks like indexer-
+    // empty error. This probe catches the rename DIRECTLY.
+    const fx = await startFixture({
+        registrySchemaTypes: ['Query', 'Proposal', 'Organization', 'Aggregator'],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'registryIndexerSchemaHasRequiredTypes');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /registry schema missing required type\(s\): ProposalEntity.*schema rename/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: registryIndexerSchemaHasRequiredTypes Aggregator dropped entirely (registry no longer indexes aggregators)', async () => {
+    // Schema regeneration dropped Aggregator entirely. Catastrophic —
+    // every aggregator-pinning probe (registryHasFutarchyProdAggregator,
+    // organizationAggregatorReferentialIntegrity) would surface
+    // misleading errors.
+    const fx = await startFixture({
+        registrySchemaTypes: ['Query', 'ProposalEntity', 'Organization'],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'registryIndexerSchemaHasRequiredTypes');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /registry schema missing required type\(s\): Aggregator/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: registryIndexerSchemaHasRequiredTypes introspection disabled', async () => {
+    // Some production GraphQL servers disable introspection for
+    // security; harness needs it on. Disablement regression on
+    // the registry side surfaces independently of the candles side.
+    const fx = await startFixture({ registrySchemaTypes: null });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'registryIndexerSchemaHasRequiredTypes');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /__schema\.types not an array.*introspection disabled/);
+        // Sister candles introspection STILL passes — distinct
+        // diagnostics for distinct indexers.
+        const sister = results.find((r) => r.name === 'candlesIndexerSchemaHasRequiredTypes');
+        assert.equal(sister.ok, true);
     } finally {
         await fx.stop();
     }

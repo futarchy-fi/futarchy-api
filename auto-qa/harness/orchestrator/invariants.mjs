@@ -1085,6 +1085,64 @@ export const INVARIANTS = [
     // Catches "indexer reachable but empty" — sync didn't complete,
     // wrong fork block, contracts didn't emit events, etc.
     {
+        name: 'registryIndexerSchemaHasRequiredTypes',
+        description: 'registry indexer GraphQL __schema introspection lists ProposalEntity, Organization, and Aggregator types (catches schema-rename regressions invisible to data probes that surface them as misleading "indexer empty" errors)',
+        layer: 'orchestrator↔registry',
+        check: async (ctx) => {
+            // Sister to candlesIndexerSchemaHasRequiredTypes (just
+            // shipped). Same INTROSPECTION pattern, registry side.
+            // Symmetrically completes schema-validation coverage
+            // across both indexers.
+            //
+            // Why a separate registry probe instead of one combined
+            // invariant:
+            //   * Registry and candles are SEPARATE Checkpoint
+            //     deployments — they can be regenerated/migrated
+            //     independently. A schema rename on the registry
+            //     side doesn't necessarily happen on candles
+            //     (and vice versa).
+            //   * Failure diagnostics stay precise: which indexer's
+            //     schema regressed, not "one of them did".
+            //   * Different required type names (registry =
+            //     ProposalEntity/Organization/Aggregator; candles =
+            //     Pool/Swap/Candle).
+            //
+            // Bug shapes caught (NOT caught by data probes):
+            //   * Schema regeneration renamed ProposalEntity →
+            //     Proposal (data probes return "Cannot query field
+            //     'proposalEntities'" — looks like indexer-empty)
+            //   * A required type was DROPPED entirely (the
+            //     registry no longer indexes Aggregator)
+            //   * Schema introspection itself was disabled
+            //
+            // Required types: the THREE entities the harness queries
+            // from the registry. ProposalEntity is the futarchy
+            // proposal record; Organization is the DAO that hosts
+            // it; Aggregator is the on-chain factory that emitted
+            // the proposal events. All three are load-bearing —
+            // each is referenced by other invariants (FK probes,
+            // pin probes, registry adapter probes).
+            const REQUIRED = ['ProposalEntity', 'Organization', 'Aggregator'];
+            const j = await fetchJson(ctx.registryUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ __schema { types { name } } }',
+                }),
+            });
+            const types = j?.data?.__schema?.types;
+            if (!Array.isArray(types)) {
+                throw new Error(`__schema.types not an array — introspection disabled or schema-shape regression (got ${JSON.stringify(j)?.slice(0, 100)})`);
+            }
+            const present = new Set(types.map((t) => t?.name).filter(Boolean));
+            const missing = REQUIRED.filter((name) => !present.has(name));
+            if (missing.length > 0) {
+                throw new Error(`registry schema missing required type(s): ${missing.join(', ')} — schema rename or type-dropped regression; data probes against the renamed type would surface as misleading "indexer empty" errors`);
+            }
+            return { ok: true, detail: `registry schema has all required types: ${REQUIRED.join(', ')} (out of ${present.size} total types)` };
+        },
+    },
+    {
         name: 'registryHasProposalEntities',
         description: 'registry checkpoint has ≥1 ProposalEntity indexed',
         layer: 'orchestrator↔registry',

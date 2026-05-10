@@ -774,11 +774,28 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). **Now 52 invariants**:
-      14 api-internal + 28 indexer probes + 10 chain-layer.
-      176 smoke tests green.
-      `candlesIndexerSchemaHasRequiredTypes` added this
-      slice — first GraphQL INTROSPECTION probe; new
+      PROGRESS.md's invariant tables). **Now 53 invariants**:
+      14 api-internal + 29 indexer probes + 10 chain-layer.
+      180 smoke tests green.
+      `registryIndexerSchemaHasRequiredTypes` added this
+      slice — second GraphQL INTROSPECTION probe; sister
+      to candlesIndexerSchemaHasRequiredTypes (just
+      shipped) on the registry side. Symmetrically
+      completes schema-validation across both indexers.
+      Asserts ProposalEntity, Organization, Aggregator
+      types exist (the three load-bearing registry
+      entities — each referenced by other invariants).
+      Catches schema regen that renames a type
+      (ProposalEntity → Proposal) or drops one
+      (Aggregator dropped silently kills aggregator-
+      pinning probes); also catches per-indexer
+      introspection disablement (sister candles probe
+      STILL passes when registry's introspection is off).
+      Both indexers now have full coverage across three
+      qualitative dimensions: connectivity, data, SCHEMA.
+
+      `candlesIndexerSchemaHasRequiredTypes` (previous
+      slice) — first GraphQL INTROSPECTION probe; new
       qualitative dimension. All previous indexer probes
       query DATA (pools/swaps/candles); this queries the
       SCHEMA (`__schema { types { name } }`). Asserts
