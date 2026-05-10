@@ -46,11 +46,12 @@ function startFixture({
     // "direct" in the same fixture.
     registryDirectTypename = 'Query',
     candlesDirectTypename = 'Query',
-    // Data-aware probes (registryHasProposalEntities, candlesHasPools,
-    // candlesHasSwaps, candlesHasCandles) — counts of mock entities
-    // returned by the direct endpoints. Set to 0 to simulate "indexer
-    // reachable but empty for that entity".
+    // Data-aware probes — counts of mock entities returned by the
+    // direct endpoints. Set to 0 to simulate "indexer reachable but
+    // empty for that entity".
     registryProposalEntitiesCount = 1,
+    registryOrganizationsCount = 1,
+    registryAggregatorsCount = 1,
     candlesPoolsCount = 1,
     candlesSwapsCount = 1,
     candlesCandlesCount = 1,
@@ -111,8 +112,12 @@ function startFixture({
                     // fixture having to parse the GraphQL query body.
                     const proposalEntities = Array.from({ length: registryProposalEntitiesCount },
                         (_, i) => ({ id: `mock-prop-entity-${i}` }));
+                    const organizations = Array.from({ length: registryOrganizationsCount },
+                        (_, i) => ({ id: `mock-org-${i}` }));
+                    const aggregators = Array.from({ length: registryAggregatorsCount },
+                        (_, i) => ({ id: `mock-agg-${i}` }));
                     response.end(JSON.stringify({
-                        data: { __typename: registryDirectTypename, proposalEntities },
+                        data: { __typename: registryDirectTypename, proposalEntities, organizations, aggregators },
                     }));
                     return;
                 }
@@ -489,6 +494,65 @@ test('runAllInvariants — failure: registry checkpoint empty (sync not done)', 
     }
 });
 
+test('runAllInvariants — registryHasOrganizations happy: 1 org indexed', async () => {
+    const fx = await startFixture();  // default registryOrganizationsCount=1
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'registryHasOrganizations');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /sample id: mock-org-0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: registry has proposals but no orgs (org event handler broken)', async () => {
+    const fx = await startFixture({ registryOrganizationsCount: 0 });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const orgs = results.find((r) => r.name === 'registryHasOrganizations');
+        assert.equal(orgs.ok, false);
+        assert.match(orgs.error, /0 Organization rows|org event handler broken/);
+        // ProposalEntity probe still passes — distinguishes the two
+        // entity-specific failure modes
+        const props = results.find((r) => r.name === 'registryHasProposalEntities');
+        assert.equal(props.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — registryHasAggregators happy: 1 aggregator indexed', async () => {
+    const fx = await startFixture();  // default registryAggregatorsCount=1
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'registryHasAggregators');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /sample id: mock-agg-0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: registry has orgs but no aggregators (root entity unindexed)', async () => {
+    const fx = await startFixture({ registryAggregatorsCount: 0 });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const aggs = results.find((r) => r.name === 'registryHasAggregators');
+        assert.equal(aggs.ok, false);
+        assert.match(aggs.error, /0 Aggregator rows|sync didn't reach root entity|aggregator event handler broken/);
+        // Lower-level entity probes still pass
+        const orgs = results.find((r) => r.name === 'registryHasOrganizations');
+        assert.equal(orgs.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('runAllInvariants — candlesHasPools happy: 1 pool indexed', async () => {
     const fx = await startFixture();  // default candlesPoolsCount=1
     try {
@@ -596,6 +660,8 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /registryDirect/);
     assert.match(r.stdout, /candlesDirect/);
     assert.match(r.stdout, /registryHasProposalEntities/);
+    assert.match(r.stdout, /registryHasOrganizations/);
+    assert.match(r.stdout, /registryHasAggregators/);
     assert.match(r.stdout, /candlesHasPools/);
     assert.match(r.stdout, /candlesHasSwaps/);
     assert.match(r.stdout, /candlesHasCandles/);

@@ -258,6 +258,56 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'registryHasOrganizations',
+        description: 'registry checkpoint has ≥1 Organization indexed',
+        layer: 'orchestrator↔registry',
+        check: async (ctx) => {
+            // Organizations are the "who runs this market" entity, indexed
+            // from a separate Organization event stream. A registry that
+            // sees ProposalEntity but not Organization would mean
+            // proposal sync is past Organization-creation but the Org
+            // event handler is broken — distinct sync failure mode from
+            // ProposalEntity.
+            const j = await fetchJson(ctx.registryUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: '{ organizations(first: 1) { id } }' }),
+            });
+            if (!Array.isArray(j?.data?.organizations)) {
+                throw new Error(`unexpected organizations response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.organizations.length === 0) {
+                throw new Error('registry checkpoint has 0 Organization rows (sync not complete or org event handler broken)');
+            }
+            return { ok: true, detail: `registry has ≥1 org (sample id: ${j.data.organizations[0].id})` };
+        },
+    },
+    {
+        name: 'registryHasAggregators',
+        description: 'registry checkpoint has ≥1 Aggregator indexed',
+        layer: 'orchestrator↔registry',
+        check: async (ctx) => {
+            // Aggregator is the top-of-tree entity (organizations belong to
+            // aggregators; proposals belong to organizations). The
+            // futarchy.fi production setup has exactly one Aggregator at
+            // 0xc5eb43d53e2fe5fdde5faf400cc4167e5b5d4fc1 (per
+            // src/routes/unified-chart.js); the harness fork should
+            // inherit that.
+            const j = await fetchJson(ctx.registryUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: '{ aggregators(first: 1) { id } }' }),
+            });
+            if (!Array.isArray(j?.data?.aggregators)) {
+                throw new Error(`unexpected aggregators response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.aggregators.length === 0) {
+                throw new Error('registry checkpoint has 0 Aggregator rows (sync didn\'t reach root entity OR aggregator event handler broken)');
+            }
+            return { ok: true, detail: `registry has ≥1 aggregator (sample id: ${j.data.aggregators[0].id})` };
+        },
+    },
+    {
         name: 'candlesHasPools',
         description: 'candles checkpoint has ≥1 Pool indexed',
         layer: 'orchestrator↔candles',

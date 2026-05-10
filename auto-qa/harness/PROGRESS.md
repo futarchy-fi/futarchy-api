@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 14 invariants — 5 api-internal + 6 indexer + 3 chain-layer; 29 smoke tests green). 30/30 browser tests green. Phase 3 25+29 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 16 invariants — 5 api-internal + 8 indexer + 3 chain-layer; 33 smoke tests green). 30/30 browser tests green. Phase 3 25+33 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2260,6 +2260,79 @@ Phase 7 slice 4d-scenarios-more (candlesHasSwaps + candlesHasCandles) summary (t
   (cross-layer reconciliation, the natural next step after
   the per-stage probes), `chartShape`, `probabilityBounds`,
   `conservation`, cross-run `rateSanity` monotonicity.
+
+Phase 7 slice 4d-scenarios-more (registryHasOrganizations + registryHasAggregators) summary (this iteration on the api side):
+
+- **Two more data-aware probes for the registry checkpoint**,
+  mirroring `registryHasProposalEntities` for the other two
+  index-able registry entity types. Together with the existing
+  ProposalEntity check, these complete a registry-entity
+  triplet matching the candles-pipeline triplet structurally:
+  * `registryHasProposalEntities` (existing) — proposal
+    metadata indexed
+  * `registryHasOrganizations` (new) — organization metadata
+    indexed
+  * `registryHasAggregators` (new) — root-tree entity indexed
+
+- **Why these matter beyond proposalEntities**: the registry
+  schema has 3 hierarchically-nested entity types (Aggregator
+  → Organization → ProposalEntity), each populated from a
+  separate event handler. Each can independently fail to sync
+  while the others appear healthy. Concrete bug classes:
+  * Aggregator handler broken → no orgs or proposals can
+    resolve their parent (api joins fail silently)
+  * Organization handler broken → proposals exist but lack
+    org-level metadata (price_precision, currency_stable_rate
+    — see lookupOrgMetadataField in unified-chart.js)
+  * ProposalEntity handler broken → no proposals visible at all
+
+- **Symmetry with candles**: the harness now has
+  full data-aware coverage of BOTH indexers'
+  schema-discoverable entities (modulo MetadataEntry on
+  the registry side, deliberately skipped because it's a
+  child-of-children that's vacuously empty when other
+  entities are empty). 6 data-aware indexer invariants total
+  (3 per indexer).
+
+- **Production hint pinned**: `registryHasAggregators`'s
+  comment notes the futarchy.fi production setup has exactly
+  one Aggregator at
+  `0xc5eb43d53e2fe5fdde5faf400cc4167e5b5d4fc1` (per
+  `src/routes/unified-chart.js`); the harness fork should
+  inherit that. Useful breadcrumb for whoever debugs an
+  unexpected aggregator count.
+
+- **Smoke fixture extension**: registry-direct response now
+  returns `proposalEntities + organizations + aggregators`
+  arrays in the superset payload. Two new options:
+  `registryOrganizationsCount`, `registryAggregatorsCount`.
+
+- **Smoke test coverage** — 4 new tests:
+  * registryHasOrganizations happy at 1 org
+  * failure: proposals exist but no orgs (verifies
+    registryHasProposalEntities STILL passes — distinguishes
+    entity-specific failure modes)
+  * registryHasAggregators happy at 1 aggregator
+  * failure: orgs exist but no aggregators (verifies
+    registryHasOrganizations STILL passes — distinguishes
+    "root entity unindexed" from "org sync done")
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 33/33 pass (349ms — was
+    29/29)
+  * `npm run scenarios:dry` → exits 0; lists 16 invariants
+    in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: ~90% (19 of ~21 sub-slices total).
+  Both indexers now have the full data-aware coverage triplet
+  (3 entities each, 6 data-aware invariants total). Next
+  bot-doable invariants are the cross-layer reconciliations:
+  `candlesAggregation` (Candle vs Swap consistency),
+  `chartShape` (api vs indexer), `probabilityBounds`,
+  `conservation`. Cross-run monotonicity on rateSanity needs
+  persistent state.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 
