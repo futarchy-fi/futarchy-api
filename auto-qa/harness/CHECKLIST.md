@@ -750,13 +750,17 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 20 invariants:
-      5 api-internal + 12 indexer probes (2 `__typename`
-      liveness + 6 data-aware coverage + 4 data-SHAPE:
-      candleOHLC + candleVolumes + `swapAmountsPositive`
-      and `swapTimestampSensible` added this slice — the
-      data-shape pattern now covers both Candle and Swap
-      entities) + 3 chain-layer probes. 45 smoke tests
+      PROGRESS.md's invariant tables). Now 22 invariants:
+      5 api-internal + 14 indexer probes (2 `__typename`
+      liveness + 6 data-aware coverage + 4 single-row
+      data-SHAPE: candleOHLC + candleVolumes +
+      swapAmountsPositive + swapTimestampSensible + 2
+      MULTI-ROW data-SHAPE: `candleTimeMonotonic` +
+      `swapTimeMonotonicNonStrict` added this slice — first
+      cross-row checks in the catalog; strict for candles
+      because each row is a unique period, non-strict for
+      swaps because multiple swaps can share a block
+      timestamp) + 3 chain-layer probes. 51 smoke tests
       green. Still to add: probabilityBounds, candlesAggregation
       (cross-layer Candle vs Swap), chartShape, conservation,
       cross-run monotonicity on rateSanity.

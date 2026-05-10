@@ -70,6 +70,16 @@ function startFixture({
     latestSwapAmountIn = '10.5',
     latestSwapAmountOut = '4.2',
     latestSwapTimestamp = String(Math.floor(Date.now() / 1000) - 3600),  // 1h ago
+    // Multi-row time/timestamp arrays for monotonicity invariants
+    // (slice 4d-scenarios-more candleTimeMonotonic +
+    // swapTimeMonotonicNonStrict). Indexed by row position. If null,
+    // auto-generated as a strictly-decreasing series anchored at the
+    // latest values + a default step. Tests pass an explicit array to
+    // simulate failure modes (duplicate, out-of-order).
+    candleTimes = null,
+    candleTimeStep = 3600,            // 1 hour between candles when auto-generated
+    swapTimestamps = null,
+    swapTimestampStep = 12,            // 1 block (~12s) between swaps when auto-generated
     // Set to true to make the direct-indexer paths return 502, simulating
     // an indexer that's down even though the api passthrough still works
     // (e.g., api is caching).
@@ -146,8 +156,15 @@ function startFixture({
                         if (i === 0) {
                             row.amountIn = latestSwapAmountIn;
                             row.amountOut = latestSwapAmountOut;
-                            row.timestamp = Number(latestSwapTimestamp);
                         }
+                        // Populate timestamp on EVERY swap so the
+                        // monotonicity invariant has multi-row data to
+                        // probe. Explicit array wins; otherwise generate
+                        // a non-strictly-decreasing series anchored at
+                        // latestSwapTimestamp.
+                        row.timestamp = swapTimestamps
+                            ? Number(swapTimestamps[i])
+                            : Number(latestSwapTimestamp) - i * swapTimestampStep;
                         return row;
                     });
                     // Latest-candle fields (OHLC + volumes) populated on
@@ -155,6 +172,10 @@ function startFixture({
                     // candleVolumesNonNegative can probe a real-shape
                     // record. `id` is set on every element so
                     // candlesHasCandles still works.
+                    // Anchor candle times at "now" (rounded down) so
+                    // the auto-generated series is sane out of the
+                    // box. Tests overriding candleTimes get full control.
+                    const candleTimeAnchor = Math.floor(Date.now() / 1000);
                     const candles = Array.from({ length: candlesCandlesCount }, (_, i) => {
                         const row = { id: `mock-candle-${i}` };
                         if (i === 0) {
@@ -165,6 +186,12 @@ function startFixture({
                             row.volumeToken0 = latestCandleVolumeToken0;
                             row.volumeToken1 = latestCandleVolumeToken1;
                         }
+                        // Populate `time` on EVERY candle for
+                        // candleTimeMonotonic. Explicit array wins;
+                        // otherwise generate strictly-decreasing series.
+                        row.time = candleTimes
+                            ? Number(candleTimes[i])
+                            : candleTimeAnchor - i * candleTimeStep;
                         return row;
                     });
                     response.end(JSON.stringify({
@@ -762,6 +789,108 @@ test('runAllInvariants — failure: swap timestamp far future (garbage from wron
     }
 });
 
+test('runAllInvariants — candleTimeMonotonic happy: 3 candles strictly decreasing (auto-generated)', async () => {
+    // candleTimeStep defaults to 3600 (1h); 3 candles auto-generates
+    // [now, now-3600, now-7200] which is strictly decreasing.
+    const fx = await startFixture({ candlesCandlesCount: 3 });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'candleTimeMonotonic');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /3 candles strictly decreasing/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — candleTimeMonotonic vacuously true with 1 candle', async () => {
+    const fx = await startFixture();  // default count=1
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'candleTimeMonotonic');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /only 1 candle\(s\); monotonicity vacuous/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candleTimeMonotonic duplicate-period (two candles same time)', async () => {
+    // Two candles emitted with the SAME time — period-aggregator
+    // upsert-as-insert bug. Order is desc so [1000, 1000] fails the
+    // strict check.
+    const fx = await startFixture({
+        candlesCandlesCount: 2,
+        candleTimes: [1700000000, 1700000000],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candleTimeMonotonic');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /not strictly decreasing|duplicate period/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candleTimeMonotonic out-of-order (later time after earlier)', async () => {
+    // Returned ordered desc but second time is GREATER — orderBy
+    // broken or aggregator emitted with wrong period key.
+    const fx = await startFixture({
+        candlesCandlesCount: 3,
+        candleTimes: [1700000000, 1699999000, 1699999500],  // 3rd > 2nd
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candleTimeMonotonic');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /not strictly decreasing|aggregator bug/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — swapTimeMonotonicNonStrict happy: 3 swaps with one duplicate timestamp (same block)', async () => {
+    // [now, now, now-12] — first two share a block timestamp (legal
+    // for swaps in the same block). Non-strict check passes.
+    const now = Math.floor(Date.now() / 1000);
+    const fx = await startFixture({
+        candlesSwapsCount: 3,
+        swapTimestamps: [now, now, now - 12],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'swapTimeMonotonicNonStrict');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /3 swaps non-strictly decreasing/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: swapTimeMonotonicNonStrict timestamp goes BACKWARDS', async () => {
+    // [1000, 999, 1500] — third timestamp is GREATER than second,
+    // violates desc ordering even non-strictly. Bug shape: orderBy
+    // broken or wrong-block context on a swap.
+    const fx = await startFixture({
+        candlesSwapsCount: 3,
+        swapTimestamps: [1700000000, 1699999988, 1700000500],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'swapTimeMonotonicNonStrict');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /timestamp going backwards|orderBy broken|wrong-block context/);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('runAllInvariants — candlesHasPools happy: 1 pool indexed', async () => {
     const fx = await startFixture();  // default candlesPoolsCount=1
     try {
@@ -878,6 +1007,8 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /candleVolumesNonNegative/);
     assert.match(r.stdout, /swapAmountsPositive/);
     assert.match(r.stdout, /swapTimestampSensible/);
+    assert.match(r.stdout, /candleTimeMonotonic/);
+    assert.match(r.stdout, /swapTimeMonotonicNonStrict/);
     assert.match(r.stdout, /anvilBlockNumber/);
     assert.match(r.stdout, /anvilChainId/);
     assert.match(r.stdout, /rateSanity/);

@@ -513,6 +513,95 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'candleTimeMonotonic',
+        description: 'recent candles are STRICTLY decreasing by time when ordered desc (catches duplicate-period or misordered candles)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Candles cover unique periods (one row per period), so when
+            // ordered `time desc` they MUST be strictly decreasing. A
+            // duplicate or equal time means the period-aggregator
+            // emitted two rows for the same bucket — common bug shape
+            // when the bucket-key derivation has an off-by-one or the
+            // upsert logic re-inserts instead of updating.
+            //
+            // Distinct from candlesHasCandles (existence), candleOHLC
+            // (per-row shape), and candleVolumes (per-row shape): this
+            // is a CROSS-ROW shape check. First multi-row invariant
+            // in the catalog — establishes the pattern for future
+            // cross-row checks (TWAP-window monotonicity, conservation
+            // sums, etc.).
+            //
+            // Vacuous when fewer than 2 candles exist (can't compare).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ candles(first: 5, orderBy: time, orderDirection: desc) { id time } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.candles)) {
+                throw new Error(`unexpected candles response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.candles.length < 2) {
+                return { ok: true, detail: `only ${j.data.candles.length} candle(s); monotonicity vacuous` };
+            }
+            for (let i = 1; i < j.data.candles.length; i++) {
+                const prev = Number(j.data.candles[i - 1].time);
+                const curr = Number(j.data.candles[i].time);
+                if (!Number.isFinite(prev) || !Number.isFinite(curr)) {
+                    throw new Error(`candles[${i - 1}].time=${j.data.candles[i - 1].time}, candles[${i}].time=${j.data.candles[i].time}: not both finite`);
+                }
+                if (curr >= prev) {
+                    throw new Error(`candles[${i - 1}].time=${prev} ≤ candles[${i}].time=${curr} (ordered desc but not strictly decreasing — duplicate period or aggregator bug)`);
+                }
+            }
+            return { ok: true, detail: `${j.data.candles.length} candles strictly decreasing by time` };
+        },
+    },
+    {
+        name: 'swapTimeMonotonicNonStrict',
+        description: 'recent swaps are non-strictly decreasing by timestamp when ordered desc (multiple swaps per block share a timestamp; going BACKWARDS is the bug)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Swaps within the same block share a timestamp (block.ts
+            // is the source). So unlike candles (strictly decreasing),
+            // swaps can be EQUAL adjacent — the invariant is only
+            // violated by curr > prev (timestamp going backwards in a
+            // descending list). Bug shape: the indexer's orderBy is
+            // broken, OR an event handler stamped the wrong block's
+            // timestamp on a swap (off-by-one block context).
+            //
+            // Pairs with candleTimeMonotonic: same shape (multi-row
+            // ordering check), different semantics (≥ vs >). Catches
+            // a different bug class than swapTimestampSensible (which
+            // is a single-row range check).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ swaps(first: 5, orderBy: timestamp, orderDirection: desc) { id timestamp } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.swaps)) {
+                throw new Error(`unexpected swaps response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.swaps.length < 2) {
+                return { ok: true, detail: `only ${j.data.swaps.length} swap(s); monotonicity vacuous` };
+            }
+            for (let i = 1; i < j.data.swaps.length; i++) {
+                const prev = Number(j.data.swaps[i - 1].timestamp);
+                const curr = Number(j.data.swaps[i].timestamp);
+                if (!Number.isFinite(prev) || !Number.isFinite(curr)) {
+                    throw new Error(`swaps[${i - 1}].timestamp=${j.data.swaps[i - 1].timestamp}, swaps[${i}].timestamp=${j.data.swaps[i].timestamp}: not both finite`);
+                }
+                if (curr > prev) {
+                    throw new Error(`swaps[${i - 1}].timestamp=${prev} < swaps[${i}].timestamp=${curr} (ordered desc but timestamp going backwards — orderBy broken or wrong-block context)`);
+                }
+            }
+            return { ok: true, detail: `${j.data.swaps.length} swaps non-strictly decreasing by timestamp` };
+        },
+    },
+    {
         name: 'candleVolumesNonNegative',
         description: 'latest candle has volumeToken0 ≥ 0 AND volumeToken1 ≥ 0 (vacuously true when no candles)',
         layer: 'orchestrator↔candles',
