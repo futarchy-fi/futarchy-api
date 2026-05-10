@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 slice 1 landed on interface side (browser-injection smoke: Playwright + chromium installed, `installWalletStub` browser wrapper wires window.ethereum + EIP-6963, 6/6 wallet-injection browser tests green in 2.4s). Phase 4 slices 1+2+3 prior — wallet stub + contract-call surface validated end-to-end against live Gnosis fork. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 slices 1+2 landed on interface side. Slice 1: browser-injection smoke. Slice 2: in-page signing via `setupSigningTunnel` exposeBinding (personal_sign + eth_signTypedData_v4 + eth_sendTransaction live-anvil broadcast). 9/9 browser tests green in ~5.6s. Phase 4 slices 1+2+3 prior. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -775,5 +775,22 @@ Summary of slice 1:
     eth_blockNumber forward test from a real http server to
     `context.route(...)` interception (chromium drops fetches from
     `about:blank` to local addresses regardless of CORS headers)
-- Slices 2 (in-page signing), 3 (futarchy app + Wagmi
-  auto-discovery), 4 (DOM↔API price invariant) still TODO
+- Slices 3 (futarchy app + Wagmi auto-discovery) and 4 (DOM↔API
+  price invariant) still TODO
+
+Slice 2 summary (this iteration on the interface side):
+
+- In-page SIGNING_METHODS now route through a Playwright
+  `exposeBinding` named `__harnessSign`, wired by
+  `setupSigningTunnel(context, {privateKey, rpcUrl, chainId})`.
+  Reuses viem's `signMessage` / `signTypedData` /
+  `sendTransaction` in node — privateKey never enters the page.
+  Chosen over the original "inline @noble/secp256k1" plan because
+  the tunnel is ~30 lines vs ~30 KB of crypto/EIP-712/EIP-1559 code
+  bundled as an addInitScript blob.
+- `flows/wallet-signing.spec.mjs` — 3 browser tests, all green:
+  `personal_sign` + recover, `eth_signTypedData_v4` + recover,
+  `eth_sendTransaction` against live anvil with receipt + balance
+  assertions (skips when anvil missing).
+- Slice-1 fallback preserved: when `setupSigningTunnel` is not
+  called, in-page stub still rejects SIGNING_METHODS with -32601.

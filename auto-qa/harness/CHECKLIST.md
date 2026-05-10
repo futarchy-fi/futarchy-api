@@ -238,15 +238,31 @@ freshly-generated addresses as recipients; documented in
 - [x] npm scripts wired: `ui` / `ui:ui` / `ui:report` in harness;
       `auto-qa:e2e:ui` and `auto-qa:e2e:ui:ui` at interface root
 
-**Phase 5 slice 2 (signing in-page) — TODO:**
+**Phase 5 slice 2 (signing in-page) — DONE:**
 
-- [ ] Inline @noble/secp256k1 in the browser stub so
-      `personal_sign`, `eth_signTypedData_v4`, `eth_sendTransaction`
-      work against `window.ethereum` (currently return -32601)
-- [ ] Browser test: sign a personal_sign message, verify recoverable
-      address matches `eth_accounts[0]`
-- [ ] Browser test: send a 1-XDAI tx via `eth_sendTransaction`,
-      decode receipt, assert sender debited
+- [x] In-page SIGNING_METHODS now route through a Playwright
+      `exposeBinding` named `__harnessSign`, wired by
+      `setupSigningTunnel(context, {privateKey, rpcUrl, chainId})`.
+      Reuses viem's `signMessage` / `signTypedData` /
+      `sendTransaction` in node — privateKey never enters the page.
+      Chosen over the original "inline @noble/secp256k1" plan
+      because the tunnel is ~30 lines vs ~30 KB of crypto code
+      (and re-implements EIP-712 hashing + EIP-1559 serialization
+      that viem already gets right).
+- [x] Slice-1 fallback preserved: when `setupSigningTunnel` is not
+      called, the in-page stub still rejects SIGNING_METHODS with
+      -32601 (verified by the existing slice-1 test).
+- [x] `flows/wallet-signing.spec.mjs` — 3 browser tests, all green:
+        1. personal_sign — page signs "Hello, harness!", node uses
+           `recoverMessageAddress` and asserts == wallet.address
+        2. eth_signTypedData_v4 — minimal EIP-712 Greeting message,
+           page signs, node uses `recoverTypedDataAddress` and
+           asserts == wallet.address
+        3. eth_sendTransaction (live anvil; skips when missing) —
+           sign + broadcast 0.5 XDAI to a fresh recipient, await
+           receipt (poll loop wraps the viem-returns-hash-before-
+           auto-mine-settles race), assert status=0x1, assert
+           recipient balance == 0.5 XDAI
 
 **Phase 5 slice 3 (futarchy app in the loop) — TODO:**
 
