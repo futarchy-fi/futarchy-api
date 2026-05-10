@@ -29,7 +29,9 @@
         "auto-qa:e2e:smoke:roundtrip": "npm --prefix auto-qa/harness run smoke:roundtrip",
         "auto-qa:e2e:indexers:bootstrap": "npm --prefix auto-qa/harness run indexers:bootstrap",
         "auto-qa:e2e:indexers:start": "npm --prefix auto-qa/harness run indexers:start",
-        "auto-qa:e2e:indexers:stop": "npm --prefix auto-qa/harness run indexers:stop"
+        "auto-qa:e2e:indexers:stop": "npm --prefix auto-qa/harness run indexers:stop",
+        "auto-qa:e2e:scenarios:by-layer": "npm --prefix auto-qa/harness run scenarios:by-layer",
+        "auto-qa:e2e:invariants:catalog": "npm --prefix auto-qa/harness run invariants:catalog"
     },
     "dependencies": {
         "cors": "^2.8.5",

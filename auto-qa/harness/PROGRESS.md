@@ -1104,7 +1104,39 @@ Phase 7 slice 3d summary (this iteration on the interface side):
   smoke-tested live first). Then slice 4 — full-stack
   docker-compose.
 
-Phase 7 slice 4d-invariants-catalog summary (this iteration on the api side):
+Phase 7 slice 4d-root-aliases summary (this iteration, both sides):
+
+- **Tooling slice** (no new invariant, no new script).
+  Cross-repo wiring: the new catalog scripts shipped in
+  the last few iterations were invocable only from inside
+  `auto-qa/harness/`. This slice wires root-level
+  `auto-qa:e2e:*` aliases so they're discoverable + runnable
+  from each repo's root.
+
+- **API side** — root `package.json` adds 2 aliases:
+  * `auto-qa:e2e:scenarios:by-layer` (Phase 7 slice 4d-by-
+    layer-script, never wired at root)
+  * `auto-qa:e2e:invariants:catalog` (Phase 7 slice 4d-
+    invariants-catalog, just shipped)
+
+- **Interface side** — root `package.json` adds 1 alias:
+  * `auto-qa:e2e:scenarios:by-route` (the by-route slice's
+    own PROGRESS entry called out "alias not yet wired —
+    depends on harness PR landing"; the harness directory
+    is now stable enough to wire).
+
+- **Validation**: each new alias invoked from the repo root
+  resolves to its harness-side script and produces the
+  expected output (invariant catalog summary; INVARIANTS.md
+  regen confirmation; route summary).
+
+- **Why this iteration is tooling-only**: same reason as
+  the last few — safe parallel work that pays off whichever
+  strategic direction the user picks (cap, market-page
+  invest, or PR work). Pure additive change to root
+  package.json on both sides.
+
+Phase 7 slice 4d-invariants-catalog summary (previous iteration on the api side):
 
 - **Tooling slice** (no new invariant). Sister to interface-
   side `scenarios-catalog.mjs` + `SCENARIOS.md`. The api
