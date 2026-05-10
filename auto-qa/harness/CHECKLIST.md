@@ -774,10 +774,27 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). **Now 51 invariants**:
-      14 api-internal + 27 indexer probes + 10 chain-layer.
-      172 smoke tests green.
-      `apiWarmerBodyShape` added this slice — second body-
+      PROGRESS.md's invariant tables). **Now 52 invariants**:
+      14 api-internal + 28 indexer probes + 10 chain-layer.
+      176 smoke tests green.
+      `candlesIndexerSchemaHasRequiredTypes` added this
+      slice — first GraphQL INTROSPECTION probe; new
+      qualitative dimension. All previous indexer probes
+      query DATA (pools/swaps/candles); this queries the
+      SCHEMA (`__schema { types { name } }`). Asserts
+      Pool, Swap, Candle types exist (the three entities
+      the harness queries). Catches schema regeneration
+      that renames a type (Candle → OHLCBar) or drops one
+      entirely; also catches introspection being disabled.
+      The bug class it catches: data probes hitting the
+      renamed/dropped type return GraphQL errors like
+      "Cannot query field 'candles'" — surfacing as
+      misleading "indexer empty" diagnostics. This probe
+      catches the rename DIRECTLY with a clear "schema
+      missing required type" message — triage takes
+      seconds instead of minutes.
+
+      `apiWarmerBodyShape` (previous slice) — second body-
       shape probe in the catalog; sister to apiHealthBodyShape.
       Asserts /warmer body conforms to getWarmerStatus()
       shape: active is non-negative finite number,

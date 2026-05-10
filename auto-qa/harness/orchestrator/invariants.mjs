@@ -1214,6 +1214,67 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'candlesIndexerSchemaHasRequiredTypes',
+        description: 'candles indexer GraphQL __schema introspection lists Pool, Swap, and Candle types (catches schema-rename regressions invisible to data probes that hit the renamed-but-still-valid endpoint via fluke)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // First INTROSPECTION-based invariant in the catalog.
+            // Distinct dimension from data probes (candlesHasPools,
+            // candlesHasSwaps, candlesHasCandles): those query
+            // `pools/swaps/candles` directly and verify they return
+            // ≥1 row. If the indexer schema is regenerated and a
+            // type is RENAMED (e.g., `Pool` → `LiquidityPool`),
+            // those data probes start returning the GraphQL error
+            // "Cannot query field 'pools' on type 'Query'", which
+            // surfaces as the existing data-probe failure — but
+            // the diagnostic message is misleading ("indexer
+            // empty" vs. the actual cause "indexer schema
+            // changed").
+            //
+            // This probe asks the schema directly:
+            //   { __schema { types { name } } }
+            // and asserts the three core type names exist. When
+            // the rename happens, this invariant fails first
+            // with a clearly-named error pointing at the renamed
+            // type, making triage take seconds instead of minutes
+            // of "why is the indexer empty?".
+            //
+            // Bug shapes caught (NOT caught by data probes):
+            //   * Schema regeneration renamed Pool → LiquidityPool
+            //     (data probes return "Cannot query field 'pools'"
+            //     which looks like an indexer-down error)
+            //   * A required type was DROPPED entirely from the
+            //     schema (the indexer no longer indexes it)
+            //   * Schema introspection itself was disabled (some
+            //     production GraphQL servers disable it for
+            //     security; the harness needs it on to run this
+            //     check, so a disablement regression also fails
+            //     here with a clear diagnostic)
+            //
+            // Vacuous when introspection returns null — indexer
+            // misconfigured but schema not introspectable. Other
+            // probes will catch the broader brokenness.
+            const REQUIRED = ['Pool', 'Swap', 'Candle'];
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ __schema { types { name } } }',
+                }),
+            });
+            const types = j?.data?.__schema?.types;
+            if (!Array.isArray(types)) {
+                throw new Error(`__schema.types not an array — introspection disabled or schema-shape regression (got ${JSON.stringify(j)?.slice(0, 100)})`);
+            }
+            const present = new Set(types.map((t) => t?.name).filter(Boolean));
+            const missing = REQUIRED.filter((name) => !present.has(name));
+            if (missing.length > 0) {
+                throw new Error(`schema is missing required type(s): ${missing.join(', ')} — schema rename or type-dropped regression; data probes against the renamed type would surface as misleading "indexer empty" errors`);
+            }
+            return { ok: true, detail: `schema has all required types: ${REQUIRED.join(', ')} (out of ${present.size} total types)` };
+        },
+    },
+    {
         name: 'candlesHasPools',
         description: 'candles checkpoint has ≥1 Pool indexed',
         layer: 'orchestrator↔candles',

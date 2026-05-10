@@ -111,6 +111,12 @@ function startFixture({
     // "direct" in the same fixture.
     registryDirectTypename = 'Query',
     candlesDirectTypename = 'Query',
+    // __schema introspection types for candlesIndexerSchemaHasRequiredTypes
+    // (slice 4d-scenarios-more). Default lists Pool, Swap, Candle (the
+    // three types the harness uses). Tests override to simulate schema
+    // rename (e.g., ['Pool', 'Swap', 'OHLCBar'] = Candle renamed) or
+    // type drop (e.g., ['Pool', 'Swap'] = Candle removed).
+    candlesSchemaTypes = ['Query', 'Pool', 'Swap', 'Candle', 'Aggregator'],
     // Data-aware probes — counts of mock entities returned by the
     // direct endpoints. Set to 0 to simulate "indexer reachable but
     // empty for that entity".
@@ -505,14 +511,22 @@ function startFixture({
                 if (req.url === '/candles-direct/graphql' && req.method === 'POST') {
                     if (candlesDirectDown) { response.statusCode = 502; response.end('indexer down'); return; }
                     response.setHeader('content-type', 'application/json');
-                    response.end(JSON.stringify({
-                        data: {
-                            __typename: candlesDirectTypename,
-                            pools: buildPools(),
-                            swaps: buildSwaps(),
-                            candles: buildCandles(),
-                        },
-                    }));
+                    // Blanket response — fixture doesn't dispatch on
+                    // query body. Includes __schema for the slice
+                    // 4d-scenarios-more candlesIndexerSchemaHasRequiredTypes
+                    // probe; other invariants ignore it. Set
+                    // candlesSchemaTypes=null to omit __schema entirely
+                    // (simulates introspection-disabled servers).
+                    const data = {
+                        __typename: candlesDirectTypename,
+                        pools: buildPools(),
+                        swaps: buildSwaps(),
+                        candles: buildCandles(),
+                    };
+                    if (candlesSchemaTypes !== null) {
+                        data.__schema = { types: candlesSchemaTypes.map((name) => ({ name })) };
+                    }
+                    response.end(JSON.stringify({ data }));
                     return;
                 }
                 if (req.url === '/rpc' && req.method === 'POST') {
@@ -3436,6 +3450,74 @@ test('runAllInvariants — candlesHasPools happy: 1 pool indexed', async () => {
         const inv = results.find((r) => r.name === 'candlesHasPools');
         assert.equal(inv.ok, true);
         assert.match(inv.detail, /sample id: mock-pool-0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — candlesIndexerSchemaHasRequiredTypes happy: Pool, Swap, Candle all present (default fixture)', async () => {
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'candlesIndexerSchemaHasRequiredTypes');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /schema has all required types: Pool, Swap, Candle.*out of 5 total types/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candlesIndexerSchemaHasRequiredTypes Candle renamed to OHLCBar (schema regen)', async () => {
+    // Schema regeneration renamed Candle → OHLCBar. Data probes
+    // querying `candles` would surface as "Cannot query field
+    // 'candles'" — looks like an indexer-empty error. This probe
+    // catches the rename DIRECTLY with a clearly-named diagnostic.
+    const fx = await startFixture({
+        candlesSchemaTypes: ['Query', 'Pool', 'Swap', 'OHLCBar', 'Aggregator'],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candlesIndexerSchemaHasRequiredTypes');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /schema is missing required type\(s\): Candle.*schema rename/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candlesIndexerSchemaHasRequiredTypes Pool dropped entirely (indexer no longer indexes pools)', async () => {
+    // Schema regeneration dropped Pool entirely. Catastrophic —
+    // every downstream check that references pools breaks.
+    const fx = await startFixture({
+        candlesSchemaTypes: ['Query', 'Swap', 'Candle', 'Aggregator'],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candlesIndexerSchemaHasRequiredTypes');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /schema is missing required type\(s\): Pool/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candlesIndexerSchemaHasRequiredTypes introspection disabled (production-style lockdown)', async () => {
+    // Some production GraphQL servers disable introspection for
+    // security. The harness needs it on to run this check; a
+    // disablement regression also surfaces here with a clear
+    // "introspection disabled" diagnostic.
+    const fx = await startFixture({
+        candlesSchemaTypes: null,  // null → __schema field absent from response
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candlesIndexerSchemaHasRequiredTypes');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /__schema\.types not an array.*introspection disabled/);
     } finally {
         await fx.stop();
     }

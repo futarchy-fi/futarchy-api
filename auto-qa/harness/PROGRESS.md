@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent + anvilSnapshotCapabilityPresent + swapAmountsAllRowsPositive + apiHealthBodyShape + anvilTimeWarpCapabilityPresent + apiWarmerBodyShape)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **51 invariants** — 14 api-internal + 27 indexer + 10 chain-layer; second body-shape probe (sister to apiHealthBodyShape, on /warmer) — completes body-shape coverage on the two main observability endpoints; 172 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent + anvilSnapshotCapabilityPresent + swapAmountsAllRowsPositive + apiHealthBodyShape + anvilTimeWarpCapabilityPresent + apiWarmerBodyShape + candlesIndexerSchemaHasRequiredTypes)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **52 invariants** — 14 api-internal + 28 indexer + 10 chain-layer; first GraphQL INTROSPECTION probe — catches schema-rename regressions invisible to data probes (which surface them as misleading "indexer empty" errors); 176 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,75 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (apiWarmerBodyShape) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (candlesIndexerSchemaHasRequiredTypes) summary (this iteration on the api side):
+
+- **First GraphQL INTROSPECTION probe** in the catalog —
+  qualitatively new dimension. All previous indexer
+  probes query DATA (`pools`, `swaps`, `candles`); this
+  one queries the SCHEMA (`__schema { types { name } }`)
+  to verify the entity types themselves still exist.
+
+- **52-invariant milestone**. Layer breakdown: 14 api-
+  internal + 28 indexer (was 27) + 10 chain-layer.
+
+- **The bug class this catches**: schema regeneration
+  renames a type (e.g., `Candle` → `OHLCBar`) or drops
+  one entirely. Data probes hitting the renamed/dropped
+  type return GraphQL errors like "Cannot query field
+  'candles'" — which surface as misleading "indexer
+  empty" diagnostics. This invariant catches the rename
+  DIRECTLY with a clear "schema is missing required
+  type(s): Candle" message, making triage take seconds
+  instead of minutes.
+
+- **Bug shapes caught (NOT caught by data probes)**:
+  * Schema regeneration renamed Pool → LiquidityPool /
+    Candle → OHLCBar (data probes start failing with
+    misleading errors)
+  * A required type was DROPPED entirely from the schema
+    (the indexer no longer indexes it; data queries
+    fail with "Cannot query field" errors that look
+    like an indexer-down state)
+  * Schema introspection itself was disabled (some
+    production GraphQL servers disable it for security;
+    the harness needs it on, so a disablement regression
+    fails here with a clear "introspection disabled"
+    diagnostic)
+
+- **Required types asserted**: Pool, Swap, Candle (the
+  three entities the harness actually queries from the
+  candles indexer). Doesn't hard-pin every type — that
+  would over-couple to the schema; instead pins ONLY
+  the harness's actual dependencies.
+
+- **Fixture extension**: candles-direct response now
+  includes `__schema: { types: [...] }` by default.
+  Knob `candlesSchemaTypes` (array of type names) lets
+  tests override; setting it to null omits __schema
+  entirely (simulates introspection-disabled servers).
+
+- **Smoke tests**: 4 new (default Pool+Swap+Candle
+  present happy; failure Candle→OHLCBar rename; failure
+  Pool dropped; failure introspection disabled —
+  __schema field omitted from response). 176/176 pass
+  (was 172).
+
+- **Slice 4 progress: ~99% (38+ of ~30 sub-slices)**.
+  Indexer-side coverage now spans THREE qualitatively
+  distinct dimensions:
+    1. CONNECTIVITY (candlesDirect __typename probe)
+    2. DATA (candlesHasPools, candlesHasSwaps,
+       candlesHasCandles, etc. — verify rows exist)
+    3. SCHEMA (candlesIndexerSchemaHasRequiredTypes —
+       NEW; verify the types themselves exist)
+  Together they distinguish "indexer down" vs "indexer
+  empty" vs "indexer schema regression" — three failure
+  modes that previously all collapsed into "indexer
+  failing somehow". Still to add (per CHECKLIST):
+  candlesAggregation, conservation, TWAP monotonicity,
+  cross-run rate monotonicity.
+
+Phase 7 slice 4d-scenarios-more (apiWarmerBodyShape) summary (previous iteration on the api side):
 
 - **Second body-shape probe** in the catalog. Sister to
   apiHealthBodyShape (just shipped) — both extend a status-
