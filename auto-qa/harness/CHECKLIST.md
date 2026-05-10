@@ -529,10 +529,28 @@ freshly-generated addresses as recipients; documented in
       sweep) and `pull_request: paths: ['auto-qa/harness/**']`
       (gate harness-touching PRs without adding noise to
       unrelated PRs).
-- [ ] **3c — full scenarios run in CI**: separate job that
-      runs the actual Playwright scenarios suite (needs
-      browser install + Next.js dev server). Heavier; gate
-      behind `workflow_dispatch` first, then maybe nightly.
+- [x] **3c — full scenarios run in CI: STAGED.**
+      `auto-qa/harness/ci/auto-qa-harness-scenarios.yml.staged`
+      (NEW, on interface side) is a SEPARATE workflow file (not
+      just a job in 3a's file) so the maintainer can promote
+      each independently. Job: `scenarios-suite` — checkout,
+      setup Node 22 with cache on BOTH lockfiles (root for
+      Next.js, harness for Playwright), `npm ci` at root +
+      harness, cache + install Chromium binaries
+      (`actions/cache@v4` keyed on harness lockfile +
+      `npx playwright install --with-deps chromium` on miss /
+      `install-deps chromium` on hit), then `npm run ui:full`
+      in harness with
+      `HARNESS_FRONTEND_RPC_URL=https://rpc.gnosischain.com`
+      (no anvil in CI; eth_sendTransaction case auto-skips).
+      Trigger is `workflow_dispatch` ONLY for v1, mirroring
+      slice 3a's conservative roll-out. Timeout 20 min;
+      expected wall-clock ~5-10 min cold (~2-3 min warm cache).
+- [ ] **3c-promote** — maintainer task: copy the staged
+      scenarios workflow into `.github/workflows/`. Independent
+      of 3a-promote (different workflow file), but the README
+      recommends promoting + smoke-testing 3a first since it's
+      cheaper.
 - [ ] **3d — per-failure artifact upload**: Playwright already
       captures trace / screenshot / video per
       `playwright.config.mjs`'s `retain-on-failure` settings.

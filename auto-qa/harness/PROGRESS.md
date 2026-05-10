@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase **7 slice 3a** (CI workflow STAGED) landed on interface side. `auto-qa/harness/ci/auto-qa-harness.yml.staged` contains the scenarios-catalog drift-check workflow; awaiting one-time maintainer promotion to `.github/workflows/` (the bot's OAuth token lacks `workflow` scope). 21/21 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices **3a + 3c** STAGED on interface side. `auto-qa/harness/ci/auto-qa-harness.yml.staged` (drift check, fast) + `auto-qa-harness-scenarios.yml.staged` (full Playwright scenarios suite, heavier) both await maintainer promotion to `.github/workflows/` (the bot's OAuth token lacks `workflow` scope). 30/30 browser tests green; drift check <1 min, scenarios suite ~5-10 min cold. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -980,10 +980,71 @@ Phase 7 slice 3a summary (this iteration on the interface side):
   triggers (`schedule: '0 4 * * *'` for nightly drift sweep +
   `pull_request: paths: ['auto-qa/harness/**']` for gating
   harness-touching PRs). Edit the staged file, commit, maintainer
-  re-promotes. Slice 3c: separate job running the Playwright
-  scenarios suite (heavier; needs browser install + dev server).
-  Slice 3d: per-failure `actions/upload-artifact@v4` block
-  (Playwright traces / screenshots / videos).
+  re-promotes. Slice 3d: per-failure `actions/upload-artifact@v4`
+  block (Playwright traces / screenshots / videos).
+
+Phase 7 slice 3c summary (this iteration on the interface side):
+
+- **Second CI workflow STAGED**: the heavier Playwright-scenarios
+  runner. Kept as a SEPARATE workflow file from slice 3a's drift
+  check so the maintainer can promote each independently and gate
+  them differently.
+- What landed in interface repo:
+  * `auto-qa/harness/ci/auto-qa-harness-scenarios.yml.staged`
+    (NEW) — second workflow YAML.
+  * `auto-qa/harness/ci/README.md` updated to list both staged
+    files + recommended promote order (drift check first, then
+    scenarios after smoke-test).
+- The workflow (`auto-qa-harness-scenarios.yml`):
+  `actions/checkout@v4` → `actions/setup-node@v4` (Node 22, npm
+  cache on BOTH lockfiles — root + auto-qa/harness) → `npm ci` at
+  root (Next.js dev server) → `npm ci` in auto-qa/harness
+  (Playwright + viem) → `actions/cache@v4` of
+  `~/.cache/ms-playwright` keyed on harness lockfile hash → on
+  cache miss `npx playwright install --with-deps chromium`,
+  on hit `npx playwright install-deps chromium` → `npm run
+  ui:full` in auto-qa/harness with
+  `HARNESS_FRONTEND_RPC_URL=https://rpc.gnosischain.com`.
+  Trigger is `workflow_dispatch` ONLY for v1 (mirroring slice
+  3a's conservative roll-out). Timeout 20 min; expected
+  wall-clock ~5-10 min cold (~2-3 min once browser cache hits).
+- **Why a SEPARATE file (not a second job in slice 3a's
+  workflow)**: different cost profile (drift check <1 min vs
+  scenarios suite ~5-10 min) → different cadence sensible
+  (drift could run on every PR, scenarios maybe nightly +
+  manual); atomic promote-per-slice; reduced blast radius
+  (misconfigured scenarios YAML can't red-light the drift
+  check); different cache-dep paths (drift only needs harness
+  lockfile, scenarios needs both).
+- **Why public-RPC env**: there's no anvil in the GitHub
+  runner. The wallet-signing eth_sendTransaction case
+  auto-skips when `whichAnvil()` returns null; the other
+  tests just need a working JSON-RPC endpoint for Wagmi to
+  bootstrap (chain ID lookup, etc).
+- **Browser-cache pattern** (the trickiest piece): Playwright
+  caches its browser binaries in `~/.cache/ms-playwright`,
+  which `actions/cache@v4` can persist across runs. Apt-level
+  system deps (e.g. libnss3) aren't cached and must be
+  reinstalled each run, so the two-step pattern is: cache
+  miss → `playwright install --with-deps chromium` (binary +
+  deps in one command); cache hit → `playwright install-deps
+  chromium` (apt-only, ~10-30s). Reduces warm-cache install
+  time from ~60s to ~10s without risking missing system deps.
+- Promote command (one-time maintainer task on interface side,
+  AFTER smoke-testing slice 3a): `cp
+  auto-qa/harness/ci/auto-qa-harness-scenarios.yml.staged
+  .github/workflows/auto-qa-harness-scenarios.yml && git add
+  .github/workflows/auto-qa-harness-scenarios.yml && git
+  commit -m "ci: promote auto-qa harness scenarios-suite" &&
+  git push`.
+- Local validation: harness `npm ci` succeeded; `npm run
+  ui:full` was last run end-to-end during slice 3a iteration
+  (30 tests, all green); YAML parses cleanly via
+  `python3 -c 'import yaml; yaml.safe_load(open(...))'`.
+- Slice 3d (next): `actions/upload-artifact@v4` block
+  conditional on `failure()`, capturing playwright-report/ +
+  test-results/ for debugging. Slice 3b: triggers expansion on
+  the slice-3a workflow file.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 
