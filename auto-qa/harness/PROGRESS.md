@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 0 — in progress (slices 1-5 landed; remaining: harness package.json npm install, ARCHITECTURE.md sister-link verification) |
+| Phase | 0 — code-complete (slices 1-8 landed). Two human gates remain: ADR review + sister-link verification. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -145,19 +145,38 @@ Single docker-compose starts all four services. Orchestrator owns the clock.
   vs a Node + node_modules Hardhat project. Long-run memory creep
   mitigated via snapshot/revert at scenario boundaries.
 
-**Phase 0 wrap-up — remaining:**
+- **slice 6** — `npm install` ran cleanly in `auto-qa/harness/`,
+  generating `package-lock.json` (300 bytes — empty deps tree, but
+  reproducible for future additions). Verified no pollution of root
+  `package.json` install.
 
-- slice 6 — `npm install` inside `auto-qa/harness/` (no deps yet, but
-  generate the lockfile so future installs are reproducible)
-- slice 7 — Verify the `ARCHITECTURE.md` sister-link by running the
-  documented `git clone` snippet in a temp dir and confirming the
-  layout works
-- slice 8 — Add a `harness/CHECKLIST.md` enumerating the readiness
-  criteria for declaring Phase 0 complete and Phase 1 ready to start
+- **slice 7** — `docker compose -f auto-qa/harness/docker-compose.yml
+  config` validates cleanly. Removed the obsolete `version: "3.9"`
+  field per Compose v2 deprecation. Output shows the placeholder
+  service + harness-net bridge as expected.
 
-**After Phase 0 — Phase 1 entry criteria:**
+- **slice 8** — `CHECKLIST.md` mirrored across both repos. Enumerates
+  Phase 0 → Phase 7 readiness gates plus 3 cross-cutting acceptance
+  gates (no production code mods, no real mainnet RPC during runs,
+  harness deps isolated from root). All Phase 0 mechanical items
+  checked; 2 human-gated items remain (ADR human review + full
+  sister-link clone verification on a clean machine).
 
-- [ ] anvil binary discoverable on PATH (or via `forge install` script)
-- [ ] `docker compose -f auto-qa/harness/docker-compose.yml up -d`
-      brings up the placeholder cleanly on a fresh checkout
-- [ ] Both ADRs reviewed + status changed from "Proposed" to "Accepted"
+**Phase 0 status: code-complete.** Two human-gated items in
+`CHECKLIST.md` remain before declaring Phase 0 done and starting
+Phase 1:
+
+  1. Both ADRs reviewed by a human + status changed from "Proposed"
+     to "Accepted"
+  2. Sister-link verified: a fresh `git clone` of both repos in
+     `~/code/futarchy-fi/` runs `docker compose config` cleanly
+     (the snippet in `ARCHITECTURE.md` is correct as written, but
+     hasn't been exercised on a clean machine yet)
+
+**Phase 1 starting work (queued for next iterations):**
+
+- Detect `anvil` binary on PATH; document install via `curl -L
+  https://foundry.paradigm.xyz | bash && foundryup`
+- Replace the TODO in `start-fork.mjs` with real subprocess spawn
+- Add readiness probe via cast or direct JSON-RPC poll
+- Wire compose `anvil:` service block (uncomment + verify image pull)

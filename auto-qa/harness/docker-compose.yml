@@ -22,7 +22,7 @@
 #   - No ports exposed to host EXCEPT for debug (commented blocks below)
 #   - Volumes go into ./.compose-volumes/ (gitignored)
 
-version: "3.9"
+# Note: no top-level `version` key — Docker Compose v2+ deprecates it.
 
 name: futarchy-replay-harness
 
