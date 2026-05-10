@@ -37,6 +37,42 @@ const PROBE_QUERY = '{ __typename }';
 // per-invariant overrides in their `check` body.
 const DEFAULT_TIMEOUT_MS = 5_000;
 
+// sDAI on Gnosis (chain 100). Source: src/services/rate-provider.js's
+// CHAIN_CONFIG[100].defaultRateProvider. The harness anvil fork
+// preserves mainnet contract state, so the same address works locally.
+const SDAI_GNOSIS_ADDRESS = '0x89C80A4540A00b5270347E02e2E144c71da2EceD';
+
+// keccak256("getRate()")[0:4] — the ERC-4626 rate-provider standard
+// selector. Same constant appears in src/services/rate-provider.js.
+const GET_RATE_SELECTOR = '0x679aefce';
+
+// 1e18 as a BigInt — the lower bound for a sane sDAI rate. Below this,
+// either the contract is broken, the fork is corrupt, or someone's
+// reading a wrong contract's state.
+const ONE_E18 = 10n ** 18n;
+
+async function ethCall(rpcUrl, to, data, timeoutMs = DEFAULT_TIMEOUT_MS) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+        const r = await fetch(rpcUrl, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                jsonrpc: '2.0', id: 1, method: 'eth_call',
+                params: [{ to, data }, 'latest'],
+            }),
+            signal: ctrl.signal,
+        });
+        if (!r.ok) throw new Error(`${rpcUrl} → HTTP ${r.status}`);
+        const j = await r.json();
+        if (j.error) throw new Error(`RPC error: ${JSON.stringify(j.error)}`);
+        return j.result;
+    } finally {
+        clearTimeout(t);
+    }
+}
+
 async function fetchJson(url, init = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -141,6 +177,34 @@ export const INVARIANTS = [
                 throw new Error(`unexpected __typename response: ${JSON.stringify(j)}`);
             }
             return { ok: true, detail: `direct candles returned __typename=Query (${ctx.candlesUrl})` };
+        },
+    },
+    // ── Economic invariants ─────────────────────────────────────────
+    // Always-on truth properties from PROGRESS.md's "Economic
+    // invariants" table. Each one validates a single chain-level
+    // fact independent of the api or indexer.
+    {
+        name: 'rateSanity',
+        description: 'sDAI getRate() returns a uint256 ≥ 1e18 (rate ≥ 1.0)',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            const result = await ethCall(ctx.rpcUrl, SDAI_GNOSIS_ADDRESS, GET_RATE_SELECTOR);
+            if (typeof result !== 'string' || !result.startsWith('0x')) {
+                throw new Error(`unexpected eth_call result shape: ${JSON.stringify(result)}`);
+            }
+            const rateBigInt = BigInt(result);
+            if (rateBigInt < ONE_E18) {
+                const rateNum = Number(rateBigInt) / 1e18;
+                throw new Error(`sDAI rate ${rateNum.toFixed(6)} < 1.0 (raw: ${result})`);
+            }
+            const rateNum = Number(rateBigInt) / 1e18;
+            return { ok: true, detail: `sDAI rate ${rateNum.toFixed(6)} (≥ 1.0)` };
+            // Future enhancement: monotonicity check across calls.
+            // Needs persistent state (the orchestrator is one-shot, so
+            // monotonicity within a single run is trivially "≥ 1
+            // sample"). Cross-run monotonicity needs an external store
+            // (file in a volume? indexer query?) — out of scope for
+            // this slice.
         },
     },
 ];

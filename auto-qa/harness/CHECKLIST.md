@@ -750,18 +750,21 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 5 invariants
-      total: `apiHealth`, `apiCanReachRegistry`,
-      `apiCanReachCandles`, `registryDirect`,
-      `candlesDirect` (the last 2 added this slice — probe
-      indexers WITHOUT going through api; validates that
-      the orchestrator container can reach the indexers
-      over harness-net per slice 4b-network-wire's
-      dual-homing). 9 smoke tests green. Still to add (each
-      a small additive slice): rateSanity (sDAI rate ≥ 1,
-      monotonic), probabilityBounds (price ∈ [0, 1]),
-      candlesAggregation (candle vs raw swaps), chartShape,
-      conservation (∑YES + ∑NO = ∑sDAI).
+      PROGRESS.md's invariant tables). Now 6 invariants
+      total: 5 GraphQL probes (api passthrough +
+      direct-indexer pairs) plus `rateSanity` (added this
+      slice — eth_call to sDAI's getRate() at
+      0x89C80A4540A00b5270347E02e2E144c71da2EceD on Gnosis
+      chain 100, asserts result ≥ 1e18 in raw uint256;
+      mirrors the api's src/services/rate-provider.js).
+      First chain-layer invariant — exercises the
+      orchestrator's `ctx.rpcUrl` path (anvil over
+      harness-net). 12 smoke tests green. Still to add
+      (each a small additive slice): probabilityBounds
+      (price ∈ [0, 1]), candlesAggregation (candle vs raw
+      swaps), chartShape, conservation (∑YES + ∑NO = ∑sDAI),
+      and a future enhancement on `rateSanity` itself for
+      cross-run monotonicity (needs persistent state).
 - [x] **4d-activate — orchestrator block UNCOMMENTED.**
       Replaced the `tail -f /dev/null` placeholder with
       `node orchestrator/scenario-runner.mjs`. Dropped the

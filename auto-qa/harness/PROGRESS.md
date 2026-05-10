@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 5 invariants — 3 api-passthrough + 2 direct-probe; 9 smoke tests green). 30/30 browser tests green. Phase 3 25+9 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 6 invariants — 3 api-passthrough + 2 direct-probe + 1 chain-layer rateSanity; 12 smoke tests green). 30/30 browser tests green. Phase 3 25+12 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -1903,6 +1903,76 @@ Phase 7 slice 4d-scenarios-more (registryDirect + candlesDirect) summary (this i
 - Slice 4 progress: ~80% done (13 of ~16+ sub-slices total
   — slice 4d-scenarios-more is roughly half-way through
   the planned per-invariant additions).
+
+Phase 7 slice 4d-scenarios-more (rateSanity) summary (this iteration on the api side):
+
+- **First chain-layer invariant**: `rateSanity`
+  (orchestrator↔chain). Up to now all 5 invariants probed
+  HTTP layers (api or indexer GraphQL); this one issues a
+  raw JSON-RPC `eth_call` to the sDAI contract on Gnosis
+  and asserts the result is sane.
+
+- **What it does**:
+  * `eth_call` to `0x89C80A4540A00b5270347E02e2E144c71da2EceD`
+    (sDAI on Gnosis chain 100) with selector `0x679aefce`
+    (`getRate()`)
+  * Parses uint256 result via `BigInt(result)`
+  * Asserts `rateBigInt >= 10n ** 18n` (rate ≥ 1.0 in real
+    terms; sDAI rate should grow over time as savings accrue,
+    so 1.0 is the floor)
+  * Reports rate as decimal in pass message, raw hex in
+    fail message
+
+- **Why these specific values**: sDAI is an ERC-4626 yield
+  token; its `getRate()` returns the current asset/share
+  exchange rate. At launch it was 1.0; over time it grows
+  (compound interest). A rate < 1 implies the contract is
+  broken, the fork is corrupt, or someone's reading a wrong
+  contract's state. Source: `src/services/rate-provider.js`
+  has the same address + selector + parse pattern (the
+  invariant is essentially that file's check, lifted into
+  the harness).
+
+- **What was added to invariants.mjs**:
+  * Constants: `SDAI_GNOSIS_ADDRESS`, `GET_RATE_SELECTOR`,
+    `ONE_E18` (BigInt literal 10n ** 18n)
+  * Helper: `ethCall(rpcUrl, to, data, timeoutMs)` — does
+    one POST with the standard JSON-RPC envelope, throws on
+    HTTP error or RPC error
+  * The invariant itself (orchestrator↔chain layer)
+
+- **Future enhancement**: monotonicity check across calls.
+  The orchestrator is currently one-shot, so monotonicity
+  within a single run is trivially "≥ 1 sample". Cross-run
+  monotonicity needs persistent state (file in a volume?
+  indexer query?) — out of scope for this slice; pinned in
+  the invariant body comment.
+
+- **Smoke test coverage** — 3 new tests:
+  * happy at 1.2 sDAI rate (default fixture value)
+  * failure: rate < 1.0 (fixture set to 0.5e18)
+  * failure: RPC error response (fixture set to return
+    `{error: ...}` instead of `{result}`)
+  * Plus the fixture extended with `/rpc` POST handler that
+    serves JSON-RPC eth_call responses; `fullCtx(fxUrl)`
+    helper updated to set `rpcUrl` to `${fxUrl}/rpc`
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 12/12 pass (171ms — was
+    9/9 before)
+  * `npm run scenarios:dry` → exits 0; lists 6 invariants
+    in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: ~83% done (14 of ~17 sub-slices total).
+  Next bot-doable: another invariant — probabilityBounds
+  (price ∈ [0, 1] for PREDICTION pools — needs a real pool
+  query; can use the candles GraphQL or the api's
+  /api/v1/spot-candles endpoint), candlesAggregation, or
+  chartShape. Or revisit conservation (∑YES + ∑NO = ∑sDAI)
+  — most architecturally interesting but needs multiple
+  contract calls.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 

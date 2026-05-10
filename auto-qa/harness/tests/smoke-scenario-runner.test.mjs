@@ -42,6 +42,11 @@ function startFixture({
     // (e.g., api is caching).
     registryDirectDown = false,
     candlesDirectDown = false,
+    // JSON-RPC mock at /rpc (slice 4d-scenarios-more rateSanity).
+    // sDAIRateRaw is the BigInt raw rate to return; default is 1.2e18.
+    // Set to 0n to simulate a broken contract; null to make eth_call error.
+    sDAIRateRaw = (12n * 10n ** 17n),  // 1.2 * 1e18
+    rpcError = null,
 } = {}) {
     return new Promise((res) => {
         const server = createServer((req, response) => {
@@ -75,6 +80,17 @@ function startFixture({
                     response.end(JSON.stringify({ data: { __typename: candlesDirectTypename } }));
                     return;
                 }
+                if (req.url === '/rpc' && req.method === 'POST') {
+                    response.setHeader('content-type', 'application/json');
+                    if (rpcError) {
+                        response.end(JSON.stringify({ jsonrpc: '2.0', id: 1, error: rpcError }));
+                        return;
+                    }
+                    // Pad the rate to a 32-byte hex (64 chars after 0x).
+                    const hex = sDAIRateRaw.toString(16).padStart(64, '0');
+                    response.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x' + hex }));
+                    return;
+                }
                 response.statusCode = 404;
                 response.end('not found');
             });
@@ -87,13 +103,14 @@ function startFixture({
 }
 
 // Helper: build a ctx that wires the direct-probe URLs to the fixture's
-// distinguished paths. Use for any test that wants the registryDirect /
-// candlesDirect invariants to find real endpoints.
+// distinguished paths + the RPC URL to the fixture's /rpc mock. Use for
+// any test that wants ALL invariants to find real endpoints.
 function fullCtx(fxUrl) {
     return {
         apiUrl: fxUrl,
         registryUrl: `${fxUrl}/registry-direct/graphql`,
         candlesUrl: `${fxUrl}/candles-direct/graphql`,
+        rpcUrl: `${fxUrl}/rpc`,
     };
 }
 
@@ -205,6 +222,51 @@ test('runAllInvariants — failure: candles direct probe down', async () => {
     }
 });
 
+test('runAllInvariants — rateSanity: happy at 1.2 sDAI rate', async () => {
+    const fx = await startFixture();  // default sDAIRateRaw = 1.2 * 1e18
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const rate = results.find((r) => r.name === 'rateSanity');
+        assert.equal(rate.ok, true);
+        assert.match(rate.detail, /sDAI rate 1\.2/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: rateSanity rate < 1.0', async () => {
+    // 0.5 * 1e18 = below the lower bound
+    const fx = await startFixture({ sDAIRateRaw: 5n * 10n ** 17n });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const rate = results.find((r) => r.name === 'rateSanity');
+        assert.equal(rate.ok, false);
+        assert.match(rate.error, /< 1\.0/);
+        // Other invariants still ran (no short-circuit)
+        const health = results.find((r) => r.name === 'apiHealth');
+        assert.equal(health.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: rateSanity RPC error', async () => {
+    const fx = await startFixture({
+        rpcError: { code: -32603, message: 'internal error' },
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const rate = results.find((r) => r.name === 'rateSanity');
+        assert.equal(rate.ok, false);
+        assert.match(rate.error, /RPC error|internal error/);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('scenario-runner CLI — dry-run exits 0 without network', () => {
     const r = spawnSync('node', [RUNNER], {
         env: {
@@ -221,6 +283,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /apiCanReachCandles/);
     assert.match(r.stdout, /registryDirect/);
     assert.match(r.stdout, /candlesDirect/);
+    assert.match(r.stdout, /rateSanity/);
 });
 
 test('scenario-runner CLI — native mode exits 2 with guidance', () => {
