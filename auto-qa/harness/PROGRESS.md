@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 6 invariants — 3 api-passthrough + 2 direct-probe + 1 chain-layer rateSanity; 12 smoke tests green). 30/30 browser tests green. Phase 3 25+12 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 8 invariants — 3 api-passthrough + 2 direct-probe + 3 chain-layer; 16 smoke tests green). 30/30 browser tests green. Phase 3 25+16 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -1973,6 +1973,69 @@ Phase 7 slice 4d-scenarios-more (rateSanity) summary (this iteration on the api 
   chartShape. Or revisit conservation (∑YES + ∑NO = ∑sDAI)
   — most architecturally interesting but needs multiple
   contract calls.
+
+Phase 7 slice 4d-scenarios-more (anvilBlockNumber + anvilChainId) summary (this iteration on the api side):
+
+- **Two new chain-process probes**: complement `rateSanity`
+  (which validates contract STATE) with chain-PROCESS health
+  checks. Naturally paired:
+  * `anvilBlockNumber` — `eth_blockNumber` returns a positive
+    block number (chain has state, fork loaded a real
+    starting point)
+  * `anvilChainId` — `eth_chainId` returns `0x64` (chain
+    100 = Gnosis; catches "fork wrong chain" + "running bare
+    anvil at default 31337")
+
+- **Why split into 3 chain-layer invariants**: separation of
+  concerns lets failures point at the right layer.
+  - anvilBlockNumber fails → anvil isn't producing blocks /
+    fork didn't load
+  - anvilChainId fails → forking the wrong chain (or no
+    fork at all)
+  - rateSanity fails → chain is alive but contract state
+    isn't what we expect
+  Each failure mode is a different kind of bug; bundling them
+  would obscure which one fired.
+
+- **Refactor of the JSON-RPC mock**: the smoke fixture's
+  `/rpc` handler used to return rate-shaped responses for
+  ANY method. Now it parses the request body, branches on
+  `method`, and returns method-appropriate responses
+  (`eth_call` → rate hex, `eth_blockNumber` → blockNumberHex,
+  `eth_chainId` → chainIdHex, default → method-not-mocked
+  RPC error). Plus a JSON parse-error fallback for
+  malformed bodies. Two new fixture options:
+  `blockNumberHex` (default `0x123abc`), `chainIdHex`
+  (default `0x64`).
+
+- **Refactor of `invariants.mjs`**: introduced
+  `rpcRequest(rpcUrl, method, params, timeoutMs)` as the
+  generic JSON-RPC helper. `ethCall(...)` now delegates to
+  `rpcRequest(..., 'eth_call', ...)`. Both `anvilBlockNumber`
+  and `anvilChainId` use `rpcRequest` directly with method
+  name + empty params.
+
+- **Smoke test coverage** — 4 new tests:
+  * anvilBlockNumber happy at 0x123abc (default)
+  * failure: anvilBlockNumber at 0x0
+  * anvilChainId happy at Gnosis (0x64)
+  * failure: anvilChainId at bare anvil 0x7a69 (= 31337)
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 16/16 pass (199ms — was
+    12/12)
+  * `npm run scenarios:dry` → exits 0; lists 8 invariants
+    in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: ~88% done (15 of ~17 sub-slices total).
+  4d-scenarios-more is now well past half-way through the
+  planned per-invariant additions. Remaining bot-doable
+  invariants (probabilityBounds, candlesAggregation,
+  chartShape, conservation) all need either real pool data
+  or multiple contract calls — meatier than the simple
+  GraphQL/RPC probes shipped so far.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 

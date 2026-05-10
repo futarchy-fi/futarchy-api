@@ -750,21 +750,18 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 6 invariants
-      total: 5 GraphQL probes (api passthrough +
-      direct-indexer pairs) plus `rateSanity` (added this
-      slice — eth_call to sDAI's getRate() at
-      0x89C80A4540A00b5270347E02e2E144c71da2EceD on Gnosis
-      chain 100, asserts result ≥ 1e18 in raw uint256;
-      mirrors the api's src/services/rate-provider.js).
-      First chain-layer invariant — exercises the
-      orchestrator's `ctx.rpcUrl` path (anvil over
-      harness-net). 12 smoke tests green. Still to add
-      (each a small additive slice): probabilityBounds
-      (price ∈ [0, 1]), candlesAggregation (candle vs raw
-      swaps), chartShape, conservation (∑YES + ∑NO = ∑sDAI),
-      and a future enhancement on `rateSanity` itself for
-      cross-run monotonicity (needs persistent state).
+      PROGRESS.md's invariant tables). Now 8 invariants:
+      5 GraphQL probes (api passthrough + direct-indexer
+      pairs) + 3 chain-layer probes (`anvilBlockNumber` and
+      `anvilChainId` added this slice — eth_blockNumber > 0
+      and eth_chainId == 0x64 / 100 / Gnosis; complement
+      `rateSanity` for full chain-process+state coverage).
+      Refactored the JSON-RPC mock in the smoke fixture to
+      parse the request body and branch on method (was
+      eth_call-only). 16 smoke tests green. Still to add:
+      probabilityBounds (price ∈ [0, 1]), candlesAggregation,
+      chartShape, conservation, plus cross-run monotonicity
+      on rateSanity.
 - [x] **4d-activate — orchestrator block UNCOMMENTED.**
       Replaced the `tail -f /dev/null` placeholder with
       `node orchestrator/scenario-runner.mjs`. Dropped the

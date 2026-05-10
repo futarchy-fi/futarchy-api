@@ -51,17 +51,14 @@ const GET_RATE_SELECTOR = '0x679aefce';
 // reading a wrong contract's state.
 const ONE_E18 = 10n ** 18n;
 
-async function ethCall(rpcUrl, to, data, timeoutMs = DEFAULT_TIMEOUT_MS) {
+async function rpcRequest(rpcUrl, method, params, timeoutMs = DEFAULT_TIMEOUT_MS) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
         const r = await fetch(rpcUrl, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-                jsonrpc: '2.0', id: 1, method: 'eth_call',
-                params: [{ to, data }, 'latest'],
-            }),
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
             signal: ctrl.signal,
         });
         if (!r.ok) throw new Error(`${rpcUrl} → HTTP ${r.status}`);
@@ -71,6 +68,10 @@ async function ethCall(rpcUrl, to, data, timeoutMs = DEFAULT_TIMEOUT_MS) {
     } finally {
         clearTimeout(t);
     }
+}
+
+async function ethCall(rpcUrl, to, data, timeoutMs = DEFAULT_TIMEOUT_MS) {
+    return rpcRequest(rpcUrl, 'eth_call', [{ to, data }, 'latest'], timeoutMs);
 }
 
 async function fetchJson(url, init = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
@@ -177,6 +178,44 @@ export const INVARIANTS = [
                 throw new Error(`unexpected __typename response: ${JSON.stringify(j)}`);
             }
             return { ok: true, detail: `direct candles returned __typename=Query (${ctx.candlesUrl})` };
+        },
+    },
+    // ── Chain-process probes ────────────────────────────────────────
+    // Validate the chain process itself before checking contract state.
+    // If anvilBlockNumber + anvilChainId pass but rateSanity fails,
+    // the chain is alive but pointing at a wrong fork or has corrupt
+    // state.
+    {
+        name: 'anvilBlockNumber',
+        description: 'eth_blockNumber returns a positive block number (chain has state)',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            const result = await rpcRequest(ctx.rpcUrl, 'eth_blockNumber', []);
+            if (typeof result !== 'string' || !result.startsWith('0x')) {
+                throw new Error(`unexpected eth_blockNumber result: ${JSON.stringify(result)}`);
+            }
+            const blockNumber = BigInt(result);
+            if (blockNumber <= 0n) {
+                throw new Error(`block number is ${blockNumber} (≤ 0; fork has no state)`);
+            }
+            return { ok: true, detail: `block ${blockNumber}` };
+        },
+    },
+    {
+        name: 'anvilChainId',
+        description: 'eth_chainId returns 0x64 (chain 100, Gnosis)',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            const result = await rpcRequest(ctx.rpcUrl, 'eth_chainId', []);
+            // anvil returns chain ID as a hex string. Forking Gnosis
+            // mainnet should preserve chain 100 (= 0x64). Different
+            // chain ID would mean forking the wrong chain or running
+            // bare anvil (default 31337 = 0x7a69).
+            if (result !== '0x64') {
+                const id = result?.startsWith?.('0x') ? Number(BigInt(result)) : result;
+                throw new Error(`chain id ${id} (raw: ${JSON.stringify(result)}); expected 0x64 (100 = Gnosis)`);
+            }
+            return { ok: true, detail: 'chain 100 (Gnosis) confirmed' };
         },
     },
     // ── Economic invariants ─────────────────────────────────────────

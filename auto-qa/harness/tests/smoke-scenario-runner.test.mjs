@@ -47,10 +47,16 @@ function startFixture({
     // Set to 0n to simulate a broken contract; null to make eth_call error.
     sDAIRateRaw = (12n * 10n ** 17n),  // 1.2 * 1e18
     rpcError = null,
+    // Block number + chain ID for anvilBlockNumber / anvilChainId
+    // (slice 4d-scenarios-more block + chain probes). Defaults are
+    // sane Gnosis values; tests override to simulate failures.
+    blockNumberHex = '0x123abc',  // some positive block
+    chainIdHex = '0x64',           // 100 = Gnosis
 } = {}) {
     return new Promise((res) => {
         const server = createServer((req, response) => {
-            req.on('data', () => {});
+            const chunks = [];
+            req.on('data', (c) => chunks.push(c));
             req.on('end', () => {
                 if (req.url === '/health' && req.method === 'GET') {
                     if (!healthOk) { response.statusCode = 503; response.end('down'); return; }
@@ -86,10 +92,33 @@ function startFixture({
                         response.end(JSON.stringify({ jsonrpc: '2.0', id: 1, error: rpcError }));
                         return;
                     }
-                    // Pad the rate to a 32-byte hex (64 chars after 0x).
-                    const hex = sDAIRateRaw.toString(16).padStart(64, '0');
-                    response.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x' + hex }));
-                    return;
+                    let parsed;
+                    try {
+                        parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+                    } catch {
+                        response.statusCode = 400;
+                        response.end(JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32700, message: 'parse error' } }));
+                        return;
+                    }
+                    const replyResult = (result) =>
+                        response.end(JSON.stringify({ jsonrpc: '2.0', id: parsed.id ?? 1, result }));
+                    switch (parsed.method) {
+                        case 'eth_call': {
+                            // Pad the rate to a 32-byte hex (64 chars after 0x).
+                            const hex = sDAIRateRaw.toString(16).padStart(64, '0');
+                            return replyResult('0x' + hex);
+                        }
+                        case 'eth_blockNumber':
+                            return replyResult(blockNumberHex);
+                        case 'eth_chainId':
+                            return replyResult(chainIdHex);
+                        default:
+                            response.end(JSON.stringify({
+                                jsonrpc: '2.0', id: parsed.id ?? 1,
+                                error: { code: -32601, message: `method ${parsed.method} not mocked` },
+                            }));
+                            return;
+                    }
                 }
                 response.statusCode = 404;
                 response.end('not found');
@@ -267,6 +296,58 @@ test('runAllInvariants — failure: rateSanity RPC error', async () => {
     }
 });
 
+test('runAllInvariants — anvilBlockNumber happy at 0x123abc', async () => {
+    const fx = await startFixture();  // default blockNumberHex = 0x123abc
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const block = results.find((r) => r.name === 'anvilBlockNumber');
+        assert.equal(block.ok, true);
+        assert.match(block.detail, /block \d+/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilBlockNumber at 0', async () => {
+    const fx = await startFixture({ blockNumberHex: '0x0' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const block = results.find((r) => r.name === 'anvilBlockNumber');
+        assert.equal(block.ok, false);
+        assert.match(block.error, /block number is 0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — anvilChainId happy at Gnosis', async () => {
+    const fx = await startFixture();  // default chainIdHex = 0x64
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const chain = results.find((r) => r.name === 'anvilChainId');
+        assert.equal(chain.ok, true);
+        assert.match(chain.detail, /Gnosis/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilChainId at bare anvil 0x7a69 (= 31337)', async () => {
+    const fx = await startFixture({ chainIdHex: '0x7a69' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const chain = results.find((r) => r.name === 'anvilChainId');
+        assert.equal(chain.ok, false);
+        assert.match(chain.error, /chain id 31337|expected 0x64/);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('scenario-runner CLI — dry-run exits 0 without network', () => {
     const r = spawnSync('node', [RUNNER], {
         env: {
@@ -283,6 +364,8 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /apiCanReachCandles/);
     assert.match(r.stdout, /registryDirect/);
     assert.match(r.stdout, /candlesDirect/);
+    assert.match(r.stdout, /anvilBlockNumber/);
+    assert.match(r.stdout, /anvilChainId/);
     assert.match(r.stdout, /rateSanity/);
 });
 
