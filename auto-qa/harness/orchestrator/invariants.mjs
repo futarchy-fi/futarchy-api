@@ -1708,6 +1708,39 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'anvilClientVersionMentionsAnvil',
+        description: 'web3_clientVersion response contains "anvil" (case-insensitive) — pins the EVM client identity, not just chain ID',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            // Distinct from anvilChainId. Chain ID can match Gnosis
+            // (0x64) on multiple clients (geth fork, erigon fork,
+            // anvil fork). The harness depends on Anvil-specific RPC
+            // extensions (anvil_impersonateAccount, anvil_setBalance,
+            // evm_snapshot/revert, evm_setNextBlockTimestamp). Running
+            // against the wrong client would let chain probes pass
+            // but break scenario-driven state mutations later.
+            //
+            // This invariant pins the CLIENT identity:
+            //   * web3_clientVersion is universal JSON-RPC
+            //   * Anvil returns something like "anvil/0.1.0" or
+            //     "anvil 1.5.0-stable" depending on version
+            //   * If the response is missing "anvil", we're on the
+            //     wrong client even if the chain ID matched
+            //
+            // Together with anvilChainId, both layers of "right
+            // environment" are pinned: chain ID for the network,
+            // client version for the EVM impl.
+            const result = await rpcRequest(ctx.rpcUrl, 'web3_clientVersion', []);
+            if (typeof result !== 'string') {
+                throw new Error(`web3_clientVersion returned non-string: ${JSON.stringify(result)?.slice(0, 60)}`);
+            }
+            if (!result.toLowerCase().includes('anvil')) {
+                throw new Error(`web3_clientVersion=${JSON.stringify(result)} does not contain "anvil" — wrong EVM client (anvil_/evm_ extensions for impersonation, snapshots, time-warping will silently fail in scenarios)`);
+            }
+            return { ok: true, detail: `client version: ${result}` };
+        },
+    },
+    {
         name: 'anvilLatestBlockSensible',
         description: 'eth_getBlockByNumber(latest) returns a block with a 0x… hash and a timestamp in [2020-01-01, now+1d] (catches stuck-clock + wrong-fork issues that the count-only block-number probe misses)',
         layer: 'orchestrator↔chain',

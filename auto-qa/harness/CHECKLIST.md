@@ -750,11 +750,22 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). **Now 40 invariants
-      (milestone)**: 10 api-internal + 26 indexer probes +
-      4 chain-layer.
-      `apiUnifiedChartHasObservabilityHeaders` added
-      this slice — first response-HEADER validation in
+      PROGRESS.md's invariant tables). **Now 41 invariants**:
+      10 api-internal + 26 indexer probes + 5 chain-layer.
+      130 smoke tests green.
+      `anvilClientVersionMentionsAnvil` added this slice
+      — chain-CLIENT identity pin (distinct from
+      anvilChainId chain-ID pin). Calls web3_clientVersion;
+      asserts response contains "anvil" (case-insensitive).
+      Together they pin both layers of "right environment":
+      chain ID for the network, client version for the EVM
+      impl. Catches running against a Gnosis fork on geth/
+      erigon where chain ID matches but anvil_/evm_
+      extensions for impersonation, snapshots, time-warping
+      would silently fail in scenario tests.
+
+      `apiUnifiedChartHasObservabilityHeaders` (previous
+      slice) — first response-HEADER validation in
       the catalog. Asserts X-Cache ∈ {HIT, MISS} AND
       X-Response-Time matches /^\d+ms$/. New pattern:
       header probe (vs body probe). Catches ops-
@@ -763,7 +774,7 @@ freshly-generated addresses as recipients; documented in
       instrumentation; refactor that adds a third cache
       state ('STALE') without telling ops; timing
       regression that emits raw ms count without unit
-      suffix. 126 smoke tests green. Still to add:
+      suffix. Still to add:
       candlesAggregation (Candle.volume = sum of
       contained Swap amounts within period), chartShape
       full match (api unified-chart vs indexer raw,

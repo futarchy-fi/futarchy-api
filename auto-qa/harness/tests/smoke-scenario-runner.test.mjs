@@ -188,6 +188,11 @@ function startFixture({
     // garbage-hash, or genesis-only scenarios.
     latestBlockHash = '0x' + 'a1b2c3d4'.repeat(8),  // valid 0x + 64 hex
     latestBlockTimestampHex = '0x' + Math.floor(Date.now() / 1000 - 60).toString(16),  // 1 min ago
+    // web3_clientVersion response for anvilClientVersionMentionsAnvil
+    // (slice 4d-scenarios-more). Default mimics anvil's actual
+    // version string. Tests override to "geth/v1.13" etc. for the
+    // wrong-client failure case.
+    clientVersion = 'anvil/0.1.0',
 } = {}) {
     // ── shared row builders ──────────────────────────────────────────
     // Pulled out of the per-route handlers so the api passthrough
@@ -445,6 +450,8 @@ function startFixture({
                                 number: blockNumberHex,
                                 parentHash: '0x' + '0'.repeat(64),
                             });
+                        case 'web3_clientVersion':
+                            return replyResult(clientVersion);
                         default:
                             response.end(JSON.stringify({
                                 jsonrpc: '2.0', id: parsed.id ?? 1,
@@ -932,6 +939,68 @@ test('runAllInvariants — failure: anvilLatestBlockSensible garbage hash (anvil
         const inv = results.find((r) => r.name === 'anvilLatestBlockSensible');
         assert.equal(inv.ok, false);
         assert.match(inv.error, /block\.hash invalid/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — anvilClientVersionMentionsAnvil happy: client identifies as anvil', async () => {
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'anvilClientVersionMentionsAnvil');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /client version: anvil\/0\.1\.0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — anvilClientVersionMentionsAnvil happy: case-insensitive match', async () => {
+    const fx = await startFixture({ clientVersion: 'Anvil 1.5.0-stable (rev=abc123)' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'anvilClientVersionMentionsAnvil');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /client version: Anvil 1\.5\.0-stable/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilClientVersionMentionsAnvil wrong client (geth)', async () => {
+    // Running against a Gnosis fork on geth — chain ID matches but
+    // anvil_/evm_ extensions for impersonation/snapshots/time-warp
+    // would silently fail later in scenario tests.
+    const fx = await startFixture({ clientVersion: 'Geth/v1.13.0-stable/linux-amd64/go1.21' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilClientVersionMentionsAnvil');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /does not contain "anvil"|wrong EVM client/);
+        // anvilChainId STILL passes — distinguishes wrong-chain from
+        // wrong-client failure modes
+        const chainId = results.find((r) => r.name === 'anvilChainId');
+        assert.equal(chainId.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilClientVersionMentionsAnvil non-string response', async () => {
+    // RPC returns null or object (handler regression on the chain
+    // process). Distinct from "wrong client" — this is "broken
+    // response shape".
+    const fx = await startFixture({ clientVersion: null });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilClientVersionMentionsAnvil');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /returned non-string|null/);
     } finally {
         await fx.stop();
     }
@@ -2647,6 +2716,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /anvilBlockNumber/);
     assert.match(r.stdout, /anvilChainId/);
     assert.match(r.stdout, /anvilLatestBlockSensible/);
+    assert.match(r.stdout, /anvilClientVersionMentionsAnvil/);
     assert.match(r.stdout, /rateSanity/);
 });
 

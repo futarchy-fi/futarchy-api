@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **40 invariants (milestone)** — 10 api-internal + 26 indexer + 4 chain-layer; first response-HEADER validation landed; 126 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **41 invariants** — 10 api-internal + 26 indexer + 5 chain-layer; chain-CLIENT identity pin landed; 130 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,47 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (apiUnifiedChartHasObservabilityHeaders) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (anvilClientVersionMentionsAnvil) summary (this iteration on the api side):
+
+- **Chain-CLIENT identity pin** — distinct from
+  anvilChainId (chain-NETWORK identity pin). Together
+  they pin both layers of "right environment":
+  * `anvilClientVersionMentionsAnvil` — calls
+    `web3_clientVersion`, asserts response contains
+    "anvil" (case-insensitive).
+
+- **Why this catches what anvilChainId misses**:
+  Chain ID 0x64 (Gnosis) can match across MULTIPLE
+  client implementations: anvil fork, geth fork,
+  erigon fork. The harness depends on Anvil-specific
+  RPC extensions for scenario-driven state changes:
+  * anvil_impersonateAccount, anvil_setBalance
+  * evm_snapshot, evm_revert
+  * evm_setNextBlockTimestamp, evm_increaseTime
+  Running against the wrong client lets all chain
+  probes pass but breaks state mutations later.
+
+- **Fixture extension**: RPC mock now responds to
+  `web3_clientVersion`; new `clientVersion` knob
+  (default 'anvil/0.1.0').
+
+- **Smoke tests**: 4 new (default anvil happy,
+  case-insensitive match for "Anvil 1.5.0-stable",
+  failure with geth client — verifies anvilChainId
+  STILL passes distinguishing wrong-chain from
+  wrong-client, failure with non-string response);
+  130/130 pass (was 126).
+
+- Slice 4 progress: 41 invariants now: 10 api-
+  internal + 26 indexer + 5 chain-layer (was 4 —
+  this slice adds the 5th). Chain-layer coverage:
+  count (anvilBlockNumber), network identity
+  (anvilChainId), client identity
+  (anvilClientVersionMentionsAnvil), time-shape
+  (anvilLatestBlockSensible), contract state
+  (rateSanity).
+
+Phase 7 slice 4d-scenarios-more (apiUnifiedChartHasObservabilityHeaders) summary (previous iteration on the api side):
 
 - **40-invariant milestone reached**. This is also the
   first response-HEADER validation in the catalog —
