@@ -498,17 +498,32 @@ freshly-generated addresses as recipients; documented in
 
 **Phase 7 slice 3 (CI integration) — IN PROGRESS:**
 
-- [x] **3a — first GitHub Actions workflow file landed.**
-      `.github/workflows/auto-qa-harness.yml` is the FIRST
-      workflow file in the interface repo. Trigger is
-      `workflow_dispatch` ONLY for this first version so landing
-      it can't unexpectedly red-light unrelated PRs. Job:
+- [x] **3a — first CI workflow STAGED for promotion.**
+      `auto-qa/harness/ci/auto-qa-harness.yml.staged` (NEW)
+      contains the workflow YAML in version control. Job:
       `scenarios-catalog-drift` — checkout, setup Node 22, `npm
       ci` in `auto-qa/harness/`, run the catalog generator,
-      `git diff --exit-code scenarios/SCENARIOS.md`. Total
-      runtime expected <1 min (no browser, no Next.js).
-      Manually fire from the GitHub Actions UI to verify it
-      works against this repo's runner.
+      `git diff --exit-code scenarios/SCENARIOS.md`. Trigger
+      is `workflow_dispatch` ONLY for v1 so landing it can't
+      unexpectedly red-light unrelated PRs. Total runtime
+      expected <1 min.
+
+      **Why staged not live**: GitHub blocks OAuth Apps
+      without `workflow` scope from creating/modifying
+      `.github/workflows/*` files. The staging dance puts the
+      content under code review without a workflow-scoped
+      token, then a maintainer (or anyone with the right token)
+      promotes the file by copying it into
+      `.github/workflows/`. See
+      `auto-qa/harness/ci/README.md` for the promote command.
+
+- [ ] **3a-promote** — maintainer task: copy
+      `auto-qa/harness/ci/auto-qa-harness.yml.staged` into
+      `.github/workflows/auto-qa-harness.yml` + commit + push.
+      One-time setup; subsequent edits to the staged file can
+      be re-promoted the same way (or just edited directly in
+      `.github/workflows/` if the contributor has workflow
+      scope).
 - [ ] **3b — promote triggers**: after smoke-testing 3a
       manually, add `schedule: '0 4 * * *'` (nightly drift
       sweep) and `pull_request: paths: ['auto-qa/harness/**']`

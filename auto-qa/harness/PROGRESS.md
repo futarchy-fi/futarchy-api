@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase **7 slice 3a** (first CI workflow) landed on interface side. `.github/workflows/auto-qa-harness.yml` (FIRST workflow file in interface repo) runs the scenarios catalog drift check on `workflow_dispatch`. Schedule + scoped PR triggers stage as slice 3b after smoke-test. 21/21 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase **7 slice 3a** (CI workflow STAGED) landed on interface side. `auto-qa/harness/ci/auto-qa-harness.yml.staged` contains the scenarios-catalog drift-check workflow; awaiting one-time maintainer promotion to `.github/workflows/` (the bot's OAuth token lacks `workflow` scope). 21/21 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -926,26 +926,64 @@ Phase 7 slice 2 (partial branch) summary (this iteration on the interface side):
 
 Phase 7 slice 3a summary (this iteration on the interface side):
 
-- First GitHub Actions workflow file landed in the interface
-  repo: `.github/workflows/auto-qa-harness.yml`. Trigger is
-  `workflow_dispatch` ONLY for v1 (manual fire from GitHub
-  Actions UI) — landing the first workflow file can't
-  unexpectedly red-light unrelated PRs. Job runs the
-  scenarios:catalog drift check (`npm ci` in harness, regenerate
-  SCENARIOS.md, `git diff --exit-code`). Total expected runtime
-  <1 min — no browser, no Next.js dev server.
-- Local validation matched what CI will do: `npm ci` in
-  auto-qa/harness/ succeeded; catalog regenerated cleanly;
-  `git diff --exit-code` returned 0.
-- This single CI step ensures any PR adding/changing a scenario
-  also re-runs the catalog generator. Without it, SCENARIOS.md
-  silently drifts out of date.
-- Slice 3b (next): promote triggers to `schedule: '0 4 * * *'`
-  (nightly drift sweep) + `pull_request: paths:
-  ['auto-qa/harness/**']` (gate harness-touching PRs without
-  noise on unrelated PRs). Slice 3c: separate job that runs the
-  Playwright scenarios suite. Slice 3d: per-failure artifact
-  upload via actions/upload-artifact@v4.
+- **CI workflow STAGED** for promotion to `.github/workflows/`.
+  Slice 3a starts the path to harness checks running in CI
+  without requiring a developer to manually run anything.
+- What landed in the interface repo:
+  * `auto-qa/harness/ci/auto-qa-harness.yml.staged` (NEW) — the
+    workflow YAML in version control under a `.staged` extension
+    so GitHub Actions doesn't try to run it from this location.
+  * `auto-qa/harness/ci/README.md` (NEW) — explains the staging
+    dance + the promote command.
+- The workflow: trigger is `workflow_dispatch` ONLY for v1
+  (manual fire from GitHub Actions UI) — landing the first
+  workflow file can't unexpectedly red-light unrelated PRs.
+  Job: `actions/checkout@v4` → `actions/setup-node@v4` (Node 22,
+  npm cache keyed on auto-qa/harness/package-lock.json) →
+  `npm ci` in auto-qa/harness/ → `npm run scenarios:catalog` →
+  `git diff --exit-code auto-qa/harness/scenarios/SCENARIOS.md`.
+  Total runtime expected <1 min (no browser, no Next.js).
+- **Why staged not live**: GitHub blocks OAuth Apps without
+  `workflow` scope from creating/modifying `.github/workflows/*`
+  files. The bot's token is push-scoped only. The first iteration
+  tried to commit the workflow directly and the push got rejected:
+  `! [remote rejected] auto-qa -> auto-qa (refusing to allow an
+  OAuth App to create or update workflow
+  '.github/workflows/auto-qa-harness.yml' without 'workflow'
+  scope)`. Recovered via `git reset --soft HEAD~1` then
+  `mv .github/workflows/auto-qa-harness.yml
+  auto-qa/harness/ci/auto-qa-harness.yml.staged`,
+  `rm -rf .github`, plus the new ci/README.md. The staging dance
+  puts the content under code review + version control without
+  needing the workflow scope, then a maintainer (or anyone with
+  the right token) promotes by copying the file into
+  `.github/workflows/`.
+- Local validation of the workflow's logic matched what CI will
+  do: `npm ci` in auto-qa/harness/ succeeded with `found 0
+  vulnerabilities`; `npm run scenarios:catalog` regenerated
+  SCENARIOS.md cleanly; `git diff --exit-code` returned 0
+  (catalog already in sync).
+- Drift-check value-add (once promoted): the CI step ensures any
+  PR adding/changing a scenario also re-runs the catalog
+  generator. SCENARIOS.md is the human-readable bug-shape index;
+  without the drift check, it silently goes stale.
+- Promote command (one-time maintainer task on interface side):
+  `mkdir -p .github/workflows && cp
+  auto-qa/harness/ci/auto-qa-harness.yml.staged
+  .github/workflows/auto-qa-harness.yml && git add
+  .github/workflows/auto-qa-harness.yml && git commit -m
+  "ci: promote auto-qa harness scenarios-catalog-drift" &&
+  git push`. Pushes from a workflow-scoped token (or via the
+  GitHub web UI's "Add file" action) succeed where the bot's
+  token can't.
+- Slice 3b (next): once 3a is promoted + smoke-tested, broaden
+  triggers (`schedule: '0 4 * * *'` for nightly drift sweep +
+  `pull_request: paths: ['auto-qa/harness/**']` for gating
+  harness-touching PRs). Edit the staged file, commit, maintainer
+  re-promotes. Slice 3c: separate job running the Playwright
+  scenarios suite (heavier; needs browser install + dev server).
+  Slice 3d: per-failure `actions/upload-artifact@v4` block
+  (Playwright traces / screenshots / videos).
 
 Slice 4c v3b summary (previous iteration on the interface side):
 
