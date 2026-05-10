@@ -116,6 +116,13 @@ function startFixture({
     // Tests override to simulate schema rename or type drop. Set to
     // null to omit __schema entirely (introspection-disabled servers).
     registrySchemaTypes = ['Query', 'ProposalEntity', 'Organization', 'Aggregator'],
+    // For apiRegistryGraphqlForwardsIntrospection (slice 4d-scenarios-more).
+    // When true, the api passthrough (`/registry/graphql`) STRIPS
+    // __schema even if the underlying indexer would return it —
+    // simulating a proxy with introspection-disabled-at-api-layer
+    // (e.g., Apollo Gateway with introspection: false). Default
+    // false (api forwards introspection like the indexer does).
+    apiRegistryStripsIntrospection = false,
     candlesDirectTypename = 'Query',
     // __schema introspection types for candlesIndexerSchemaHasRequiredTypes
     // (slice 4d-scenarios-more). Default lists Pool, Swap, Candle (the
@@ -511,9 +518,16 @@ function startFixture({
                         return;
                     }
                     const driftedRegistry = apiRegistryDriftFn(buildRegistry());
-                    response.end(JSON.stringify({
-                        data: { __typename: registryTypename, ...driftedRegistry },
-                    }));
+                    const data = { __typename: registryTypename, ...driftedRegistry };
+                    // Forward __schema introspection by default (slice
+                    // 4d-scenarios-more apiRegistryGraphqlForwardsIntrospection).
+                    // apiRegistryStripsIntrospection=true simulates a
+                    // proxy that disables introspection at the api
+                    // layer for security.
+                    if (registrySchemaTypes !== null && !apiRegistryStripsIntrospection) {
+                        data.__schema = { types: registrySchemaTypes.map((name) => ({ name })) };
+                    }
+                    response.end(JSON.stringify({ data }));
                     return;
                 }
                 if (req.url === '/candles/graphql' && req.method === 'POST') {
@@ -1035,6 +1049,84 @@ test('runAllInvariants — failure: apiRegistryMatchesDirect proposalEntities WH
         const inv = results.find((r) => r.name === 'apiRegistryMatchesDirect');
         assert.equal(inv.ok, false);
         assert.match(inv.error, /proposalEntities\[0\]\.id: api=stale-cached-prop-from-yesterday ≠ direct=mock-prop-entity-0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiRegistryGraphqlForwardsIntrospection happy: api forwards __schema (default fixture)', async () => {
+    const fx = await startFixture();  // default apiRegistryStripsIntrospection=false
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'apiRegistryGraphqlForwardsIntrospection');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /api forwards __schema; types include ProposalEntity, Organization, Aggregator/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiRegistryGraphqlForwardsIntrospection api proxy strips introspection (production-style lockdown)', async () => {
+    // Common bug: production GraphQL proxy ships with introspection
+    // disabled at the api layer for security. Indexer SUPPORTS
+    // introspection (DIRECT sister probe still passes), but api
+    // strips __schema from every response. Distinct failure mode
+    // from "indexer schema regression" — diagnostics MUST point at
+    // the api layer, not the indexer.
+    const fx = await startFixture({ apiRegistryStripsIntrospection: true });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiRegistryGraphqlForwardsIntrospection');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /api \/registry\/graphql __schema\.types not an array.*proxy stripped introspection/);
+        // DIRECT sister STILL passes — indexer is fine, only api
+        // proxy is broken. Demonstrates the per-layer diagnostic
+        // precision the split provides.
+        const sister = results.find((r) => r.name === 'registryIndexerSchemaHasRequiredTypes');
+        assert.equal(sister.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiRegistryGraphqlForwardsIntrospection BOTH layers broken (indexer schema disabled — both probes fail)', async () => {
+    // Edge case: introspection disabled at the indexer entirely
+    // (registrySchemaTypes: null). The api passthrough also returns
+    // no __schema (because there's nothing to forward). Both probes
+    // fail; cross-checking the two pinpoints "the indexer is the
+    // root cause" rather than just the api.
+    const fx = await startFixture({ registrySchemaTypes: null });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiRegistryGraphqlForwardsIntrospection');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /__schema\.types not an array/);
+        // Sister DIRECT probe ALSO fails — root cause is indexer.
+        const sister = results.find((r) => r.name === 'registryIndexerSchemaHasRequiredTypes');
+        assert.equal(sister.ok, false);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiRegistryGraphqlForwardsIntrospection api forwards but indexer schema is incomplete (api correctly proxies the broken schema)', async () => {
+    // Edge case: api forwards introspection correctly, but the
+    // upstream indexer's schema is missing a required type. The
+    // api-side probe surfaces this with a different error message
+    // (indicates the indexer's schema regressed AND api is fine,
+    // since api correctly forwarded the broken schema).
+    const fx = await startFixture({
+        registrySchemaTypes: ['Query', 'ProposalEntity', 'Organization'],  // missing Aggregator
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiRegistryGraphqlForwardsIntrospection');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /api passthrough returned __schema but missing required type\(s\): Aggregator.*registry indexer schema regressed AND api still forwards introspection/);
     } finally {
         await fx.stop();
     }

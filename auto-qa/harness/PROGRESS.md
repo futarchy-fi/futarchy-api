@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent + anvilSnapshotCapabilityPresent + swapAmountsAllRowsPositive + apiHealthBodyShape + anvilTimeWarpCapabilityPresent + apiWarmerBodyShape + candlesIndexerSchemaHasRequiredTypes + registryIndexerSchemaHasRequiredTypes + candleVolumesAllRowsNonNegative + candleOHLCAllRowsConsistent)** on api side + Phase 7 slice **4d-by-layer-script** (`npm run scenarios:by-layer` prints summary table + per-layer detail — catalog ergonomics for navigating 55 invariants at a glance) (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **55 invariants** (10 api + 4 api↔candles + 2 api↔registry + 21 orchestrator↔candles + 8 orchestrator↔registry + 10 orchestrator↔chain — per `scenarios:by-layer`); 189 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice 3e (smoke-tests CI) STAGED on api side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator + apiUnifiedChartHasObservabilityHeaders + anvilClientVersionMentionsAnvil + chartCandlesAreSubsetOfDirect + anvilGasPricePresent + apiUnifiedChartXCacheTtlPresent + anvilNetworkVersionMatchesChainId + anvilImpersonationCapabilityPresent + anvilSnapshotCapabilityPresent + swapAmountsAllRowsPositive + apiHealthBodyShape + anvilTimeWarpCapabilityPresent + apiWarmerBodyShape + candlesIndexerSchemaHasRequiredTypes + registryIndexerSchemaHasRequiredTypes + candleVolumesAllRowsNonNegative + candleOHLCAllRowsConsistent + apiRegistryGraphqlForwardsIntrospection)** on api side + Phase 7 slice **4d-by-layer-script** (`npm run scenarios:by-layer` prints summary table + per-layer detail — catalog ergonomics for navigating 55+ invariants at a glance) (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **56 invariants** (10 api + 4 api↔candles + 3 api↔registry + 21 orchestrator↔candles + 8 orchestrator↔registry + 10 orchestrator↔chain — per `scenarios:by-layer`); api-layer introspection-passthrough probe landed (cross-checks with the direct sister probe to pinpoint api vs indexer when introspection breaks); 193 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,67 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-by-layer-script (catalog ergonomics) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (apiRegistryGraphqlForwardsIntrospection) summary (this iteration on the api side):
+
+- **First api-layer introspection-passthrough probe**.
+  Sister to registryIndexerSchemaHasRequiredTypes (the
+  DIRECT-side introspection probe). Same `__schema` query,
+  but routed through the API LAYER instead of direct.
+
+- **56-invariant milestone**. Layer breakdown: 10 api +
+  4 api↔candles + **3 api↔registry (was 2)** + 21
+  orchestrator↔candles + 8 orchestrator↔registry +
+  10 orchestrator↔chain.
+
+- **The bug class**: many production GraphQL proxies
+  (Apollo Gateway, Hasura, etc.) ship with introspection
+  disabled by default at the proxy layer for security —
+  even when the upstream indexer supports it. If a deploy
+  accidentally turns on that toggle, harness scenarios
+  that introspect through the api layer silently break,
+  BUT the DIRECT-side sister still passes — making the
+  actual cause hard to find without this distinct probe.
+
+- **Diagnostic-precision pattern**: pairing the api-side
+  + direct-side probes lets triage pinpoint which layer
+  broke:
+  | api probe | direct probe | meaning |
+  |-----------|--------------|---------|
+  | ✓ | ✓ | both layers fine |
+  | ✗ | ✓ | **api proxy stripped introspection** |
+  | ✓ | ✗ | **indexer schema regressed** (api correctly forwarded the broken schema) |
+  | ✗ | ✗ | indexer is the root cause (api just forwarded nothing) |
+
+  Each combination has a distinct error message
+  documenting the cross-check, so engineers can read the
+  combined signal without guessing.
+
+- **Fixture extension**: api `/registry/graphql` handler
+  now includes `__schema` in its passthrough response
+  by default (mirroring direct). New knob
+  `apiRegistryStripsIntrospection = false` simulates
+  proxy-layer disablement (true = strip __schema even
+  when indexer supports it).
+
+- **Smoke tests**: 4 new (default api forwards happy;
+  failure api strips introspection — DIRECT sister STILL
+  passes, demonstrating per-layer pinpointing; failure
+  BOTH layers broken — both probes fail, root cause is
+  indexer; failure api correctly forwards but indexer
+  schema is incomplete — api-side error message reflects
+  that). 193/193 pass (was 189).
+
+- **Slice 4 progress: ~99% (43+ of ~30 sub-slices)**. The
+  api↔registry layer (previously thinnest at 2 invariants)
+  is now beefed up to 3, and the introspection coverage
+  triad is complete: DIRECT-side (registry + candles
+  indexers) + api-layer-passthrough (registry). The
+  candles api-layer introspection probe is a natural
+  next slice. Still to add (per CHECKLIST):
+  candlesAggregation, conservation, TWAP monotonicity,
+  cross-run rate monotonicity.
+
+Phase 7 slice 4d-by-layer-script (catalog ergonomics) summary (previous iteration on the api side):
 
 - **Tooling slice** (no new invariant). At 55 invariants
   the dry-run flat catalog is hard to scan. Adds

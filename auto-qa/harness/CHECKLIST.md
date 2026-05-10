@@ -789,11 +789,23 @@ freshly-generated addresses as recipients; documented in
       orchestrator↔registry=8 (= 55 total). Smoke test
       added; 189/189 pass.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). **Now 55 invariants**:
-      10 api + 4 api↔candles + 2 api↔registry + 21
+      PROGRESS.md's invariant tables). **Now 56 invariants**:
+      10 api + 4 api↔candles + 3 api↔registry + 21
       orchestrator↔candles + 8 orchestrator↔registry +
       10 orchestrator↔chain (per `scenarios:by-layer`).
-      189 smoke tests green.
+      193 smoke tests green.
+      `apiRegistryGraphqlForwardsIntrospection` added this
+      slice — first api-layer introspection-passthrough
+      probe; sister to registryIndexerSchemaHasRequiredTypes
+      (DIRECT side). Catches GraphQL proxies that disable
+      introspection at the api layer for security (Apollo
+      Gateway, Hasura ship with this default-off). Pairs
+      with the DIRECT sister to pinpoint WHICH layer
+      broke: api✗+direct✓ = api stripped introspection;
+      api✓+direct✗ = indexer schema regressed (api
+      correctly forwarded the broken schema); both✗ =
+      indexer is root cause. The api↔registry layer
+      (previously thinnest at 2 invariants) is now at 3.
       `candleOHLCAllRowsConsistent` added this slice —
       third iterate-all-rows extension; COMPLETES the
       iterate-all-rows TRIAD on the indexer's main

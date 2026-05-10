@@ -799,6 +799,66 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'apiRegistryGraphqlForwardsIntrospection',
+        description: 'api /registry/graphql forwards __schema introspection queries (catches proxies that strip introspection at the api layer for security — silently breaks harness scenarios that depend on schema validation through api)',
+        layer: 'api↔registry',
+        check: async (ctx) => {
+            // Sister to registryIndexerSchemaHasRequiredTypes (DIRECT
+            // side, on orchestrator↔registry layer). This one checks
+            // the SAME __schema query through the API layer instead
+            // of direct, verifying the api proxy correctly forwards
+            // introspection queries to the upstream indexer.
+            //
+            // The bug class: many production GraphQL proxies (Apollo
+            // Gateway, Hasura, etc.) ship with introspection disabled
+            // by default at the proxy layer for security — even when
+            // the upstream indexer supports it. If a deploy
+            // accidentally turns on that toggle, harness scenarios
+            // that introspect through the api layer silently break,
+            // BUT registryIndexerSchemaHasRequiredTypes (DIRECT)
+            // still passes — making the actual cause hard to find
+            // without this distinct probe.
+            //
+            // Why a separate api-layer probe (vs. only the direct
+            // sister):
+            //   * Distinct failure mode — the api proxy can be
+            //     misconfigured independently of the indexer
+            //   * Diagnostic precision — failure says "the api
+            //     stripped introspection" instead of "the indexer
+            //     schema is broken"
+            //   * Coverage symmetry — apiCandlesMatchesDirect /
+            //     apiRegistryMatchesDirect already cover data
+            //     passthrough; this covers introspection passthrough
+            //
+            // Vacuous when api passthrough returns null __schema —
+            // could be EITHER api stripping or indexer not supporting
+            // introspection. The DIRECT sister probe distinguishes
+            // those two cases (it queries the indexer directly; if
+            // it ALSO returns null, the indexer is the cause; if it
+            // returns valid __schema but api passthrough doesn't,
+            // the api is stripping). For triage, both probes
+            // together pinpoint the layer.
+            const REQUIRED = ['ProposalEntity', 'Organization', 'Aggregator'];
+            const j = await fetchJson(`${ctx.apiUrl}/registry/graphql`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ __schema { types { name } } }',
+                }),
+            });
+            const types = j?.data?.__schema?.types;
+            if (!Array.isArray(types)) {
+                throw new Error(`api /registry/graphql __schema.types not an array — proxy stripped introspection or returned a malformed response (got ${JSON.stringify(j)?.slice(0, 100)}); cross-check with registryIndexerSchemaHasRequiredTypes to determine if the cause is api or indexer`);
+            }
+            const present = new Set(types.map((t) => t?.name).filter(Boolean));
+            const missing = REQUIRED.filter((name) => !present.has(name));
+            if (missing.length > 0) {
+                throw new Error(`api passthrough returned __schema but missing required type(s): ${missing.join(', ')} — registry indexer schema regressed AND api still forwards introspection (cross-check with registryIndexerSchemaHasRequiredTypes)`);
+            }
+            return { ok: true, detail: `api forwards __schema; types include ${REQUIRED.join(', ')} (out of ${present.size} total)` };
+        },
+    },
+    {
         name: 'apiRegistryMatchesDirect',
         description: 'registry entities returned via api passthrough match direct indexer (proposalEntities + organizations + aggregators all checked in one query)',
         layer: 'api↔registry',
