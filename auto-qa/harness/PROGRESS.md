@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 23 invariants — 5 api-internal + 15 indexer + 3 chain-layer; first true api↔indexer MATCH check landed; 56 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 24 invariants — 5 api-internal + 16 indexer + 3 chain-layer; both candles + registry now have api↔direct MATCH coverage; 61 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,88 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (apiCandlesMatchesDirect) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (apiRegistryMatchesDirect) summary (this iteration on the api side):
+
+- **Cross-layer MATCH pattern extends from candles to registry**.
+  Last iteration shipped `apiCandlesMatchesDirect` (first true
+  api↔indexer agreement check). This iteration ships the registry
+  analog:
+  * `apiRegistryMatchesDirect` — single GraphQL query touches all
+    THREE entity types (proposalEntities + organizations +
+    aggregators) in one round-trip, then per-entity length check
+    + per-entity pair-wise id check.
+
+- **Why a single 3-entity query (vs three single-entity invariants)**:
+  Per-entity-type cache granularity is a real failure mode — the api
+  may cache proposalEntities while keeping organizations fresh, or
+  vice versa. A single multi-entity query catches the inconsistency
+  in one probe AND attributes the failure to the SPECIFIC entity that
+  drifted (the error message names "organizations" or
+  "aggregators[0].id" rather than just "registry mismatch"). Three
+  separate invariants would also work but would triple the network
+  round-trip count and make the failure aggregation noisier.
+
+- **Bug classes caught (in addition to the candles-side ones)**:
+  * Per-entity cache granularity — api caches proposalEntities but
+    not organizations (or any subset combination). Wholesale-cache
+    or wholesale-fresh scenarios pass; selective caching fails.
+  * Adapter rewriting per-entity — a regression that only mutates
+    aggregators (e.g., a metadata transformer applied to the wrong
+    entity type) lights up specifically.
+  * Whole-row swap — same length, different rows. Length-only
+    check would miss this; pair-wise id check catches it. Test
+    case: api returns "stale-cached-prop-from-yesterday" with the
+    same length=1; id mismatch caught.
+
+- **Fixture refactor** (this iteration):
+  * New `buildRegistry()` function — extracted alongside
+    buildPools / buildSwaps / buildCandles. Returns
+    `{proposalEntities, organizations, aggregators}` in one object.
+  * `/registry/graphql` (api passthrough) now returns full registry
+    data by default (was just `{__typename}`); routed through new
+    `apiRegistryDriftFn` hook so tests can simulate per-entity
+    drift. The existing `apiCanReachRegistry` invariant only
+    checks `__typename === 'Query'` so the richer response is
+    backward-compatible.
+  * `/registry-direct/graphql` simplified to a single line using
+    `buildRegistry()` (was 6 lines of inline construction).
+  * If `registryDirectDown=true`, the api passthrough still
+    returns `{__typename}` (matching prior behavior — preserves
+    apiCanReachRegistry semantics under upstream-down).
+
+- **Smoke test coverage** — 5 new tests:
+  * apiRegistryMatchesDirect happy: 1 of each entity, all match
+  * vacuously matches when all 3 entity counts are 0 (length 0
+    on both sides — the existence checks fail but match is correct)
+  * failure: organizations length mismatch (per-entity drift —
+    verifies the SPECIFIC entity is named in the error;
+    distinguishes per-entity granularity)
+  * failure: aggregator id rewrite (adapter mutates a row)
+  * failure: proposalEntities WHOLE-row swap (same length,
+    different rows — verifies pair-wise id check goes deeper than
+    length check)
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 61/61 pass (617ms — was 56/56)
+  * `npm run scenarios:dry` → exits 0; lists 24 invariants in
+    catalog
+  * `docker compose config --quiet` still passes; 8-service list
+    unchanged
+
+- Slice 4 progress: ~94% (24 of ~26 sub-slices total). Both
+  candles + registry now have api↔direct MATCH coverage —
+  parity with the existence + data-aware probes. The catalog
+  has 24 invariants now: 5 api-internal + 16 indexer (2
+  liveness + 6 data-aware + 4 single-row data-shape + 2
+  multi-row data-shape + 2 cross-layer match) + 3 chain-layer.
+  Symmetric with the previous iteration: as candles got
+  apiCandlesMatchesDirect, registry now gets the analog. Next
+  natural moves are cross-entity invariants like
+  candlesAggregation (Candle.volume = sum-of-Swap.amount within
+  period) which combine multiple entity types from a single
+  endpoint.
+
+Phase 7 slice 4d-scenarios-more (apiCandlesMatchesDirect) summary (previous iteration on the api side):
 
 - **First true api↔indexer MATCH invariant in the catalog**.
   Existing api↔* invariants (apiCanReachRegistry,

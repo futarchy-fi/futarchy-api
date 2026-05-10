@@ -191,6 +191,62 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'apiRegistryMatchesDirect',
+        description: 'registry entities returned via api passthrough match direct indexer (proposalEntities + organizations + aggregators all checked in one query)',
+        layer: 'api↔registry',
+        check: async (ctx) => {
+            // Mirror of apiCandlesMatchesDirect (previous slice) but
+            // for registry. Single query touches all three entity
+            // types so a per-entity drift (e.g., api caches
+            // proposalEntities but not organizations) lights up
+            // distinguishably from a wholesale-cache scenario.
+            //
+            // Bug shapes caught (in addition to the candles-side
+            // ones — caching drift, adapter rewriting, schema-
+            // translation): per-entity-type cache granularity
+            // mismatch. The api's GraphQL forward layer doesn't
+            // necessarily cache uniformly across entity types;
+            // a regression that introduces selective caching can
+            // make some entities stale while others stay fresh.
+            const query = JSON.stringify({
+                query: '{ proposalEntities(first: 5) { id } organizations(first: 5) { id } aggregators(first: 5) { id } }',
+            });
+            const fetchOpts = {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: query,
+            };
+            const [viaApi, viaDirect] = await Promise.all([
+                fetchJson(`${ctx.apiUrl}/registry/graphql`, fetchOpts),
+                fetchJson(ctx.registryUrl, fetchOpts),
+            ]);
+            const apiData = viaApi?.data;
+            const directData = viaDirect?.data;
+            if (!apiData || !directData) {
+                throw new Error(`response shape: api=${JSON.stringify(viaApi)?.slice(0, 80)}, direct=${JSON.stringify(viaDirect)?.slice(0, 80)}`);
+            }
+            const entities = ['proposalEntities', 'organizations', 'aggregators'];
+            const summary = [];
+            for (const ent of entities) {
+                const apiArr = apiData[ent];
+                const directArr = directData[ent];
+                if (!Array.isArray(apiArr) || !Array.isArray(directArr)) {
+                    throw new Error(`${ent}: shape mismatch (api=${typeof apiArr}, direct=${typeof directArr})`);
+                }
+                if (apiArr.length !== directArr.length) {
+                    throw new Error(`${ent}: length mismatch — api=${apiArr.length}, direct=${directArr.length} (per-entity cache drift or adapter dropping rows)`);
+                }
+                for (let i = 0; i < apiArr.length; i++) {
+                    if (apiArr[i].id !== directArr[i].id) {
+                        throw new Error(`${ent}[${i}].id: api=${apiArr[i].id} ≠ direct=${directArr[i].id} (api may be serving cached/translated rows for ${ent})`);
+                    }
+                }
+                summary.push(`${ent}=${apiArr.length}`);
+            }
+            return { ok: true, detail: `registry match: ${summary.join(', ')}` };
+        },
+    },
+    {
         name: 'apiCandlesMatchesDirect',
         description: 'latest Candle returned via api passthrough matches the one returned by direct indexer query (catches api caching drift, adapter rewriting, schema translation bugs)',
         layer: 'api↔candles',

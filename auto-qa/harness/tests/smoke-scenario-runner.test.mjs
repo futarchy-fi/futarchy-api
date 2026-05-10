@@ -91,6 +91,11 @@ function startFixture({
     // to simulate api caching stale data, adapter dropping fields,
     // schema-translation drift, etc. Default identity (no drift).
     apiCandlesDriftFn = (candles) => candles,
+    // Drift hook for apiRegistryMatchesDirect (slice 4d-scenarios-more):
+    // takes the registry data object the direct endpoint would return
+    // ({proposalEntities, organizations, aggregators}) and rewrites it
+    // BEFORE the api passthrough returns it. Default identity.
+    apiRegistryDriftFn = (data) => data,
     // JSON-RPC mock at /rpc (slice 4d-scenarios-more rateSanity).
     // sDAIRateRaw is the BigInt raw rate to return; default is 1.2e18.
     // Set to 0n to simulate a broken contract; null to make eth_call error.
@@ -120,6 +125,14 @@ function startFixture({
             ? Number(swapTimestamps[i])
             : Number(latestSwapTimestamp) - i * swapTimestampStep;
         return row;
+    });
+    const buildRegistry = () => ({
+        proposalEntities: Array.from({ length: registryProposalEntitiesCount },
+            (_, i) => ({ id: `mock-prop-entity-${i}` })),
+        organizations: Array.from({ length: registryOrganizationsCount },
+            (_, i) => ({ id: `mock-org-${i}` })),
+        aggregators: Array.from({ length: registryAggregatorsCount },
+            (_, i) => ({ id: `mock-agg-${i}` })),
     });
     const buildCandles = () => Array.from({ length: candlesCandlesCount }, (_, i) => {
         const row = { id: `mock-candle-${i}` };
@@ -161,8 +174,24 @@ function startFixture({
                     return;
                 }
                 if (req.url === '/registry/graphql' && req.method === 'POST') {
+                    // Same pattern as /candles/graphql (slice 4d-
+                    // scenarios-more): the api passthrough returns
+                    // the SAME data as /registry-direct/graphql by
+                    // default (because api literally forwards), but
+                    // routed through apiRegistryDriftFn so tests can
+                    // simulate per-entity drift.
                     response.setHeader('content-type', 'application/json');
-                    response.end(JSON.stringify({ data: { __typename: registryTypename } }));
+                    if (registryDirectDown) {
+                        // If upstream is down, api returns just
+                        // __typename — preserves apiCanReachRegistry
+                        // semantics.
+                        response.end(JSON.stringify({ data: { __typename: registryTypename } }));
+                        return;
+                    }
+                    const driftedRegistry = apiRegistryDriftFn(buildRegistry());
+                    response.end(JSON.stringify({
+                        data: { __typename: registryTypename, ...driftedRegistry },
+                    }));
                     return;
                 }
                 if (req.url === '/candles/graphql' && req.method === 'POST') {
@@ -195,17 +224,8 @@ function startFixture({
                 if (req.url === '/registry-direct/graphql' && req.method === 'POST') {
                     if (registryDirectDown) { response.statusCode = 502; response.end('indexer down'); return; }
                     response.setHeader('content-type', 'application/json');
-                    // Return a superset response so __typename + data probes
-                    // can be made against the same endpoint without the
-                    // fixture having to parse the GraphQL query body.
-                    const proposalEntities = Array.from({ length: registryProposalEntitiesCount },
-                        (_, i) => ({ id: `mock-prop-entity-${i}` }));
-                    const organizations = Array.from({ length: registryOrganizationsCount },
-                        (_, i) => ({ id: `mock-org-${i}` }));
-                    const aggregators = Array.from({ length: registryAggregatorsCount },
-                        (_, i) => ({ id: `mock-agg-${i}` }));
                     response.end(JSON.stringify({
-                        data: { __typename: registryDirectTypename, proposalEntities, organizations, aggregators },
+                        data: { __typename: registryDirectTypename, ...buildRegistry() },
                     }));
                     return;
                 }
@@ -447,6 +467,111 @@ test('runAllInvariants — failure: apiCandlesMatchesDirect id drift (adapter re
         const inv = results.find((r) => r.name === 'apiCandlesMatchesDirect');
         assert.equal(inv.ok, false);
         assert.match(inv.error, /candles\[0\]\.id: api=rewritten-by-adapter ≠ direct=mock-candle-0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiRegistryMatchesDirect happy: api passthrough returns same registry data as direct', async () => {
+    // Defaults: 1 proposalEntity + 1 organization + 1 aggregator on
+    // both sides, all matching ids.
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'apiRegistryMatchesDirect');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /proposalEntities=1, organizations=1, aggregators=1/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiRegistryMatchesDirect vacuously matches when all entity counts are 0', async () => {
+    const fx = await startFixture({
+        registryProposalEntitiesCount: 0,
+        registryOrganizationsCount: 0,
+        registryAggregatorsCount: 0,
+    });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'apiRegistryMatchesDirect');
+        // Empty arrays still match (length 0 == 0 for all 3 entity types).
+        // Note: this fails the existence checks but apiRegistryMatchesDirect
+        // is purely about agreement; that's correct behavior.
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /proposalEntities=0, organizations=0, aggregators=0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiRegistryMatchesDirect organizations length mismatch (per-entity cache drift)', async () => {
+    // Per-entity drift: api drops one organization but proposalEntities
+    // and aggregators are fine. Tests that the loop reports the
+    // SPECIFIC entity that diverged, not just "registry mismatch".
+    const fx = await startFixture({
+        registryOrganizationsCount: 3,
+        apiRegistryDriftFn: (data) => ({
+            ...data,
+            organizations: data.organizations.slice(0, 2),  // api: 2, direct: 3
+        }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiRegistryMatchesDirect');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /organizations: length mismatch.*api=2.*direct=3/);
+        // Existence + match checks for the OTHER entity types still pass —
+        // proves the per-entity granularity is real
+        const props = results.find((r) => r.name === 'registryHasProposalEntities');
+        assert.equal(props.ok, true);
+        const orgs = results.find((r) => r.name === 'registryHasOrganizations');
+        assert.equal(orgs.ok, true);  // direct still has 3, existence is fine
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiRegistryMatchesDirect aggregator id rewrite (adapter mutates registry rows)', async () => {
+    const fx = await startFixture({
+        registryAggregatorsCount: 2,
+        apiRegistryDriftFn: (data) => ({
+            ...data,
+            aggregators: data.aggregators.map((a, i) =>
+                i === 0 ? { ...a, id: 'rewritten-by-adapter' } : a
+            ),
+        }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiRegistryMatchesDirect');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /aggregators\[0\]\.id: api=rewritten-by-adapter ≠ direct=mock-agg-0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiRegistryMatchesDirect proposalEntities WHOLE-row swap (not just length)', async () => {
+    // api returns SAME length but DIFFERENT proposal — caches a stale
+    // earlier proposal that was since superseded. Length-only check
+    // would miss this; pair-wise id check catches it.
+    const fx = await startFixture({
+        registryProposalEntitiesCount: 1,
+        apiRegistryDriftFn: (data) => ({
+            ...data,
+            proposalEntities: [{ id: 'stale-cached-prop-from-yesterday' }],
+        }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiRegistryMatchesDirect');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /proposalEntities\[0\]\.id: api=stale-cached-prop-from-yesterday ≠ direct=mock-prop-entity-0/);
     } finally {
         await fx.stop();
     }
@@ -1103,6 +1228,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /apiCanReachRegistry/);
     assert.match(r.stdout, /apiCanReachCandles/);
     assert.match(r.stdout, /apiCandlesMatchesDirect/);
+    assert.match(r.stdout, /apiRegistryMatchesDirect/);
     assert.match(r.stdout, /registryDirect/);
     assert.match(r.stdout, /candlesDirect/);
     assert.match(r.stdout, /registryHasProposalEntities/);

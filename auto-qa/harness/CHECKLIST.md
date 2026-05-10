@@ -750,21 +750,23 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 23 invariants:
-      5 api-internal + 15 indexer probes (2 `__typename`
+      PROGRESS.md's invariant tables). Now 24 invariants:
+      5 api-internal + 16 indexer probes (2 `__typename`
       liveness + 6 data-aware coverage + 4 single-row
-      data-SHAPE + 2 multi-row data-SHAPE + 1 CROSS-LAYER
-      MATCH: `apiCandlesMatchesDirect` added this slice —
-      first true api↔indexer agreement check; queries the
-      same candles via api passthrough AND direct in
-      parallel, asserts ids + times match. Catches api
-      caching drift, adapter rewriting, schema-translation
-      bugs that no existing invariant can see) + 3
-      chain-layer probes. 56 smoke tests green. Still
-      to add: probabilityBounds, candlesAggregation
-      (Candle aggregates derive correctly from contained
-      Swaps), chartShape, conservation, cross-run
-      monotonicity on rateSanity.
+      data-SHAPE + 2 multi-row data-SHAPE + 2 CROSS-LAYER
+      MATCH: `apiCandlesMatchesDirect` (previous slice) +
+      `apiRegistryMatchesDirect` (this slice — single
+      query touches all 3 registry entity types
+      proposalEntities/organizations/aggregators; parallel
+      to api + direct, per-entity length + pair-wise id
+      compare. Catches per-entity cache drift like "api
+      caches proposalEntities but not organizations" that
+      a single-entity check would miss)) + 3 chain-layer
+      probes. 61 smoke tests green. Still to add:
+      probabilityBounds, candlesAggregation (Candle
+      aggregates derive correctly from contained Swaps),
+      chartShape (api unified-chart vs indexer raw),
+      conservation, cross-run monotonicity on rateSanity.
 - [x] **4d-activate — orchestrator block UNCOMMENTED.**
       Replaced the `tail -f /dev/null` placeholder with
       `node orchestrator/scenario-runner.mjs`. Dropped the
