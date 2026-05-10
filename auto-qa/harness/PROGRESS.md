@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **32 invariants** — 8 api-internal + 21 indexer + 3 chain-layer; **all 3 documented /api/v* endpoints now have shape coverage** (closes the api-endpoint-shape arc); 93 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **33 invariants** — 8 api-internal + 21 indexer + 4 chain-layer; first chain-layer time-shape probe landed; 97 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,88 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (apiMarketEventsShape) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (anvilLatestBlockSensible) summary (this iteration on the api side):
+
+- **First chain-layer TIME-SHAPE probe**. Mirrors the
+  pattern that already exists at the indexer layer
+  (swapTimestampSensible for swaps, candleTimeMonotonic
+  for candles) but applied to the chain itself:
+  * `anvilLatestBlockSensible` — calls
+    `eth_getBlockByNumber('latest', false)`, asserts
+    block.hash is a valid 0x + 64-hex string AND
+    block.timestamp is in [2020-01-01, now+1d].
+
+- **Why count-only block-number probe isn't enough**:
+  anvilBlockNumber asserts `eth_blockNumber > 0`. That
+  passes when:
+  * Chain is alive — but its time source is broken
+    (year 2099 timestamps, year 1970 timestamps)
+  * Fork pinned at frozen block — `latest` returns
+    structurally-broken block (null hash, '0x' empty
+    hash)
+  * Anvil bug returns a block but the hash field is
+    a non-hex string
+  All of these would let downstream invariants pass
+  (apiHealth, candlesHasPools, etc.) even though the
+  fork is structurally compromised.
+
+- **Bug shapes caught**:
+  * Stuck clock — chain's time source desynced
+  * Wrong fork era — fork pinned to a pre-2020
+    state OR clock skewed forward
+  * Garbage block — hash structurally invalid
+    (anvil bug, misconfigured RPC returning '0x'
+    or null)
+  * Genesis-only state — `latest` returns block 0
+    with sane fields but old timestamp
+
+- **Range choice [2020-01-01, now+1d]**: same as
+  swapTimestampSensible. Keeps the catalog's notion
+  of "sensible time" consistent across layers
+  (chain ↔ indexer). 2020-01-01 is well before any
+  Gnosis activity we care about (Gnosis Chain
+  launched Dec 2018, but futarchy didn't deploy
+  until 2024). +1d clock-skew bound matches NTP
+  expectations.
+
+- **Fixture extension**:
+  * RPC mock now responds to `eth_getBlockByNumber`
+    with `{hash, timestamp, number, parentHash}`.
+  * New `latestBlockHash` / `latestBlockTimestampHex`
+    knobs. Defaults: hash is a valid 32-byte hex
+    string; timestamp is "1 minute ago".
+  * Tests use the knobs to simulate stuck-clock,
+    skewed-clock, and garbage-hash scenarios.
+
+- **Smoke test coverage** — 4 new tests:
+  * happy: recent timestamp + valid hash
+  * failure: stuck clock (timestamp = 0); verifies
+    anvilBlockNumber STILL passes — distinguishes
+    "block exists" from "block has sensible time"
+  * failure: clock skewed forward to year 2099
+  * failure: garbage hash (too short)
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 97/97 pass (1073ms — was
+    93/93)
+  * `npm run scenarios:dry` → exits 0; lists 33
+    invariants in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: 33 invariants now: 8 api-internal
+  + 21 indexer + 4 chain-layer (was 3 —
+  anvilLatestBlockSensible added). Chain-layer
+  coverage now spans count (anvilBlockNumber),
+  identity (anvilChainId), structural+time
+  (anvilLatestBlockSensible), AND contract state
+  (rateSanity). Each addresses a distinct chain
+  failure mode. Remaining invariants per CHECKLIST:
+  probabilityBounds, candlesAggregation, full
+  chartShape match, conservation, cross-run rate
+  monotonicity.
+
+Phase 7 slice 4d-scenarios-more (apiMarketEventsShape) summary (previous iteration on the api side):
 
 - **Closes the api-endpoint-shape arc**. Three iterations
   ago: apiSpotCandlesHappyPath. Two iterations ago:

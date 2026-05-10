@@ -750,21 +750,18 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 32 invariants:
-      8 api-internal + 21 indexer probes + 3 chain-layer.
-      `apiMarketEventsShape` added this slice — third
-      and final api endpoint shape probe, closing the
-      3-of-3 documented /api/v* endpoint coverage arc.
-      Calls /api/v1/market-events/proposals/:id/prices
-      expecting 200 + JSON with conditional_yes/no
-      (price_usd + pool_id), spot.price_usd, and
-      timeline.{start, end}. The minimal contract every
-      consumer in interface/ depends on. Pairs with
-      apiSpotCandlesHappyPath (lightest path) and
-      apiUnifiedChartShape (heaviest path) — market-events
-      sits in the middle (registry resolve + pool fetch
-      + currency rate, no candle aggregation). 93 smoke
-      tests green. Still to add: probabilityBounds,
+      PROGRESS.md's invariant tables). Now 33 invariants:
+      8 api-internal + 21 indexer probes + 4 chain-layer.
+      `anvilLatestBlockSensible` added this slice —
+      first chain-layer time-shape probe, mirrors the
+      pattern of swapTimestampSensible / candleTimeMonotonic
+      at the chain layer. Calls eth_getBlockByNumber(latest)
+      and asserts hash is a valid 0x+64hex string and
+      timestamp ∈ [2020-01-01, now+1d]. Catches
+      stuck-clock bugs, wrong-fork-era misconfiguration,
+      and garbage block responses that the count-only
+      anvilBlockNumber probe misses. 97 smoke tests
+      green. Still to add: probabilityBounds,
       candlesAggregation (Candle.volume = sum of
       contained Swap amounts within period), chartShape
       full match (api unified-chart vs indexer raw),

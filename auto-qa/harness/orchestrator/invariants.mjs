@@ -1277,6 +1277,51 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'anvilLatestBlockSensible',
+        description: 'eth_getBlockByNumber(latest) returns a block with a 0x… hash and a timestamp in [2020-01-01, now+1d] (catches stuck-clock + wrong-fork issues that the count-only block-number probe misses)',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            // anvilBlockNumber only checks `eth_blockNumber > 0`; that
+            // can pass while the chain is broken in subtle ways:
+            //   * Stuck clock — chain's notion of time is wrong (the
+            //     fork started fine, but the timestamp source got
+            //     desynced and now blocks have year-2099 timestamps)
+            //   * Genesis-only state — fork pinned to a frozen block
+            //     and `latest` returns garbage when no advance happened
+            //   * Hash structurally invalid — anvil bug or
+            //     misconfigured RPC returning string '0x' or null
+            //
+            // Mirrors the time-shape pattern from swapTimestampSensible
+            // and candleTimeMonotonic but at the chain layer. The
+            // [2020-01-01, now+1d] window is the same one used by
+            // swapTimestampSensible — keeps the catalog's notion of
+            // "sensible time" consistent across layers.
+            const block = await rpcRequest(ctx.rpcUrl, 'eth_getBlockByNumber', ['latest', false]);
+            if (!block || typeof block !== 'object') {
+                throw new Error(`expected block object, got ${typeof block} (${JSON.stringify(block)?.slice(0, 60)})`);
+            }
+            // Hash must be a 0x… string with 64 hex chars after the prefix.
+            if (typeof block.hash !== 'string' || !/^0x[0-9a-f]{64}$/i.test(block.hash)) {
+                throw new Error(`block.hash invalid (got ${JSON.stringify(block.hash)})`);
+            }
+            // Timestamp is a hex string per JSON-RPC convention; convert and bound.
+            if (typeof block.timestamp !== 'string' || !block.timestamp.startsWith('0x')) {
+                throw new Error(`block.timestamp expected hex string, got ${JSON.stringify(block.timestamp)}`);
+            }
+            const ts = Number(BigInt(block.timestamp));
+            const MIN_TS = 1_577_836_800;             // 2020-01-01 UTC
+            const MAX_TS = Math.floor(Date.now() / 1000) + 86_400;  // now + 1d clock skew
+            if (ts < MIN_TS) {
+                throw new Error(`block.timestamp ${ts} < ${MIN_TS} (2020-01-01 — stuck clock or wrong fork era)`);
+            }
+            if (ts > MAX_TS) {
+                throw new Error(`block.timestamp ${ts} > ${MAX_TS} (now + 1d — clock skewed forward)`);
+            }
+            const iso = new Date(ts * 1000).toISOString();
+            return { ok: true, detail: `latest block ${block.hash.slice(0, 10)}… @ ts=${ts} (${iso})` };
+        },
+    },
+    {
         name: 'anvilChainId',
         description: 'eth_chainId returns 0x64 (chain 100, Gnosis)',
         layer: 'orchestrator↔chain',

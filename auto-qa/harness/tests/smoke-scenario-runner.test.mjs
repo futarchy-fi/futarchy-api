@@ -163,6 +163,12 @@ function startFixture({
     // sane Gnosis values; tests override to simulate failures.
     blockNumberHex = '0x123abc',  // some positive block
     chainIdHex = '0x64',           // 100 = Gnosis
+    // Latest block details for anvilLatestBlockSensible (slice
+    // 4d-scenarios-more chain time-shape probe). Defaults match a
+    // sane recent block; tests override to simulate stuck-clock,
+    // garbage-hash, or genesis-only scenarios.
+    latestBlockHash = '0x' + 'a1b2c3d4'.repeat(8),  // valid 0x + 64 hex
+    latestBlockTimestampHex = '0x' + Math.floor(Date.now() / 1000 - 60).toString(16),  // 1 min ago
 } = {}) {
     // ── shared row builders ──────────────────────────────────────────
     // Pulled out of the per-route handlers so the api passthrough
@@ -385,6 +391,13 @@ function startFixture({
                             return replyResult(blockNumberHex);
                         case 'eth_chainId':
                             return replyResult(chainIdHex);
+                        case 'eth_getBlockByNumber':
+                            return replyResult({
+                                hash: latestBlockHash,
+                                timestamp: latestBlockTimestampHex,
+                                number: blockNumberHex,
+                                parentHash: '0x' + '0'.repeat(64),
+                            });
                         default:
                             response.end(JSON.stringify({
                                 jsonrpc: '2.0', id: parsed.id ?? 1,
@@ -805,6 +818,68 @@ test('runAllInvariants — failure: anvilChainId at bare anvil 0x7a69 (= 31337)'
         const chain = results.find((r) => r.name === 'anvilChainId');
         assert.equal(chain.ok, false);
         assert.match(chain.error, /chain id 31337|expected 0x64/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — anvilLatestBlockSensible happy: recent timestamp + valid hash', async () => {
+    // Defaults: ts ≈ 1min ago, hash is valid 0x + 64 hex chars.
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'anvilLatestBlockSensible');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /latest block 0xa1b2c3d4… @ ts=\d+/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilLatestBlockSensible stuck-clock (timestamp = 0)', async () => {
+    const fx = await startFixture({
+        latestBlockTimestampHex: '0x0',
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilLatestBlockSensible');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /stuck clock|2020-01-01|wrong fork era/);
+        // The count-only block-number probe STILL passes — distinguishes
+        // "block exists" from "block has sensible time"
+        const num = results.find((r) => r.name === 'anvilBlockNumber');
+        assert.equal(num.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilLatestBlockSensible clock skewed forward (year 2099)', async () => {
+    const farFuture = Math.floor(new Date('2099-01-01').getTime() / 1000);
+    const fx = await startFixture({
+        latestBlockTimestampHex: '0x' + farFuture.toString(16),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilLatestBlockSensible');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /clock skewed forward|now \+ 1d/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: anvilLatestBlockSensible garbage hash (anvil bug)', async () => {
+    const fx = await startFixture({ latestBlockHash: '0xdeadbeef' });  // too short
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'anvilLatestBlockSensible');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /block\.hash invalid/);
     } finally {
         await fx.stop();
     }
@@ -1959,6 +2034,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /proposalEntityOrganizationReferentialIntegrity/);
     assert.match(r.stdout, /anvilBlockNumber/);
     assert.match(r.stdout, /anvilChainId/);
+    assert.match(r.stdout, /anvilLatestBlockSensible/);
     assert.match(r.stdout, /rateSanity/);
 });
 
