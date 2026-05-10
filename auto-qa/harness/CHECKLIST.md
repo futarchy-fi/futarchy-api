@@ -327,13 +327,25 @@ freshly-generated addresses as recipients; documented in
       rendered in the row's chain cell. Verifies a different
       formatter class than 4b (string passthrough vs integer
       toString vs int → enum mapping). Test: 1.4s.
-- [ ] Sub-slice 4c v2 — currency-formatted price ("$0.42" /
-      "0.4242" / whatever the real formatter does). Will pick a
-      concrete pool/price endpoint with known formatter chain
-      (decimals/currency/rounding) and assert the exact rendered
-      string. Likely uses the singleProposalTransformer's
-      `prices.{approval,refusal}_price` or usePoolData's spot
-      price derivation.
+- [x] Sub-slice 4c v2 — chain enum FALLBACK formatter
+      (TEMPLATE LITERAL branch). Mock `metadata.chain = '999'`
+      → `parseInt → 999` → not in `CHAIN_CONFIG` → fallback
+      `{shortName: \`Chain ${chainId}\`}` → row's chain cell
+      shows "Chain 999". Different formatter class than v1's
+      lookup-table branch — covers the dynamic-template branch
+      that catches a different bug shape (a regression that
+      drops the fallback would crash or render empty here, not
+      in v1). Test: 1.4s.
+- [ ] Sub-slice 4c v3 — currency-formatted price ("$0.42" /
+      "42.00%" / "0.42 SDAI" / etc.). Real currency formatting
+      lives behind the candles/pool fetch pipeline (HighlightCards
+      uses `(v).toFixed(2) + ' ' + baseTokenSymbol` and
+      `(v * 100).toFixed(0) + '%'`). To test, would need to mock
+      both `api.futarchy.fi/registry/graphql` AND
+      `api.futarchy.fi/candles/graphql`, plus seed each proposal
+      with valid `prediction_pools` / `pools` references so the
+      collectAndFetchPoolPrices pipeline lands prices on the
+      right cards. Larger lift; staged for a dedicated iteration.
 - [ ] Sub-slice 4d — cross-protocol price reconciliation
       (Algebra / CoW / Sushi) mock — when multiple sources should
       agree, mock each to slightly-different values and assert the

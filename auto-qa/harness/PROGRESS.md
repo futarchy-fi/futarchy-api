@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 slices 1+2+3+4a+4b+4c v1 landed on interface side. Slices 1-3 prior. Slice 4a: DOM↔API mechanism (string passthrough). Slice 4b: integer counts through visibility filter ("8" / "11"). Slice 4c v1: int → enum mapping formatter (mock `metadata.chain='10'` → ChainBadge cell shows "Optimism"). 14/14 browser tests green. Currency-formatted price (4c v2) + cross-protocol reconciliation (4d) still ahead. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 slices 1+2+3+4a+4b+4c v1+4c v2 landed on interface side. Slices 1-3 prior. Slice 4a: string passthrough. Slice 4b: integer counts through filter. Slice 4c v1: int → enum mapping (chain=10 → "Optimism"). Slice 4c v2: enum FALLBACK formatter — template-literal branch (chain=999 → "Chain 999"). 15/15 browser tests green. Currency-formatted price (4c v3, needs candles pipeline) + cross-protocol reconciliation (4d) still ahead. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -775,11 +775,30 @@ Summary of slice 1:
     eth_blockNumber forward test from a real http server to
     `context.route(...)` interception (chromium drops fetches from
     `about:blank` to local addresses regardless of CORS headers)
-- Slice 4 sub-slices remaining: 4c v2 (currency-formatted price
-  with decimal/currency/rounding logic), 4d (cross-protocol
-  reconciliation).
+- Slice 4 sub-slices remaining: 4c v3 (currency-formatted price
+  through the candles pipeline — mock both registry/graphql AND
+  candles/graphql endpoints), 4d (cross-protocol reconciliation).
 
-Slice 4c v1 summary (this iteration on the interface side):
+Slice 4c v2 summary (this iteration on the interface side):
+
+- Same `flows/dom-api-invariant.spec.mjs`, fourth test added.
+  Mock `metadata.chain = '999'` → flows through parseInt →
+  CHAIN_CONFIG[999] is undefined → fallback `{shortName:
+  \`Chain ${chainId}\`}` → row's chain cell shows "Chain 999".
+- Different formatter class than 4c v1: template-literal
+  interpolation branch (the dynamic-string fallback) vs the
+  lookup-table branch. A regression that drops the fallback
+  case (e.g., crashes on missing key) would surface here.
+- Why "currency formatting" was staged as 4c v3 rather than
+  shipped as v2: real currency formatters live in
+  HighlightCards / EventHighlightCard, fed by
+  collectAndFetchPoolPrices which hits a different endpoint
+  (api.futarchy.fi/candles/graphql). Mocking that needs both
+  endpoints + valid pool references; larger lift, dedicated
+  iteration.
+- 1 test, 1.4s. UI smoke: 24 pass + 0 skip.
+
+Slice 4c v1 summary (previous iteration on the interface side):
 
 - Same `flows/dom-api-invariant.spec.mjs`, third test added.
   Mock `organizations[0].metadata = JSON.stringify({chain: '10'})`
