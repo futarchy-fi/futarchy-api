@@ -146,6 +146,15 @@ function startFixture({
     // default to '1.0' so iterate-all-rows checks see valid volumes.
     candleVolumeToken0s = null,
     candleVolumeToken1s = null,
+    // Per-row OHLC overrides for candleOHLCAllRowsConsistent (slice
+    // 4d-scenarios-more). When non-null, indexed by row position.
+    // When null, index 0 uses latestCandle{Open,High,Low,Close};
+    // non-zero indices default to consistent values (open=close=0.5,
+    // high=0.6, low=0.4) so iterate-all-rows checks pass by default.
+    candleOpens = null,
+    candleHighs = null,
+    candleLows = null,
+    candleCloses = null,
     latestCandleVolumeToken1 = '50.0',
     // Latest-swap field values for amounts + timestamp invariants.
     // Default values satisfy both; override to simulate event-decoder
@@ -358,12 +367,24 @@ function startFixture({
     });
     const buildCandles = () => Array.from({ length: candlesCandlesCount }, (_, i) => {
         const row = { id: `mock-candle-${i}` };
-        if (i === 0) {
-            row.open = latestCandleOpen;
-            row.high = latestCandleHigh;
-            row.low = latestCandleLow;
-            row.close = latestCandleClose;
-        }
+        // OHLC: per-row override via candle{Open,High,Low,Close}s
+        // arrays (slice 4d-scenarios-more candleOHLCAllRowsConsistent);
+        // else index 0 uses latestCandle* (back-compat with single-
+        // candle checks); else default to consistent values
+        // (open=close=0.5, high=0.6, low=0.4) so iterate-all-rows
+        // checks see valid OHLC on every row by default.
+        row.open = candleOpens
+            ? String(candleOpens[i])
+            : (i === 0 ? latestCandleOpen : '0.5');
+        row.high = candleHighs
+            ? String(candleHighs[i])
+            : (i === 0 ? latestCandleHigh : '0.6');
+        row.low = candleLows
+            ? String(candleLows[i])
+            : (i === 0 ? latestCandleLow : '0.4');
+        row.close = candleCloses
+            ? String(candleCloses[i])
+            : (i === 0 ? latestCandleClose : '0.5');
         // volumeToken0 / volumeToken1: per-row override via
         // candleVolumeToken0s / candleVolumeToken1s arrays (slice
         // 4d-scenarios-more candleVolumesAllRowsNonNegative); else
@@ -2660,6 +2681,79 @@ test('runAllInvariants — failure: candle close > high', async () => {
         const inv = results.find((r) => r.name === 'candleOHLCOrdering');
         assert.equal(inv.ok, false);
         assert.match(inv.error, /close=0\.99 outside/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — candleOHLCAllRowsConsistent happy: 5 candles all OHLC-consistent (default fixture)', async () => {
+    // Default per-row OHLC: index 0 uses latestCandle* (0.45/0.50/0.40/0.48);
+    // non-zero indices default to open=close=0.5, high=0.6, low=0.4 —
+    // all consistent.
+    const fx = await startFixture({ candlesCandlesCount: 5 });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'candleOHLCAllRowsConsistent');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /5 candles all satisfy low ≤ \{open, close\} ≤ high/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — candleOHLCAllRowsConsistent vacuously true with no candles', async () => {
+    const fx = await startFixture({ candlesCandlesCount: 0 });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'candleOHLCAllRowsConsistent');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /vacuously true/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candleOHLCAllRowsConsistent non-latest candle has low > high (per-period accumulator bug)', async () => {
+    // Scenario: per-period min/max accumulator initialization bug; candle[2]
+    // has low=0.7 > high=0.3 (impossible). Latest candle is fine, so the
+    // latest-only candleOHLCOrdering STILL passes — only iterate-all-rows
+    // catches the historical corruption.
+    const fx = await startFixture({
+        candlesCandlesCount: 5,
+        candleLows:  ['0.40', '0.4', '0.7', '0.4', '0.4'],   // index 2: low > high
+        candleHighs: ['0.50', '0.6', '0.3', '0.6', '0.6'],
+        candleOpens: ['0.45', '0.5', '0.5', '0.5', '0.5'],
+        candleCloses:['0.48', '0.5', '0.5', '0.5', '0.5'],
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candleOHLCAllRowsConsistent');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /candle mock-candle-2: low=0\.7 > high=0\.3.*latest candle is unaffected/);
+        // Sister probe STILL passes (only checks LATEST=index 0 which is fine)
+        const sister = results.find((r) => r.name === 'candleOHLCOrdering');
+        assert.equal(sister.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candleOHLCAllRowsConsistent non-latest candle has close outside [low, high] (period-boundary off-by-one)', async () => {
+    // Scenario: a swap counted in the wrong period; its price was outside
+    // that period's running min/max window. Latest is fine; historical
+    // candle[1] has close=0.99 outside [low=0.4, high=0.6].
+    const fx = await startFixture({
+        candlesCandlesCount: 3,
+        candleCloses: ['0.48', '0.99', '0.5'],   // index 1: close outside [low, high]
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candleOHLCAllRowsConsistent');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /candle mock-candle-1: close=0\.99 outside \[low=0\.4, high=0\.6\]/);
     } finally {
         await fx.stop();
     }

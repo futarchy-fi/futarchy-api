@@ -774,10 +774,30 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). **Now 54 invariants**:
-      14 api-internal + 30 indexer probes + 10 chain-layer.
-      184 smoke tests green.
-      `candleVolumesAllRowsNonNegative` added this slice —
+      PROGRESS.md's invariant tables). **Now 55 invariants**:
+      14 api-internal + 31 indexer probes + 10 chain-layer.
+      188 smoke tests green.
+      `candleOHLCAllRowsConsistent` added this slice —
+      third iterate-all-rows extension; COMPLETES the
+      iterate-all-rows TRIAD on the indexer's main
+      accumulator entities (swap amounts + candle volumes
+      + candle OHLC). Each accumulator entity now has BOTH
+      latest-only + all-rows coverage, catching uniform-
+      aggregator bugs (latest) AND subset-corruption bugs
+      (all-rows). Catches per-period min/max accumulator
+      bugs (e.g., running-min initialization differs by
+      period); indexer reorg corruption of historical OHLC;
+      pool-specific aggregator bugs; period-boundary off-
+      by-ones (swap counted in wrong period had price
+      outside window). Sister candleOHLCOrdering still
+      passes when latest is fine — only iterate-all-rows
+      catches historical corruption. Fixture extended:
+      buildCandles now defaults OHLC to consistent values
+      on every row (open=close=0.5, high=0.6, low=0.4);
+      per-row overrides via candleOpens/Highs/Lows/Closes
+      arrays.
+
+      `candleVolumesAllRowsNonNegative` (previous slice) —
       iterate-all-rows extension on the candle side; sister
       to swapAmountsAllRowsPositive. Symmetrically completes
       the iterate-all-rows pattern across the two main

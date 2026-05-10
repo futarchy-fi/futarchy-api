@@ -1512,6 +1512,73 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'candleOHLCAllRowsConsistent',
+        description: 'every candle (up to first 50) satisfies low ≤ {open, close} ≤ high (catches per-period min/max accumulator bugs that LATEST-only candleOHLCOrdering misses)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // ITERATE-ALL-ROWS strengthening of candleOHLCOrdering
+            // (latest only). Sister to candleVolumesAllRowsNonNegative
+            // and swapAmountsAllRowsPositive — completes the iterate-
+            // all-rows triad on the indexer's main accumulator entities.
+            //
+            // Why both candleOHLCOrdering AND this exist:
+            //   * candleOHLCOrdering (LATEST only) — cheap probe;
+            //     catches min/max accumulator bugs uniform across
+            //     all periods. Most regressions land here first.
+            //   * THIS one (UP-TO-50 rows) — catches bugs affecting
+            //     SUBSETS of periods without affecting the latest:
+            //       * Per-period decoder bug — aggregator's running-
+            //         min initialization differs by period (e.g.,
+            //         resets to 0 instead of +Infinity for periods
+            //         with the first swap > 0)
+            //       * Indexer reorg re-processed historical periods
+            //         and corrupted those candle rows' OHLC fields
+            //       * Pool-specific aggregator bug — only candles
+            //         for a particular pool get wrong OHLC
+            //         (latest happens to be a different pool)
+            //       * Period-boundary off-by-one — the swap counted
+            //         in the wrong period had a price outside the
+            //         window's bounds
+            //
+            // The 50-row cap matches the candle and swap iterate-
+            // all-rows siblings: cheap to query, enough signal.
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ candles(first: 50, orderBy: time, orderDirection: desc) { id open high low close } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.candles)) {
+                throw new Error(`unexpected candles response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.candles.length === 0) {
+                return { ok: true, detail: 'no candles to check (vacuously true)' };
+            }
+            for (const c of j.data.candles) {
+                const open = parseFloat(c.open);
+                const high = parseFloat(c.high);
+                const low = parseFloat(c.low);
+                const close = parseFloat(c.close);
+                for (const [name, val] of [['open', open], ['high', high], ['low', low], ['close', close]]) {
+                    if (!Number.isFinite(val)) {
+                        throw new Error(`candle ${c.id}: ${name}="${c[name]}" parseFloat = ${val} (not finite — partial-rewrite or per-period decoder bug; latest candle is unaffected)`);
+                    }
+                }
+                if (low > high) {
+                    throw new Error(`candle ${c.id}: low=${low} > high=${high} (per-period min/max accumulator bug; latest candle is unaffected)`);
+                }
+                if (open < low || open > high) {
+                    throw new Error(`candle ${c.id}: open=${open} outside [low=${low}, high=${high}] (per-period min/max accumulator bug; latest candle is unaffected)`);
+                }
+                if (close < low || close > high) {
+                    throw new Error(`candle ${c.id}: close=${close} outside [low=${low}, high=${high}] (per-period min/max accumulator bug; latest candle is unaffected)`);
+                }
+            }
+            return { ok: true, detail: `${j.data.candles.length} candles all satisfy low ≤ {open, close} ≤ high` };
+        },
+    },
+    {
         name: 'swapAmountsPositive',
         description: 'latest swap has amountIn > 0 AND amountOut > 0 (vacuously true when no swaps)',
         layer: 'orchestrator↔candles',
