@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **38 invariants** — 9 api-internal + 25 indexer + 4 chain-layer; first indexer-side enum validation landed; 118 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles + registryHasOrganizations + registryHasAggregators + candleOHLCOrdering + candleVolumesNonNegative + swapAmountsPositive + swapTimestampSensible + candleTimeMonotonic + swapTimeMonotonicNonStrict + apiCandlesMatchesDirect + apiRegistryMatchesDirect + swapPoolReferentialIntegrity + candlePoolReferentialIntegrity + candleSwapTimeWindowConsistency + organizationAggregatorReferentialIntegrity + proposalEntityOrganizationReferentialIntegrity + apiSpotCandlesHappyPath + apiUnifiedChartShape + apiMarketEventsShape + anvilLatestBlockSensible + probabilityBounds + candlePricesNonNegative + chartCandleCountsBoundedByDirect + swapAmountsBoundedAbove + poolTypeIsValidEnum + registryHasFutarchyProdAggregator)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with **39 invariants** — 9 api-internal + 26 indexer + 4 chain-layer; first registry-side hardcoded-address PINNING check landed; 121 smoke tests green). 30/30 browser tests green. Phase 3 25+45 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2406,7 +2406,88 @@ Phase 7 slice 4d-scenarios-more (candleOHLCOrdering + candleVolumesNonNegative) 
   consistency, probabilityBounds, conservation) and the
   cross-run monotonicity on rateSanity.
 
-Phase 7 slice 4d-scenarios-more (poolTypeIsValidEnum) summary (this iteration on the api side):
+Phase 7 slice 4d-scenarios-more (registryHasFutarchyProdAggregator) summary (this iteration on the api side):
+
+- **High-value PINNING check at the registry layer**.
+  Registry-side analog of anvilChainId: chain pin
+  proves we forked Gnosis (not bare anvil); registry
+  pin proves the indexer was bootstrapped with the
+  right chain + start_block + contract config:
+  * `registryHasFutarchyProdAggregator` — asserts the
+    indexer has the production futarchy aggregator at
+    `0xc5eb43d53e2fe5fdde5faf400cc4167e5b5d4fc1`
+    (hardcoded in 3 api source files:
+    registry-adapter.js, unified-chart.js,
+    market-events.js — the api LITERALLY cannot
+    function without this aggregator's data).
+
+- **Why this catches what other invariants miss**:
+  registryHasAggregators only asserts ≥1 aggregator
+  exists. If the indexer is correctly running but
+  bootstrapped against an early block (before the
+  futarchy aggregator was deployed), it might pick
+  up some OTHER aggregator's events but miss the
+  prod one entirely. The api's request fails because
+  resolve→pool→fetch starts from this address, but
+  the existence-only check passes.
+  Test 4 verifies this exact gap: registryAggregatorsCount=3
+  + includeFutarchyProdAggregator=false produces a
+  scenario where registryHasAggregators PASSES (3
+  aggregators) but this invariant FAILS (none of
+  them is the prod one).
+
+- **Bug shapes caught**:
+  * Indexer bootstrapped against a block BEFORE
+    aggregator deployment (start_block too early)
+  * Indexer pointed at wrong chain (no futarchy
+    deployment there) but produced ghost aggregators
+  * Indexer's data wiped without re-syncing the
+    full history (prod aggregator's deployment event
+    missed)
+  * Schema migration that mangled aggregator IDs
+
+- **Fixture extension**:
+  * New `includeFutarchyProdAggregator` knob (default
+    true) appends the prod address to the aggregators
+    list. APPEND not prepend — keeps existing tests
+    that assert `mock-agg-0` at index 0 unchanged.
+  * Tests checking "missing prod" set knob=false.
+  * 2 existing tests updated to set knob=false where
+    they assert exact aggregator counts (the
+    apiRegistryMatchesDirect happy + vacuous tests).
+
+- **Smoke test coverage** — 3 new tests:
+  * happy: prod address present (default, 2 total
+    aggregators)
+  * vacuous: 0 aggregators (registryHasAggregators's
+    concern; this skips)
+  * failure: 3 aggregators but prod missing — verifies
+    registryHasAggregators STILL passes (3 ≥ 1),
+    distinguishing existence concern from pinning
+    concern
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 121/121 pass (1423ms
+    — was 118/118)
+  * `npm run scenarios:dry` → exits 0; lists 39
+    invariants in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: 39 invariants now: 9 api-internal
+  + 26 indexer + 4 chain-layer. Hardcoded-address
+  pinning is now SYMMETRIC across chain + registry:
+  * Chain layer: anvilChainId pins fork to Gnosis
+    (chain ID 0x64)
+  * Registry layer: registryHasFutarchyProdAggregator
+    pins indexer to the futarchy aggregator
+  Both prove "this is the right environment, not
+  some lookalike". Remaining bot-doable:
+  candlesAggregation, full chartShape match,
+  conservation, monotonicity (TWAP), cross-run rate
+  monotonicity.
+
+Phase 7 slice 4d-scenarios-more (poolTypeIsValidEnum) summary (previous iteration on the api side):
 
 - **First indexer-side enum validation in the catalog**.
   Existing pool-related invariants check existence

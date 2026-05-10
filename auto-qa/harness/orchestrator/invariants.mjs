@@ -804,6 +804,63 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'registryHasFutarchyProdAggregator',
+        description: 'registry indexer has the production futarchy aggregator (0xc5eb43d53e2fe5fdde5faf400cc4167e5b5d4fc1, hardcoded in 3 api source files)',
+        layer: 'orchestrator↔registry',
+        check: async (ctx) => {
+            // High-value PINNING check. The api layer hardcodes the
+            // futarchy aggregator address in:
+            //   src/adapters/registry-adapter.js
+            //   src/routes/unified-chart.js
+            //   src/routes/market-events.js
+            // If the indexer has aggregators but NOT this specific one,
+            // the api passes existence checks but every consumer
+            // breaks because resolve→pool→fetch chains all start from
+            // this address.
+            //
+            // This is the registry-side analog of anvilChainId: chain
+            // pin proves we forked Gnosis (not bare anvil); this pin
+            // proves the indexer was bootstrapped with the right
+            // chain + block + contract config.
+            //
+            // Bug shapes caught:
+            //   * Indexer bootstrapped against a block BEFORE
+            //     aggregator deployment (start_block too early)
+            //   * Indexer pointed at the wrong chain (no futarchy
+            //     deployment there) but indexer started anyway
+            //     and produced ghost aggregators
+            //   * Indexer's data was wiped without re-syncing the
+            //     full history (the prod aggregator's deployment
+            //     event missed)
+            //   * Schema migration that mangled aggregator IDs
+            //
+            // Vacuous when no aggregators exist — that's
+            // registryHasAggregators's concern; this only fires
+            // when there ARE aggregators but the prod one is
+            // missing.
+            const PROD_AGGREGATOR = '0xc5eb43d53e2fe5fdde5faf400cc4167e5b5d4fc1';
+            const j = await fetchJson(ctx.registryUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ aggregators(first: 50) { id } }',
+                }),
+            });
+            const aggregators = j?.data?.aggregators;
+            if (!Array.isArray(aggregators)) {
+                throw new Error(`unexpected aggregators response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (aggregators.length === 0) {
+                return { ok: true, detail: 'no aggregators (registryHasAggregators concern; vacuous here)' };
+            }
+            const ids = aggregators.map((a) => a.id?.toLowerCase()).filter((x) => x);
+            if (!ids.includes(PROD_AGGREGATOR)) {
+                throw new Error(`prod aggregator ${PROD_AGGREGATOR} not in indexer (saw ${aggregators.length}: ${ids.slice(0, 3).join(', ')}...) — wrong start_block, wrong chain, OR data wipe missed re-sync`);
+            }
+            return { ok: true, detail: `prod aggregator ${PROD_AGGREGATOR.slice(0, 10)}… present (${aggregators.length} total)` };
+        },
+    },
+    {
         name: 'candlesHasPools',
         description: 'candles checkpoint has ≥1 Pool indexed',
         layer: 'orchestrator↔candles',

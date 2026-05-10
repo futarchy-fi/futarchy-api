@@ -144,6 +144,13 @@ function startFixture({
     // scenarios-more). Closes the registry FK chain coverage.
     // Default null → every proposal references mock-org-0.
     proposalEntityOrganizationIds = null,
+    // Inject the production futarchy aggregator address into the
+    // aggregators list (slice 4d-scenarios-more
+    // registryHasFutarchyProdAggregator). Default true so the
+    // happy-path invariant passes; override to false to simulate
+    // wrong-fork-block / wrong-chain bootstrap scenarios where
+    // the indexer has aggregators but missed the prod one.
+    includeFutarchyProdAggregator = true,
     // Set to true to make the direct-indexer paths return 502, simulating
     // an indexer that's down even though the api passthrough still works
     // (e.g., api is caching).
@@ -229,8 +236,20 @@ function startFixture({
             row.aggregator = { id: aggId };
             return row;
         }),
-        aggregators: Array.from({ length: registryAggregatorsCount },
-            (_, i) => ({ id: `mock-agg-${i}` })),
+        aggregators: (() => {
+            const mock = Array.from({ length: registryAggregatorsCount },
+                (_, i) => ({ id: `mock-agg-${i}` }));
+            if (includeFutarchyProdAggregator) {
+                // APPEND (not prepend) so existing tests that
+                // assert index-0 = mock-agg-0 keep working. Tests
+                // checking "missing prod" set
+                // includeFutarchyProdAggregator=false; tests
+                // checking "vacuously" set registryAggregatorsCount=0
+                // AND includeFutarchyProdAggregator=false.
+                mock.push({ id: '0xc5eb43d53e2fe5fdde5faf400cc4167e5b5d4fc1' });
+            }
+            return mock;
+        })(),
     });
     const buildCandles = () => Array.from({ length: candlesCandlesCount }, (_, i) => {
         const row = { id: `mock-candle-${i}` };
@@ -623,7 +642,10 @@ test('runAllInvariants — apiRegistryMatchesDirect happy: api passthrough retur
         assert.equal(pass, true);
         const inv = results.find((r) => r.name === 'apiRegistryMatchesDirect');
         assert.equal(inv.ok, true);
-        assert.match(inv.detail, /proposalEntities=1, organizations=1, aggregators=1/);
+        // Default fixture: 1 mock org/proposal each + 2 aggregators
+        // (mock-agg-0 + the appended prod aggregator from
+        // includeFutarchyProdAggregator=true).
+        assert.match(inv.detail, /proposalEntities=1, organizations=1, aggregators=2/);
     } finally {
         await fx.stop();
     }
@@ -634,6 +656,8 @@ test('runAllInvariants — apiRegistryMatchesDirect vacuously matches when all e
         registryProposalEntitiesCount: 0,
         registryOrganizationsCount: 0,
         registryAggregatorsCount: 0,
+        // Also disable prod aggregator injection so total really is 0
+        includeFutarchyProdAggregator: false,
     });
     try {
         const { results } = await runAllInvariants(fullCtx(fx.url));
@@ -1376,7 +1400,12 @@ test('runAllInvariants — registryHasAggregators happy: 1 aggregator indexed', 
 });
 
 test('runAllInvariants — failure: registry has orgs but no aggregators (root entity unindexed)', async () => {
-    const fx = await startFixture({ registryAggregatorsCount: 0 });
+    const fx = await startFixture({
+        registryAggregatorsCount: 0,
+        // Also turn off prod injection so registryHasFutarchyProdAggregator
+        // doesn't quietly mask the empty-aggregators case
+        includeFutarchyProdAggregator: false,
+    });
     try {
         const { pass, results } = await runAllInvariants(fullCtx(fx.url));
         assert.equal(pass, false);
@@ -1386,6 +1415,61 @@ test('runAllInvariants — failure: registry has orgs but no aggregators (root e
         // Lower-level entity probes still pass
         const orgs = results.find((r) => r.name === 'registryHasOrganizations');
         assert.equal(orgs.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — registryHasFutarchyProdAggregator happy: prod address present', async () => {
+    // Defaults: includeFutarchyProdAggregator=true → prod address
+    // appended to aggregator list.
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'registryHasFutarchyProdAggregator');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /prod aggregator 0xc5eb43d5… present \(2 total\)/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — registryHasFutarchyProdAggregator vacuous when no aggregators', async () => {
+    const fx = await startFixture({
+        registryAggregatorsCount: 0,
+        includeFutarchyProdAggregator: false,
+    });
+    try {
+        const { results } = await runAllInvariants(fullCtx(fx.url));
+        const inv = results.find((r) => r.name === 'registryHasFutarchyProdAggregator');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /no aggregators .*registryHasAggregators concern/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: registryHasFutarchyProdAggregator prod missing (wrong start_block / wrong chain)', async () => {
+    // Indexer has aggregators but the prod one is missing — likely
+    // bootstrapped against a too-early block, wrong chain, or had
+    // its data wiped without re-syncing the deployment event.
+    const fx = await startFixture({
+        registryAggregatorsCount: 3,        // some aggregators exist
+        includeFutarchyProdAggregator: false, // but NOT the prod one
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'registryHasFutarchyProdAggregator');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /prod aggregator 0xc5eb43d53e2fe5fdde5faf400cc4167e5b5d4fc1 not in indexer|wrong start_block|wrong chain/);
+        // registryHasAggregators STILL passes (3 aggregators exist) —
+        // distinguishes "no aggregators at all" (existence concern)
+        // from "wrong specific aggregators" (this invariant's
+        // concern)
+        const exists = results.find((r) => r.name === 'registryHasAggregators');
+        assert.equal(exists.ok, true);
     } finally {
         await fx.stop();
     }
@@ -2442,6 +2526,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /registryHasProposalEntities/);
     assert.match(r.stdout, /registryHasOrganizations/);
     assert.match(r.stdout, /registryHasAggregators/);
+    assert.match(r.stdout, /registryHasFutarchyProdAggregator/);
     assert.match(r.stdout, /candlesHasPools/);
     assert.match(r.stdout, /poolTypeIsValidEnum/);
     assert.match(r.stdout, /candlesHasSwaps/);

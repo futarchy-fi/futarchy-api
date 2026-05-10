@@ -750,20 +750,21 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 38 invariants:
-      9 api-internal + 25 indexer probes + 4 chain-layer.
-      `poolTypeIsValidEnum` added this slice — first
-      indexer-side enum validation. Iterates all pools
-      (first 50) and asserts each has type ∈
-      {CONDITIONAL, PREDICTION, EXPECTED_VALUE}.
-      Catches schema drift (4th type added without
-      consumer update), indexer regression returning
-      null type, and typos like "PRDICTION". Distinct
-      from probabilityBounds which treats non-PREDICTION
-      as vacuous (so a typo'd type silently slips
-      through). New pattern: iterate-all-rows enum check
-      (vs latest-row or count-only). 118 smoke tests
-      green. Still to add: candlesAggregation
+      PROGRESS.md's invariant tables). Now 39 invariants:
+      9 api-internal + 26 indexer probes + 4 chain-layer.
+      `registryHasFutarchyProdAggregator` added this
+      slice — high-value PINNING check. Asserts the
+      indexer has the production futarchy aggregator
+      (0xc5eb43d5…d4fc1, hardcoded in 3 api source
+      files: registry-adapter.js, unified-chart.js,
+      market-events.js). Registry-side analog of
+      anvilChainId — chain pin proves we forked Gnosis;
+      this pin proves the indexer was bootstrapped with
+      the right chain + start_block + contract config.
+      Catches indexer started against wrong block
+      (before aggregator deployment), indexer pointed
+      at wrong chain, data wipe missed re-sync. 121
+      smoke tests green. Still to add: candlesAggregation
       (Candle.volume = sum of contained Swap amounts
       within period), chartShape full match (api
       unified-chart vs indexer raw, ID-pair compare),
