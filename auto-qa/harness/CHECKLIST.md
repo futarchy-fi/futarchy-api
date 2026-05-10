@@ -750,15 +750,17 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 10 invariants:
-      5 api-internal probes (apiHealth + 2 GraphQL
-      passthroughs + `apiWarmer` and `apiSpotCandlesValidates`
-      added this slice for endpoint-coverage + validation-
-      regression detection) + 2 direct-indexer probes + 3
-      chain-layer probes. 21 smoke tests green. Still to add
-      (per PROGRESS invariant tables): probabilityBounds
-      (price ∈ [0, 1]), candlesAggregation, chartShape,
-      conservation, plus cross-run monotonicity on rateSanity.
+      PROGRESS.md's invariant tables). Now 12 invariants:
+      5 api-internal + 4 indexer probes (2 `__typename`
+      liveness + 2 data-aware: `registryHasProposalEntities`
+      and `candlesHasPools` added this slice — assert the
+      indexer has ≥1 row of the relevant entity, catching
+      "indexer reachable but empty" sync regressions) + 3
+      chain-layer probes. 25 smoke tests green. Still to
+      add (per PROGRESS tables): probabilityBounds (price
+      ∈ [0, 1]), candlesAggregation, chartShape,
+      conservation, plus cross-run monotonicity on
+      rateSanity.
 - [x] **4d-activate — orchestrator block UNCOMMENTED.**
       Replaced the `tail -f /dev/null` placeholder with
       `node orchestrator/scenario-runner.mjs`. Dropped the

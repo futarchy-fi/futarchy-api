@@ -46,6 +46,11 @@ function startFixture({
     // "direct" in the same fixture.
     registryDirectTypename = 'Query',
     candlesDirectTypename = 'Query',
+    // Data-aware probes (registryHasProposalEntities, candlesHasPools)
+    // — counts of mock entities returned by the direct endpoints. Set
+    // to 0 to simulate "indexer reachable but empty".
+    registryProposalEntitiesCount = 1,
+    candlesPoolsCount = 1,
     // Set to true to make the direct-indexer paths return 502, simulating
     // an indexer that's down even though the api passthrough still works
     // (e.g., api is caching).
@@ -98,13 +103,24 @@ function startFixture({
                 if (req.url === '/registry-direct/graphql' && req.method === 'POST') {
                     if (registryDirectDown) { response.statusCode = 502; response.end('indexer down'); return; }
                     response.setHeader('content-type', 'application/json');
-                    response.end(JSON.stringify({ data: { __typename: registryDirectTypename } }));
+                    // Return a superset response so __typename + data probes
+                    // can be made against the same endpoint without the
+                    // fixture having to parse the GraphQL query body.
+                    const proposalEntities = Array.from({ length: registryProposalEntitiesCount },
+                        (_, i) => ({ id: `mock-prop-entity-${i}` }));
+                    response.end(JSON.stringify({
+                        data: { __typename: registryDirectTypename, proposalEntities },
+                    }));
                     return;
                 }
                 if (req.url === '/candles-direct/graphql' && req.method === 'POST') {
                     if (candlesDirectDown) { response.statusCode = 502; response.end('indexer down'); return; }
                     response.setHeader('content-type', 'application/json');
-                    response.end(JSON.stringify({ data: { __typename: candlesDirectTypename } }));
+                    const pools = Array.from({ length: candlesPoolsCount },
+                        (_, i) => ({ id: `mock-pool-${i}` }));
+                    response.end(JSON.stringify({
+                        data: { __typename: candlesDirectTypename, pools },
+                    }));
                     return;
                 }
                 if (req.url === '/rpc' && req.method === 'POST') {
@@ -437,6 +453,63 @@ test('runAllInvariants — failure: apiSpotCandlesValidates returns 200 (validat
     }
 });
 
+test('runAllInvariants — registryHasProposalEntities happy: 1 proposal indexed', async () => {
+    const fx = await startFixture();  // default registryProposalEntitiesCount=1
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'registryHasProposalEntities');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /sample id: mock-prop-entity-0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: registry checkpoint empty (sync not done)', async () => {
+    const fx = await startFixture({ registryProposalEntitiesCount: 0 });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'registryHasProposalEntities');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /0 ProposalEntity rows|sync not complete/);
+        // Other invariants still ran (no short-circuit)
+        const direct = results.find((r) => r.name === 'registryDirect');
+        assert.equal(direct.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — candlesHasPools happy: 1 pool indexed', async () => {
+    const fx = await startFixture();  // default candlesPoolsCount=1
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'candlesHasPools');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /sample id: mock-pool-0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candles checkpoint empty (sync not done)', async () => {
+    const fx = await startFixture({ candlesPoolsCount: 0 });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'candlesHasPools');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /0 Pool rows|sync not complete/);
+        const direct = results.find((r) => r.name === 'candlesDirect');
+        assert.equal(direct.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('scenario-runner CLI — dry-run exits 0 without network', () => {
     const r = spawnSync('node', [RUNNER], {
         env: {
@@ -455,6 +528,8 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /apiCanReachCandles/);
     assert.match(r.stdout, /registryDirect/);
     assert.match(r.stdout, /candlesDirect/);
+    assert.match(r.stdout, /registryHasProposalEntities/);
+    assert.match(r.stdout, /candlesHasPools/);
     assert.match(r.stdout, /anvilBlockNumber/);
     assert.match(r.stdout, /anvilChainId/);
     assert.match(r.stdout, /rateSanity/);

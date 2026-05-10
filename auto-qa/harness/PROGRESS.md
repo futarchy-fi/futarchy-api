@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 10 invariants — 5 api-internal + 2 direct-probe + 3 chain-layer; 21 smoke tests green). 30/30 browser tests green. Phase 3 25+21 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 12 invariants — 5 api-internal + 4 indexer + 3 chain-layer; 25 smoke tests green). 30/30 browser tests green. Phase 3 25+25 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2110,6 +2110,81 @@ Phase 7 slice 4d-scenarios-more (apiWarmer + apiSpotCandlesValidates) summary (t
   layers are now well covered (10 invariants); the next
   meaningful additions need to step into the data-shape
   validation territory.
+
+Phase 7 slice 4d-scenarios-more (registryHasProposalEntities + candlesHasPools) summary (this iteration on the api side):
+
+- **First DATA-AWARE indexer probes** — one level deeper
+  than the bare `__typename` checks. Up to now,
+  `registryDirect` and `candlesDirect` only confirmed the
+  GraphQL endpoint is REACHABLE; these new ones confirm
+  the indexer has actually INDEXED data:
+  * `registryHasProposalEntities` — query
+    `{ proposalEntities(first: 1) { id } }` against the
+    registry checkpoint, assert the array is non-empty
+  * `candlesHasPools` — query `{ pools(first: 1) { id } }`
+    against the candles checkpoint, same shape
+
+- **Bug class caught**: "indexer reachable but empty".
+  Concrete failure modes:
+  - sync didn't complete (indexer is fresh, hasn't replayed
+    blocks yet)
+  - fork started AFTER all proposal/pool deployment events
+    (wrong fork block — easy regression when block-pinning
+    is involved)
+  - schema-migration cold-start failure (see Phase 3 effort
+    notes: "schema migrations + warm-up time make this
+    brittle")
+
+- **Schema reality verification** (worth pinning):
+  * Registry checkpoint has `Aggregator`, `Organization`,
+    `ProposalEntity`, `MetadataEntry` types — Checkpoint
+    auto-generates plural query fields, so the field is
+    `proposalEntities` (NOT `proposals`).
+  * Candles checkpoint has `WhitelistedToken`, `Proposal`,
+    `Pool`, `Candle`, `Swap` types — auto-gen plurals
+    `whitelistedTokens`, `proposals`, `pools`, `candles`,
+    `swaps`. The naming collision (registry's `ProposalEntity`
+    vs candles' `Proposal`) is real: registry tracks
+    proposal METADATA, candles tracks the AMM-pool wrapper
+    that conditional tokens trade in.
+
+- **Smoke fixture extension**: the existing
+  `/registry-direct/graphql` and `/candles-direct/graphql`
+  endpoints now return a SUPERSET response shape — both the
+  `__typename` field (for the bare probes) AND the data
+  arrays (`proposalEntities`, `pools`). Avoids having the
+  fixture parse GraphQL queries; each invariant just looks
+  at its specific field. New options:
+  `registryProposalEntitiesCount`, `candlesPoolsCount`
+  (default 1; set to 0 to simulate empty indexer).
+
+- **Smoke test coverage** — 4 new tests:
+  * registryHasProposalEntities happy: 1 proposal indexed
+    (asserts sample id appears in detail)
+  * failure: registry checkpoint empty; verifies
+    registryDirect (the lighter check) STILL passes (no
+    short-circuit)
+  * candlesHasPools happy: 1 pool indexed
+  * failure: candles checkpoint empty; same no-short-
+    circuit verification on candlesDirect
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 25/25 pass (256ms — was
+    21/21)
+  * `npm run scenarios:dry` → exits 0; lists 12 invariants
+    in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: ~89% (17 of ~19 sub-slices total).
+  Each iteration is now 1-2 invariants; the slice keeps
+  expanding as we discover new bug classes. Next bot-doable:
+  candlesAggregation (cross-layer indexer-internal —
+  candle aggregates match raw swaps in the candles
+  indexer) OR chartShape (api unified-chart consistent
+  with indexer raw) OR probabilityBounds (price ∈ [0, 1]
+  on a real pool — needs deciding which pool the harness
+  exercises by default).
 
 Slice 4c v3b summary (previous iteration on the interface side):
 

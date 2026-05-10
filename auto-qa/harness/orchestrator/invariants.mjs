@@ -230,6 +230,53 @@ export const INVARIANTS = [
             return { ok: true, detail: `direct candles returned __typename=Query (${ctx.candlesUrl})` };
         },
     },
+    // ── Data-aware indexer probes ────────────────────────────────────
+    // One step deeper than the bare __typename probes: assert the
+    // indexer not only responds but has actually indexed data.
+    // Catches "indexer reachable but empty" — sync didn't complete,
+    // wrong fork block, contracts didn't emit events, etc.
+    {
+        name: 'registryHasProposalEntities',
+        description: 'registry checkpoint has ≥1 ProposalEntity indexed',
+        layer: 'orchestrator↔registry',
+        check: async (ctx) => {
+            // Schema: ProposalEntity → auto-gen plural is `proposalEntities`.
+            // (Different from candles' `Proposal` type; registry tracks
+            // proposal metadata, candles tracks the AMM pool wrapper.)
+            const j = await fetchJson(ctx.registryUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: '{ proposalEntities(first: 1) { id } }' }),
+            });
+            if (!Array.isArray(j?.data?.proposalEntities)) {
+                throw new Error(`unexpected proposalEntities response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.proposalEntities.length === 0) {
+                throw new Error('registry checkpoint has 0 ProposalEntity rows (sync not complete or fork has no proposal activity)');
+            }
+            return { ok: true, detail: `registry has ≥1 proposal (sample id: ${j.data.proposalEntities[0].id})` };
+        },
+    },
+    {
+        name: 'candlesHasPools',
+        description: 'candles checkpoint has ≥1 Pool indexed',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Schema: Pool → auto-gen plural is `pools`.
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: '{ pools(first: 1) { id } }' }),
+            });
+            if (!Array.isArray(j?.data?.pools)) {
+                throw new Error(`unexpected pools response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.pools.length === 0) {
+                throw new Error('candles checkpoint has 0 Pool rows (sync not complete or fork has no pool deployments)');
+            }
+            return { ok: true, detail: `candles has ≥1 pool (sample id: ${j.data.pools[0].id})` };
+        },
+    },
     // ── Chain-process probes ────────────────────────────────────────
     // Validate the chain process itself before checking contract state.
     // If anvilBlockNumber + anvilChainId pass but rateSanity fails,
