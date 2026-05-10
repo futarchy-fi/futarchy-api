@@ -28,7 +28,11 @@ const RUNNER = resolve(__dirname, '..', 'orchestrator', 'scenario-runner.mjs');
 
 // ─── tiny api fixture ───────────────────────────────────────────────
 
-function startFixture({ healthOk = true, registryTypename = 'Query' } = {}) {
+function startFixture({
+    healthOk = true,
+    registryTypename = 'Query',
+    candlesTypename = 'Query',
+} = {}) {
     return new Promise((res) => {
         const server = createServer((req, response) => {
             req.on('data', () => {});
@@ -42,6 +46,11 @@ function startFixture({ healthOk = true, registryTypename = 'Query' } = {}) {
                 if (req.url === '/registry/graphql' && req.method === 'POST') {
                     response.setHeader('content-type', 'application/json');
                     response.end(JSON.stringify({ data: { __typename: registryTypename } }));
+                    return;
+                }
+                if (req.url === '/candles/graphql' && req.method === 'POST') {
+                    response.setHeader('content-type', 'application/json');
+                    response.end(JSON.stringify({ data: { __typename: candlesTypename } }));
                     return;
                 }
                 response.statusCode = 404;
@@ -111,6 +120,24 @@ test('runAllInvariants — failure: registry typename wrong', async () => {
     }
 });
 
+test('runAllInvariants — failure: candles typename wrong (slice 4d-scenarios-more)', async () => {
+    const fx = await startFixture({ candlesTypename: 'WrongType' });
+    try {
+        const { pass, results } = await runAllInvariants({ apiUrl: fx.url });
+        assert.equal(pass, false);
+        const candles = results.find((r) => r.name === 'apiCanReachCandles');
+        assert.equal(candles.ok, false);
+        assert.match(candles.error, /unexpected __typename/);
+        // Other invariants still ran (no short-circuit)
+        const health = results.find((r) => r.name === 'apiHealth');
+        assert.equal(health.ok, true);
+        const reg = results.find((r) => r.name === 'apiCanReachRegistry');
+        assert.equal(reg.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('scenario-runner CLI — dry-run exits 0 without network', () => {
     const r = spawnSync('node', [RUNNER], {
         env: {
@@ -124,6 +151,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /invariants registered: \d+/);
     assert.match(r.stdout, /apiHealth/);
     assert.match(r.stdout, /apiCanReachRegistry/);
+    assert.match(r.stdout, /apiCanReachCandles/);
 });
 
 test('scenario-runner CLI — native mode exits 2 with guidance', () => {

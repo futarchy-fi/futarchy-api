@@ -750,12 +750,14 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables): apiCanReachCandles,
+      PROGRESS.md's invariant tables). Now 3 invariants:
+      `apiHealth`, `apiCanReachRegistry`, `apiCanReachCandles`
+      (added this slice — mirrors registry pattern, hits
+      api `/candles/graphql` with `__typename` probe; 7 smoke
+      tests green). Still to add (each a small additive slice):
       rateSanity (sDAI rate ≥ 1, monotonic), probabilityBounds
       (price ∈ [0, 1]), candlesAggregation (candle vs raw
       swaps), chartShape, conservation (∑YES + ∑NO = ∑sDAI).
-      Each is a small additive slice on the now-stable
-      `INVARIANTS` array.
 - [x] **4d-activate — orchestrator block UNCOMMENTED.**
       Replaced the `tail -f /dev/null` placeholder with
       `node orchestrator/scenario-runner.mjs`. Dropped the

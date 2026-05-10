@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE: anvil + api + 4 indexer services + interface-dev + orchestrator wired to scenario-runner.mjs). 30/30 browser tests green. Phase 3 25+6 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 3 invariants: apiHealth + apiCanReachRegistry + apiCanReachCandles). 30/30 browser tests green. Phase 3 25+7 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -1790,6 +1790,60 @@ Phase 7 slice 4d-activate summary (this iteration on the api side):
   except for slice 4d-scenarios-more (incremental: add more
   invariants). The remaining sub-slices (4b/4c/4d-verify +
   4e) all need the Docker daemon and are mostly human work.
+
+Phase 7 slice 4d-scenarios-more (apiCanReachCandles) summary (this iteration on the api side):
+
+- One new invariant added to the `INVARIANTS` array:
+  `apiCanReachCandles` (api↔candles cross-layer). Mirrors the
+  registry-probe pattern: POST `__typename` query to
+  `/candles/graphql`, assert `data.__typename === 'Query'`.
+  Trace: api `/candles/graphql` handler → proxyCandlesQuery
+  → candles-adapter → upstream Checkpoint indexer → response
+  flows back. The bare `__typename` query doesn't trigger
+  any of the adapter's schema-translation branches (those
+  only kick in for Pool/Candle queries), so it flows
+  through cleanly.
+
+- **Demonstrates the additive pattern**: the assertion
+  library's clean separation (data: INVARIANTS; control flow:
+  scenario-runner) means new invariants are pure-additive
+  edits to the array. Zero changes to scenario-runner.mjs.
+  Each new invariant ships with smoke-test coverage:
+  expand the in-process node:http fixture, add 1-2 test
+  cases for happy + failure paths.
+
+- **What landed**:
+  * `auto-qa/harness/orchestrator/invariants.mjs` — added
+    `apiCanReachCandles` after `apiCanReachRegistry` (kept
+    same shape; consistent ordering).
+  * `auto-qa/harness/tests/smoke-scenario-runner.test.mjs` —
+    fixture extended with `/candles/graphql` route +
+    `candlesTypename` option; new test
+    `runAllInvariants — failure: candles typename wrong`
+    confirms candles failure doesn't short-circuit other
+    invariants; CLI dry-run test extended to assert all 3
+    invariants appear in stdout.
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 7/7 pass (147ms)
+  * `npm run scenarios:dry` → exits 0; lists 3 invariants
+    in catalog
+  * No existing smoke tests broken
+  * `docker compose config --quiet` still passes; service
+    list unchanged (8 services — orchestrator wiring lives
+    inside the runner code, not in compose env)
+
+- Slice 4 progress: ~75% done (12 of ~16+ sub-slices total).
+  Slice 4d-scenarios-more keeps absorbing new invariants
+  one at a time. Next bot-doable: another invariant from
+  PROGRESS.md's tables (rateSanity is meaty — needs RPC
+  access + raw eth_call/ABI; probabilityBounds needs a real
+  pool to query). Or: skip to the simpler `registryDirect`
+  / `candlesDirect` invariants that probe the indexers
+  WITHOUT going through the api (assert the indexers are
+  individually reachable from the orchestrator container,
+  which validates the network bridging from slice
+  4b-network-wire is correct).
 
 Slice 4c v3b summary (previous iteration on the interface side):
 

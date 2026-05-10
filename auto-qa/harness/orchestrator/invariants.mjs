@@ -82,6 +82,27 @@ export const INVARIANTS = [
             return { ok: true, detail: 'registry returned __typename=Query via api passthrough' };
         },
     },
+    {
+        name: 'apiCanReachCandles',
+        description: 'api /candles/graphql proxies the __typename probe to candles checkpoint',
+        layer: 'api↔candles',
+        check: async (ctx) => {
+            // The candles endpoint goes through proxyCandlesQuery + the
+            // candles-adapter, which forwards to the upstream Checkpoint
+            // indexer. Bare `__typename` flows through cleanly because
+            // it doesn't trigger any of the adapter's schema-translation
+            // branches (those only kick in for Pool/Candle queries).
+            const j = await fetchJson(`${ctx.apiUrl}/candles/graphql`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: PROBE_QUERY }),
+            });
+            if (j?.data?.__typename !== 'Query') {
+                throw new Error(`unexpected __typename response: ${JSON.stringify(j)}`);
+            }
+            return { ok: true, detail: 'candles returned __typename=Query via api passthrough' };
+        },
+    },
 ];
 
 /**
