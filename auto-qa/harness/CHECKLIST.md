@@ -154,12 +154,36 @@ both layers in parallel and probe each via its native protocol.
 
 **Goal:** real on-chain mutation, full chain↔indexer↔api check.
 
-- [ ] `eth_subscribe` shim spike completed (per ADR-001 risk)
-- [ ] `installWalletStub` actually returns a runnable EIP-1193 stub
-- [ ] `nStubWallets(N)` derives N deterministic addresses from anvil
-      mnemonic
-- [ ] First scripted swap: orchestrator → wallet stub → anvil →
-      indexer event → api response, all reconcile
+- [x] `eth_subscribe` shim spike completed —
+      `interface/auto-qa/harness/docs/spike-002-eth-subscribe-shim.md`.
+      Decision: **reject with -32601** (mirrors anvil's actual HTTP
+      behavior; viem/Wagmi watchers already poll over HTTP transports;
+      `useWaitForTransactionReceipt` hard-codes `poll: true`). No
+      shim infrastructure needed. Already implemented in
+      `fixtures/wallet-stub.mjs::SUBSCRIPTION_METHODS`.
+- [/] `installWalletStub` PARTIAL: `createProvider` (the testable
+      in-process core) works end-to-end against live anvil — verified
+      by 8-case node:test in `tests/smoke-wallet-stub.test.mjs`
+      (5s runtime). The browser-injection wrapper (literal
+      `installWalletStub` returning JS source for Playwright
+      `addInitScript`) still throws and lands in Phase 5.
+- [x] `nStubWallets(N)` derives canonical anvil dev addresses from
+      the foundry mnemonic (verified: 0xf39F…, 0x7099…, 0x3C44…).
+      Returns `{address, privateKey}` per account; rejects n<1.
+- [/] First scripted swap PARTIAL: tx submit/sign/mine flow works
+      (receipt status 0x1, sender debited correctly including gas),
+      but cross-layer indexer↔api reconciliation pending Phase 3's
+      indexer up + Docker Desktop.
+
+**Phase 4 KNOWN QUIRK** (logged for follow-up, not blocking): On a
+Gnosis fork, after a successful 1-ETH transfer between anvil dev
+addresses, the recipient's `eth_getBalance` reads as 0 (not pre+1ETH)
+even though the receipt is `status: 0x1` and the sender is correctly
+debited. Sender behavior is correct; only recipient post-balance
+reads anomalous. Not a wallet-stub bug — surfaces some interaction
+between anvil's fork mode and pre-funded dev accounts. Tracked as
+a diagnostic in `tests/smoke-wallet-stub.test.mjs`. Investigate
+before relying on recipient-balance checks in scenario tests.
 
 ## Phase 5 — Playwright + DOM↔API assertions
 

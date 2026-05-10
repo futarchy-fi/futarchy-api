@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 3 — slices 1-5 landed. Roundtrip invariant test ships (anvil mines → indexer follows, via bootstrapAfterStart). 25 smoke tests pass + 4 skips (all docker-up-gated). 3/4 original CHECKLIST items + spike + bonus items ticked. |
+| Phase | 4 — UI side ACTIVE. createProvider EIP-1193 stub validated against live anvil (8 cases pass in 5s, see interface repo). Spike-002 resolved. Phase 3 25 smoke tests pass + 4 skips (all docker-up-gated). |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
