@@ -778,6 +778,61 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'apiCandlesGraphqlForwardsIntrospection',
+        description: 'api /candles/graphql forwards __schema introspection queries (sister to apiRegistryGraphqlForwardsIntrospection — completes the introspection-passthrough probe pair across both indexers)',
+        layer: 'api↔candles',
+        check: async (ctx) => {
+            // Sister to apiRegistryGraphqlForwardsIntrospection (just
+            // shipped). Same pattern, candles side. Together with the
+            // two DIRECT-side introspection probes
+            // (registryIndexerSchemaHasRequiredTypes,
+            // candlesIndexerSchemaHasRequiredTypes), this completes
+            // a 2×2 introspection coverage MATRIX:
+            //
+            //                  | Direct-side | API-side |
+            //   ---------------+-------------+----------+
+            //   registry       |      ✓      |    ✓     |
+            //   candles        |      ✓      |    ✓     |  (this slice)
+            //
+            // For ANY introspection failure, two probes light up
+            // and the diagnostic combines into a precise root-cause
+            // statement (api-vs-indexer × registry-vs-candles).
+            //
+            // Required types: Pool, Swap, Candle (the three entities
+            // the harness queries from the candles indexer). Same as
+            // the DIRECT-side sister.
+            //
+            // Bug class (NOT caught by the DIRECT sister):
+            //   * api proxy on /candles/graphql strips __schema
+            //     (production GraphQL gateways often disable
+            //     introspection at the api layer)
+            //   * api on the candles route is misconfigured
+            //     differently from the api on the registry route
+            //     (separate proxy configs — possible to have one
+            //     stripping introspection and the other forwarding;
+            //     pairing the two api-layer probes catches per-route
+            //     proxy config drift)
+            const REQUIRED = ['Pool', 'Swap', 'Candle'];
+            const j = await fetchJson(`${ctx.apiUrl}/candles/graphql`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ __schema { types { name } } }',
+                }),
+            });
+            const types = j?.data?.__schema?.types;
+            if (!Array.isArray(types)) {
+                throw new Error(`api /candles/graphql __schema.types not an array — proxy stripped introspection or returned a malformed response (got ${JSON.stringify(j)?.slice(0, 100)}); cross-check with candlesIndexerSchemaHasRequiredTypes (DIRECT) to determine if the cause is api or indexer`);
+            }
+            const present = new Set(types.map((t) => t?.name).filter(Boolean));
+            const missing = REQUIRED.filter((name) => !present.has(name));
+            if (missing.length > 0) {
+                throw new Error(`api passthrough returned __schema but missing required type(s): ${missing.join(', ')} — candles indexer schema regressed AND api still forwards introspection (cross-check with candlesIndexerSchemaHasRequiredTypes)`);
+            }
+            return { ok: true, detail: `api forwards __schema; types include ${REQUIRED.join(', ')} (out of ${present.size} total)` };
+        },
+    },
+    {
         name: 'apiCanReachCandles',
         description: 'api /candles/graphql proxies the __typename probe to candles checkpoint',
         layer: 'api↔candles',

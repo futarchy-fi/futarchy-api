@@ -123,6 +123,11 @@ function startFixture({
     // (e.g., Apollo Gateway with introspection: false). Default
     // false (api forwards introspection like the indexer does).
     apiRegistryStripsIntrospection = false,
+    // For apiCandlesGraphqlForwardsIntrospection (slice 4d-scenarios-more).
+    // Sister knob to apiRegistryStripsIntrospection — separate so
+    // tests can exercise per-route proxy config drift (one route
+    // strips, the other doesn't).
+    apiCandlesStripsIntrospection = false,
     candlesDirectTypename = 'Query',
     // __schema introspection types for candlesIndexerSchemaHasRequiredTypes
     // (slice 4d-scenarios-more). Default lists Pool, Swap, Candle (the
@@ -547,14 +552,20 @@ function startFixture({
                         return;
                     }
                     const candlesForApi = apiCandlesDriftFn(buildCandles());
-                    response.end(JSON.stringify({
-                        data: {
-                            __typename: candlesTypename,
-                            pools: buildPools(),
-                            swaps: buildSwaps(),
-                            candles: candlesForApi,
-                        },
-                    }));
+                    const data = {
+                        __typename: candlesTypename,
+                        pools: buildPools(),
+                        swaps: buildSwaps(),
+                        candles: candlesForApi,
+                    };
+                    // Forward __schema introspection by default (slice
+                    // 4d-scenarios-more apiCandlesGraphqlForwardsIntrospection).
+                    // apiCandlesStripsIntrospection=true simulates a
+                    // proxy that disables introspection on this route.
+                    if (candlesSchemaTypes !== null && !apiCandlesStripsIntrospection) {
+                        data.__schema = { types: candlesSchemaTypes.map((name) => ({ name })) };
+                    }
+                    response.end(JSON.stringify({ data }));
                     return;
                 }
                 if (req.url === '/registry-direct/graphql' && req.method === 'POST') {
@@ -1127,6 +1138,88 @@ test('runAllInvariants — failure: apiRegistryGraphqlForwardsIntrospection api 
         const inv = results.find((r) => r.name === 'apiRegistryGraphqlForwardsIntrospection');
         assert.equal(inv.ok, false);
         assert.match(inv.error, /api passthrough returned __schema but missing required type\(s\): Aggregator.*registry indexer schema regressed AND api still forwards introspection/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiCandlesGraphqlForwardsIntrospection happy: api forwards __schema (default fixture)', async () => {
+    const fx = await startFixture();  // default apiCandlesStripsIntrospection=false
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'apiCandlesGraphqlForwardsIntrospection');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /api forwards __schema; types include Pool, Swap, Candle/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiCandlesGraphqlForwardsIntrospection api proxy strips introspection (per-route lockdown)', async () => {
+    // Common bug: per-route proxy config drift — the candles route
+    // disables introspection while the registry route allows it
+    // (or vice versa). This invariant catches the candles-side
+    // strip; the DIRECT sister still passes (indexer is fine).
+    const fx = await startFixture({ apiCandlesStripsIntrospection: true });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiCandlesGraphqlForwardsIntrospection');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /api \/candles\/graphql __schema\.types not an array.*proxy stripped introspection/);
+        // DIRECT sister STILL passes — indexer fine, only api
+        // candles route is broken.
+        const sister = results.find((r) => r.name === 'candlesIndexerSchemaHasRequiredTypes');
+        assert.equal(sister.ok, true);
+        // Registry sibling probe ALSO passes — per-route drift
+        // confirmed (only candles route is misconfigured).
+        const registrySibling = results.find((r) => r.name === 'apiRegistryGraphqlForwardsIntrospection');
+        assert.equal(registrySibling.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiCandlesGraphqlForwardsIntrospection BOTH api routes strip introspection (proxy-wide lockdown)', async () => {
+    // Both api routes strip introspection — proxy-wide config (e.g.,
+    // `introspection: false` set globally on the api server). Both
+    // api-side probes fail; both DIRECT sisters still pass.
+    const fx = await startFixture({
+        apiRegistryStripsIntrospection: true,
+        apiCandlesStripsIntrospection: true,
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const apiCandles = results.find((r) => r.name === 'apiCandlesGraphqlForwardsIntrospection');
+        assert.equal(apiCandles.ok, false);
+        const apiRegistry = results.find((r) => r.name === 'apiRegistryGraphqlForwardsIntrospection');
+        assert.equal(apiRegistry.ok, false);
+        // Both DIRECT sisters STILL pass — root cause is api proxy
+        // (not indexers).
+        const directCandles = results.find((r) => r.name === 'candlesIndexerSchemaHasRequiredTypes');
+        assert.equal(directCandles.ok, true);
+        const directRegistry = results.find((r) => r.name === 'registryIndexerSchemaHasRequiredTypes');
+        assert.equal(directRegistry.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiCandlesGraphqlForwardsIntrospection api forwards but indexer schema is incomplete', async () => {
+    // Edge case: api forwards introspection correctly, but the
+    // upstream indexer's schema is missing a required type. The
+    // api-side error message reflects that the indexer regressed.
+    const fx = await startFixture({
+        candlesSchemaTypes: ['Query', 'Pool', 'Swap'],  // missing Candle
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiCandlesGraphqlForwardsIntrospection');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /api passthrough returned __schema but missing required type\(s\): Candle.*candles indexer schema regressed AND api still forwards introspection/);
     } finally {
         await fx.stop();
     }
