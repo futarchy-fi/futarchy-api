@@ -30,6 +30,15 @@ const RUNNER = resolve(__dirname, '..', 'orchestrator', 'scenario-runner.mjs');
 
 function startFixture({
     healthOk = true,
+    // Warmer endpoint (slice 4d-scenarios-more apiWarmer): default 200
+    // returns a JSON status object; toggle warmerOk to false for 503.
+    warmerOk = true,
+    warmerContentType = 'application/json',
+    // Spot-candles validation (slice 4d-scenarios-more apiSpotCandlesValidates):
+    // default returns 400 + JSON {error: 'ticker required'} when ticker
+    // missing (matching the api behavior). Toggle to override.
+    spotCandlesNoTickerStatus = 400,
+    spotCandlesNoTickerBody = JSON.stringify({ error: 'ticker required' }),
     registryTypename = 'Query',
     candlesTypename = 'Query',
     // Direct-indexer probes (slice 4d-scenarios-more) hit /registry-direct/graphql
@@ -62,6 +71,18 @@ function startFixture({
                     if (!healthOk) { response.statusCode = 503; response.end('down'); return; }
                     response.setHeader('content-type', 'application/json');
                     response.end(JSON.stringify({ ok: true }));
+                    return;
+                }
+                if (req.url === '/warmer' && req.method === 'GET') {
+                    if (!warmerOk) { response.statusCode = 503; response.end('down'); return; }
+                    response.setHeader('content-type', warmerContentType);
+                    response.end(JSON.stringify({ status: 'warm', queues: 0 }));
+                    return;
+                }
+                if (req.url === '/api/v1/spot-candles' && req.method === 'GET') {
+                    response.statusCode = spotCandlesNoTickerStatus;
+                    response.setHeader('content-type', 'application/json');
+                    response.end(spotCandlesNoTickerBody);
                     return;
                 }
                 if (req.url === '/registry/graphql' && req.method === 'POST') {
@@ -348,6 +369,74 @@ test('runAllInvariants — failure: anvilChainId at bare anvil 0x7a69 (= 31337)'
     }
 });
 
+test('runAllInvariants — apiWarmer happy: 200 + JSON', async () => {
+    const fx = await startFixture();  // default warmerOk=true
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const w = results.find((r) => r.name === 'apiWarmer');
+        assert.equal(w.ok, true);
+        assert.match(w.detail, /200 \+ JSON/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiWarmer down (503)', async () => {
+    const fx = await startFixture({ warmerOk: false });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const w = results.find((r) => r.name === 'apiWarmer');
+        assert.equal(w.ok, false);
+        assert.match(w.error, /HTTP 503|503/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiWarmer returns HTML not JSON', async () => {
+    const fx = await startFixture({ warmerContentType: 'text/html' });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const w = results.find((r) => r.name === 'apiWarmer');
+        assert.equal(w.ok, false);
+        assert.match(w.error, /non-JSON content-type: text\/html/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiSpotCandlesValidates happy: 400 + error JSON', async () => {
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const v = results.find((r) => r.name === 'apiSpotCandlesValidates');
+        assert.equal(v.ok, true);
+        assert.match(v.detail, /400 \+ "ticker required"/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiSpotCandlesValidates returns 200 (validation removed)', async () => {
+    const fx = await startFixture({
+        spotCandlesNoTickerStatus: 200,
+        spotCandlesNoTickerBody: JSON.stringify({ candles: [] }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const v = results.find((r) => r.name === 'apiSpotCandlesValidates');
+        assert.equal(v.ok, false);
+        assert.match(v.error, /should 400, got 200/);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('scenario-runner CLI — dry-run exits 0 without network', () => {
     const r = spawnSync('node', [RUNNER], {
         env: {
@@ -360,6 +449,8 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.equal(r.status, 0, `exit status: ${r.status}, stdout: ${r.stdout}, stderr: ${r.stderr}`);
     assert.match(r.stdout, /invariants registered: \d+/);
     assert.match(r.stdout, /apiHealth/);
+    assert.match(r.stdout, /apiWarmer/);
+    assert.match(r.stdout, /apiSpotCandlesValidates/);
     assert.match(r.stdout, /apiCanReachRegistry/);
     assert.match(r.stdout, /apiCanReachCandles/);
     assert.match(r.stdout, /registryDirect/);

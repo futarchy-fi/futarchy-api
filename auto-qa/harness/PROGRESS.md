@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 8 invariants — 3 api-passthrough + 2 direct-probe + 3 chain-layer; 16 smoke tests green). 30/30 browser tests green. Phase 3 25+16 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 10 invariants — 5 api-internal + 2 direct-probe + 3 chain-layer; 21 smoke tests green). 30/30 browser tests green. Phase 3 25+21 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2036,6 +2036,80 @@ Phase 7 slice 4d-scenarios-more (anvilBlockNumber + anvilChainId) summary (this 
   chartShape, conservation) all need either real pool data
   or multiple contract calls — meatier than the simple
   GraphQL/RPC probes shipped so far.
+
+Phase 7 slice 4d-scenarios-more (apiWarmer + apiSpotCandlesValidates) summary (this iteration on the api side):
+
+- **Two new api-internal invariants**: cover the previously
+  unmonitored `/warmer` route and add a validation-regression
+  check that doesn't need real data:
+  * `apiWarmer` — GET `/warmer`, assert HTTP 200 + JSON
+    content-type + body parses as JSON. Doesn't peek at the
+    body shape (`getWarmerStatus()` can return any shape;
+    over-coupling would make the invariant fragile).
+  * `apiSpotCandlesValidates` — GET `/api/v1/spot-candles`
+    WITHOUT a `ticker` query param, assert HTTP 400 + JSON
+    `{error: ...}`. Catches regressions where:
+    - validation is removed entirely (returns 200 with
+      garbage)
+    - validation crashes (5xx)
+    - route is disconnected (404)
+    All three failure modes look identical from the api's
+    perspective: "endpoint behaves wrong on bad input."
+
+- **Why these two**: the existing 8 invariants cover one
+  api endpoint (`/health`), 2 GraphQL passthroughs, 2 direct
+  indexer probes, and 3 chain-layer RPC calls. They don't
+  exercise:
+  - Other unmonitored api endpoints (5 still — /warmer,
+    /api/v2/proposals/:id/chart, /api/v1/market-events/...,
+    /api/v1/spot-candles, /subgraphs/...)
+  - Input-validation code paths
+  This slice picks off two of those — the warmer endpoint
+  (lowest-risk to add: pure liveness check) and the
+  validation behavior (interesting bug class: regressions
+  that turn 400 into 200 silently break downstream
+  consumers).
+
+- **What was added to invariants.mjs**:
+  * `apiWarmer` and `apiSpotCandlesValidates` invariants;
+    inserted between `apiHealth` and `apiCanReachRegistry`
+    so the `[api]`-layer checks group together in the
+    catalog dump.
+
+- **Smoke fixture extensions**:
+  * `/warmer` GET route returning JSON status (toggleable
+    via `warmerOk` for 503; `warmerContentType` for the
+    HTML-not-JSON regression case).
+  * `/api/v1/spot-candles` GET route returning the
+    configured 400 + JSON error body (toggleable via
+    `spotCandlesNoTickerStatus` + `spotCandlesNoTickerBody`
+    for the validation-removed regression case).
+
+- **Smoke test coverage** — 5 new tests:
+  * apiWarmer happy: 200 + JSON
+  * failure: apiWarmer down (503)
+  * failure: apiWarmer returns HTML not JSON
+  * apiSpotCandlesValidates happy: 400 + error body
+  * failure: apiSpotCandlesValidates returns 200 (validation
+    removed)
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 21/21 pass (226ms — was
+    16/16)
+  * `npm run scenarios:dry` → exits 0; lists 10 invariants
+    in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: ~88% (16 of ~18 sub-slices total —
+  4d-scenarios-more keeps absorbing one or two invariants
+  per iteration). Next bot-doable invariants are the meatier
+  ones (probabilityBounds with real pool data,
+  candlesAggregation cross-layer, chartShape, conservation,
+  cross-run monotonicity). The api-internal/RPC/GraphQL
+  layers are now well covered (10 invariants); the next
+  meaningful additions need to step into the data-shape
+  validation territory.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 

@@ -104,6 +104,56 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'apiWarmer',
+        description: 'api /warmer returns 200 + JSON (warmer-status endpoint reachable)',
+        layer: 'api',
+        check: async (ctx) => {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/warmer`, { signal: ctrl.signal });
+                if (!r.ok) throw new Error(`/warmer → HTTP ${r.status}`);
+                const ct = r.headers.get('content-type') || '';
+                if (!ct.includes('json')) {
+                    throw new Error(`/warmer returned non-JSON content-type: ${ct}`);
+                }
+                // Just verify the body parses as JSON; getWarmerStatus()
+                // can return any shape and we don't want to over-couple.
+                await r.json();
+                return { ok: true, detail: '200 + JSON body from /warmer' };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
+        name: 'apiSpotCandlesValidates',
+        description: 'api /api/v1/spot-candles (no ticker) returns 400 with JSON error (input validation alive)',
+        layer: 'api',
+        check: async (ctx) => {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/api/v1/spot-candles`, { signal: ctrl.signal });
+                // Per src/index.js:
+                //   if (!ticker) return res.status(400).json({ error: 'ticker required' });
+                // Catches regressions where validation is removed and the
+                // endpoint either crashes (5xx), tries to fetch undefined
+                // ticker (200 with garbage), or 404s (route disconnected).
+                if (r.status !== 400) {
+                    throw new Error(`/api/v1/spot-candles without ticker should 400, got ${r.status}`);
+                }
+                const j = await r.json();
+                if (!j?.error) {
+                    throw new Error(`expected {error:...} body, got ${JSON.stringify(j)}`);
+                }
+                return { ok: true, detail: `400 + ${JSON.stringify(j.error)}` };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
         name: 'apiCanReachRegistry',
         description: 'api /registry/graphql proxies the __typename probe to registry checkpoint',
         layer: 'api↔registry',
