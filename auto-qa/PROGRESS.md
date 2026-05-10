@@ -9,15 +9,16 @@ is never modified — only tests on the `auto-qa` branch.
 | Field | Value |
 |---|---|
 | Branch | `auto-qa` (off `origin/main`) |
-| Iterations completed | 11 |
+| Iterations completed | 12 |
 | PRs catalogued | 9 / 9 (full history) |
 | PRs classified | 9 |
-| Tests added | 35 (2 path-prefix + 7 passthrough-contract + 4 unified-chart + 3 multi-proposal-smoke + 3 spot-candles + 3 indexer-freshness + 4 registry-org-shape + 6 legacy-v1-prices + 3 operational-endpoints — 34 passing, 1 skipped) |
-| Cross-cutting catches | catastrophic-empty guards, indexer freshness bounds, metadata parseability |
+| Tests added | 46 (2 path-prefix + 7 passthrough-contract + 4 unified-chart + 3 multi-proposal-smoke + 3 spot-candles + 3 indexer-freshness + 4 registry-org-shape + 6 legacy-v1-prices + 3 operational-endpoints + 11 passthrough-smoke — 45 passing, 1 skipped) |
+| Cross-cutting catches | catastrophic-empty guards, indexer freshness bounds, metadata parseability, **parse-error status inconsistency between passthroughs** |
 | Ops invariants tracked | indexer lag (candles + registry) bounded vs. Gnosis chain tip |
-| PRs covered by tests | **7 / 9** (#1, #4, #5, #6, #7, #8, #9 — all bug-fix PRs) |
+| PRs covered by tests | **8 / 9** (#1, #3, #4, #5, #6, #7, #8, #9 — only #2 infra remains) |
 | API surfaces with smoke tests | **3 / 3** (`/api/v2/.../chart`, `/candles/graphql`, `/api/v1/spot-candles`) |
 | Data-quality issues surfaced | 2 proposals (TSLA Mega Package, CIP-82) return zero prices + "TOKEN" fallback symbol — see below |
+| **Real bugs surfaced** | **`/candles/graphql` returns HTTP 502 on malformed query (should be 400 like /registry/graphql)** — pinned in `passthrough-smoke.test.mjs::PARSE_ERROR_STATUS` |
 | Test runner | `node --test` via `npm run auto-qa:test` |
 | Tooling backlog | see below |
 
@@ -71,7 +72,7 @@ is never modified — only tests on the `auto-qa` branch.
 - **Hypothesis**: n/a
 - **Ideal test**: Smoke test — passthroughs return HTTP 200 and a well-formed GraphQL envelope (`data` or `errors` key) for a trivial introspection query. Catches infra regressions (route mounted? upstream reachable? HTTPS termination working?).
 - **Tools needed**: HTTP client.
-- **Test status**: not-started (TODO future iteration)
+- **Test status**: **landed-passing** (`auto-qa/tests/passthrough-smoke.test.mjs`, 11 cases — `{ __typename }` and `__schema` introspection on both endpoints, malformed-query envelope shape, GET rejection, parallel responsiveness, plus a baseline test pinning the surfaced inconsistency: `/candles/graphql` returns 502 on parse errors while `/registry/graphql` returns 400)
 
 ### PR #2 — infra(rpc-proxy): multi-RPC pool with tip buffer, failover, hash pinning
 - **Class**: infra (also has bug-prevention character — pre-empts reorg loops)
