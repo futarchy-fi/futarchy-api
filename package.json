@@ -26,6 +26,7 @@
         "auto-qa:e2e:smoke:start:indexers": "npm --prefix auto-qa/harness run smoke:start:indexers",
         "auto-qa:e2e:smoke:bootstrap": "npm --prefix auto-qa/harness run smoke:bootstrap",
         "auto-qa:e2e:smoke:orchestration": "npm --prefix auto-qa/harness run smoke:orchestration",
+        "auto-qa:e2e:smoke:roundtrip": "npm --prefix auto-qa/harness run smoke:roundtrip",
         "auto-qa:e2e:indexers:bootstrap": "npm --prefix auto-qa/harness run indexers:bootstrap",
         "auto-qa:e2e:indexers:start": "npm --prefix auto-qa/harness run indexers:start",
         "auto-qa:e2e:indexers:stop": "npm --prefix auto-qa/harness run indexers:stop"

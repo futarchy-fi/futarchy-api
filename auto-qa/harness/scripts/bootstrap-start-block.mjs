@@ -51,12 +51,14 @@ const DEFAULT_INDEXER_NAME = 'gnosis';
 const KIND_CONFIG = {
     registry: {
         project: 'futarchy-harness-registry',
-        postgresService: 'registry-postgres',  // service name from compose
-        composeKey: 'registry',                // key in detect-indexers result
+        postgresService: 'registry-postgres',     // service name from compose
+        indexerService: 'registry-checkpoint',    // service name from compose
+        composeKey: 'registry',                   // key in detect-indexers result
     },
     candles: {
         project: 'futarchy-harness-candles',
         postgresService: 'postgres',
+        indexerService: 'checkpoint',
         composeKey: 'candles',
     },
 };
@@ -223,6 +225,124 @@ export async function bootstrapStartBlock({
 
     await execPsql({ kind, composePath }, sql);
     return { written: lastBlock };
+}
+
+/**
+ * Wait for the `_metadatas` table to exist in postgres.
+ *
+ * The table is created by the Checkpoint package on first startup
+ * (after `RESET=true` runs `Container.reset()` per spike-001). Polls
+ * `pg_class` until the table appears or times out.
+ */
+async function awaitMetadataTable(opts, timeoutMs = 60_000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        try {
+            const out = await execPsql(
+                opts,
+                `SELECT 1 FROM pg_class WHERE relname='_metadatas'`,
+            );
+            if (out === '1') return { ok: true, elapsedMs: Date.now() - start };
+        } catch {
+            // postgres may not be reachable yet
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+    }
+    return {
+        ok: false,
+        elapsedMs: Date.now() - start,
+        reason: `_metadatas table did not appear within ${timeoutMs}ms`,
+    };
+}
+
+/**
+ * Restart the indexer container ONLY (leaves postgres running).
+ *
+ * Used after we update `_metadatas.last_indexed_block` — the indexer's
+ * `getStartBlockNum()` is only called at startup, so we have to restart
+ * for the new value to take effect.
+ */
+function composeRestart(composePath, project, service) {
+    return new Promise((resolve, reject) => {
+        const child = spawn(
+            'docker',
+            ['compose', '-f', composePath, '-p', project, 'restart', service],
+            { stdio: ['ignore', 'pipe', 'pipe'] },
+        );
+        let stderr = '';
+        child.stderr.on('data', (c) => { stderr += c.toString(); });
+        child.on('exit', (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`compose restart ${service} exited ${code}: ${stderr.slice(-300)}`));
+        });
+    });
+}
+
+/**
+ * The full bootstrap flow with race-tolerance:
+ *
+ *   1. Wait for `_metadatas` table to exist (Checkpoint creates it
+ *      on first startup after RESET=true)
+ *   2. UPDATE the `last_indexed_block` row to `startBlock - 1`
+ *   3. Restart the indexer container (postgres stays up)
+ *   4. Caller is responsible for awaiting the indexer's GraphQL
+ *      readiness after restart
+ *
+ * Use this AFTER startIndexers({reset: true}) has returned. The
+ * caller knows the indexer container is running but the indexer
+ * may have already begun scanning from configStart (~44M for the
+ * registry indexer). The restart discards that wasted work and
+ * makes the indexer pick up our injected start block.
+ *
+ * @param {Object} opts
+ * @param {'registry'|'candles'} opts.kind
+ * @param {number} opts.startBlock
+ * @param {string} [opts.indexerName] — defaults to 'gnosis'
+ * @param {number} [opts.tableTimeoutMs] — default 60s
+ */
+export async function bootstrapAfterStart({
+    kind,
+    startBlock,
+    indexerName = DEFAULT_INDEXER_NAME,
+    tableTimeoutMs = 60_000,
+}) {
+    if (!KIND_CONFIG[kind]) throw new Error(`unknown kind: ${kind}`);
+    if (!Number.isInteger(startBlock) || startBlock < 1) {
+        throw new Error('startBlock must be a positive integer');
+    }
+    if (!dockerAvailable()) {
+        const err = new Error('docker daemon not reachable');
+        err.code = 'DOCKER_DOWN';
+        throw err;
+    }
+
+    const cfg = KIND_CONFIG[kind];
+    const indexers = await requireIndexers();
+    const composePath = indexers[cfg.composeKey].compose;
+    const opts = { kind, composePath };
+
+    // 1. Wait for table to exist
+    const wait = await awaitMetadataTable(opts, tableTimeoutMs);
+    if (!wait.ok) {
+        throw new Error(`bootstrapAfterStart: ${wait.reason}`);
+    }
+
+    // 2. UPDATE the row (it should exist after RESET=true insert)
+    const lastBlock = startBlock - 1;
+    const sql = `
+        INSERT INTO _metadatas (id, indexer, value)
+        VALUES ('last_indexed_block', '${indexerName}', '${lastBlock}')
+        ON CONFLICT (id, indexer) DO UPDATE SET value = EXCLUDED.value;
+    `.replace(/\s+/g, ' ').trim();
+    await execPsql(opts, sql);
+
+    // 3. Restart indexer container (preserves postgres)
+    await composeRestart(composePath, cfg.project, cfg.indexerService);
+
+    return {
+        written: lastBlock,
+        tableAvailableAfterMs: wait.elapsedMs,
+    };
 }
 
 /**

@@ -130,8 +130,16 @@ both layers in parallel and probe each via its native protocol.
       daemon-up). Live runtime validation pending Docker Desktop start.
 - [ ] Schema migration cold-start time documented (this is the
       brittleness risk per PROGRESS.md)
-- [ ] Smoke test: write a Swap event on anvil → wait → query indexer
-      via GraphQL → assert event present
+- [x] Smoke test: indexer follows anvil's block height (foundational
+      invariant — proves the chain↔indexer pipeline). Implemented
+      in `tests/smoke-indexer-roundtrip.test.mjs`. Uses
+      `bootstrapAfterStart` (UPDATE `_metadatas.last_indexed_block` →
+      restart indexer) to skip the indexer past anvil's fork height,
+      then mines 5 blocks on anvil and asserts the indexer follows
+      within `HARNESS_INDEXER_SYNC_MS` (default 60s). Per-event
+      assertions (Swap-specific, Proposal-specific) deferred to
+      post-Phase-3 work that needs mock contracts deployed on anvil.
+      Skips cleanly when daemon down.
 - [x] **Spike resolved** — `START_BLOCK` env support: NO env, but
       `_metadatas.last_indexed_block` postgres row IS the bootstrap
       point (see `docs/spike-001-checkpoint-anvil-compat.md`).

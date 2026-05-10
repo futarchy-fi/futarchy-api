@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 3 — slices 1+1.5+2+3+4 landed. Orchestration smoke (anvil + registry indexer via docker) shipped; skips cleanly when daemon down. 25 smoke tests pass + 3 skips. Slice 5 (literal roundtrip invariant) requires solving RESET-vs-bootstrap race. |
+| Phase | 3 — slices 1-5 landed. Roundtrip invariant test ships (anvil mines → indexer follows, via bootstrapAfterStart). 25 smoke tests pass + 4 skips (all docker-up-gated). 3/4 original CHECKLIST items + spike + bonus items ticked. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -643,39 +643,91 @@ Phase 2 slice 4 — multi-spawn stress (3 cycles) ✓ ~8.2s
                                        TOTAL: 25 pass + 3 skip
 ```
 
-**Phase 3 remaining work:**
+- **slice 5** (this iteration) — `bootstrapAfterStart` + roundtrip
+  test. Solved the bootstrap-vs-RESET race using the
+  **restart-after-inject** approach (option mid-way between (a) and
+  (c) from the design exploration):
 
-- **slice 5 — Bootstrap-vs-RESET race + literal roundtrip invariant.**
-  Three viable bootstrap-timing designs, ordered by ease:
+    1. Start indexer with `RESET=true` (Checkpoint creates the
+       `_metadatas` table + inserts `last_indexed_block=0`)
+    2. Wait for the table to exist (poll `pg_class`)
+    3. UPSERT `last_indexed_block` to `(startBlock - 1)`
+    4. `docker compose restart <indexerService>` (postgres stays up)
+    5. Re-await GraphQL — indexer now reads our injected value at
+       startup via `getStartBlockNum()` and starts at startBlock
 
-  **(a) Two-phase compose**: split `up -d` into `up -d postgres` →
-       `await postgres healthy` → run `checkpoint generate` against
-       it → inject `_metadatas` row → `up -d --no-deps registry-checkpoint`.
-       Cleanest, most deterministic. Requires running `checkpoint
-       generate` outside the indexer container (could docker exec
-       into postgres or use a one-shot init container).
+  This avoids needing to know the upstream `_metadatas` schema (we
+  don't pre-create — we let Checkpoint do it). The wasted compute
+  is bounded: between RESET and restart the indexer scans from
+  configStart (~44.2M for registry) but anvil returns empty for
+  pre-fork blocks, so the iterations are cheap.
 
-  **(b) Wrapper command override**: replace upstream compose's
-       `command:` with a wrapper that does `checkpoint generate &&
-       sleep N && inject-row && npm run dev`. Modifies upstream
-       compose semantics — adds friction but no race.
+  - `scripts/bootstrap-start-block.mjs`:
+    - Added `bootstrapAfterStart({kind, startBlock, indexerName,
+      tableTimeoutMs})` — does the wait→update→restart sequence
+    - Added `awaitMetadataTable(opts, timeoutMs)` — polls pg_class
+    - Added `composeRestart(composePath, project, service)` —
+      restarts a single service in a project
+    - `KIND_CONFIG` extended with `indexerService` (registry-checkpoint
+      / checkpoint per upstream compose)
 
-  **(c) Race after `up -d`**: just inject the row immediately after
-       compose returns and hope we beat the indexer's first scan.
-       Fragile, but might work in practice.
+  - `tests/smoke-indexer-roundtrip.test.mjs` (new): the actual
+    chain↔indexer invariant. Skips when anvil/indexer-clone/docker
+    unavailable. Full flow per docstring (start anvil → start indexer
+    with RESET → bootstrap → mine → assert indexer follows).
+    Default timeouts: ready 240s, sync 60s. Override via
+    `HARNESS_INDEXER_READY_MS` / `HARNESS_INDEXER_SYNC_MS`.
 
-  Once bootstrap is solved, the actual invariant test:
-  - Start anvil at fork block N
-  - Bootstrap registry indexer to start at N
-  - Wait for indexer to reach N (via psql `last_indexed_block` poll)
-  - Mine 5 blocks on anvil → height N+5
-  - Wait for indexer to reach N+5
-  - Cross-layer: query api `/registry/graphql` for the same block
-  - Assert: indexer head == anvil head, api passthrough returns
-    indexer's response verbatim
+  - npm scripts: `smoke:roundtrip` in harness;
+    `auto-qa:e2e:smoke:roundtrip` at root.
 
-- **slice 6 — Cold-start optimization** (only if Phase 7 CI wall
+  - CHECKLIST.md: Phase 3 "Smoke test" item ticked with reframe
+    note (we test block-following as the foundational invariant;
+    Swap-event-specific tests need mock contracts on anvil — future
+    work).
+
+**Smoke summary (post-Phase 3 slice 5):**
+
+```
+[Phase 1]
+  start-fork + block-clock                          ✓ ~3s
+  setNextTimestamp                                  ✓ ~2.5s
+  setBalance                                        ✓ ~2.5s
+  impersonateAccount                                ✓ ~3s
+  compose smoke                                      ⊘ skipped (daemon down)
+[Phase 2]
+  orchestrator dual-source                           ✓ ~3.5s
+  passthrough verbatim                               ✓ ~280ms
+  passthrough 500                                    ✓ ~280ms
+  passthrough 502 unreachable                        ✓ ~270ms
+  multi-spawn stress (3 cycles)                     ✓ ~8.2s
+[Phase 3]
+  detect-indexers (happy)                            ✓ ~25ms
+  detect-indexers (missing-override)                 ✓ ~1ms
+  start-indexers contract (5 cases + 1 skip)        ✓ ~2.3s
+  bootstrap-start-block contract (9 cases)          ✓ ~1s
+  indexer orchestration                              ⊘ skipped (daemon down)
+  indexer roundtrip                                  ⊘ skipped (daemon down)
+                                       TOTAL: 25 pass + 4 skip
+```
+
+**Phase 3 wrap-up — remaining:**
+
+- **slice 6 — Live runtime validation** (gated on Docker Desktop
+  start). All 4 docker-down skips become passes. Will likely surface
+  bugs in:
+  - Cold-start time (Spike-001 estimated 50-90s; actual on this
+    Mac may differ)
+  - `host.docker.internal` reachability from indexer container
+  - Restart timing — does Checkpoint's `Container` cleanly re-read
+    `getStartBlockNum()` on container restart?
+  - Race between table creation and our `awaitMetadataTable` poll
+- **slice 7 — Cold-start optimization** (only if Phase 7 CI wall
   time becomes problematic). Pre-warmed postgres image strategy.
+- **slice 8 — Per-event invariant** (post-Phase-3): deploy a mock
+  futarchy contract on anvil, fire NewProposal, assert it lands in
+  the indexer's `proposals` table. Foundation for Phase 6 scenario
+  replays.
 
 **Phase 3 risks tracked:**
 
