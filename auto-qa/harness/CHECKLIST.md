@@ -750,23 +750,25 @@ freshly-generated addresses as recipients; documented in
       `scenarios:run`, `smoke:scenarios`. All 6 tests
       green; dry-run validated.
 - [ ] **4d-scenarios-more — add remaining invariants** (per
-      PROGRESS.md's invariant tables). Now 29 invariants:
-      5 api-internal + 21 indexer probes (2 `__typename`
-      liveness + 6 data-aware coverage + 4 single-row
-      data-SHAPE + 2 multi-row data-SHAPE + 2 cross-layer
-      MATCH + 4 cross-entity FK + 1 cross-entity TIME-
-      COHERENCE: `proposalEntityOrganizationReferentialIntegrity`
-      added this slice — closes the registry FK chain
-      coverage. With this in place, ALL 4 documented FK
-      relationships in the system have a check:
-      Swap→Pool, Candle→Pool, Organization→Aggregator,
-      ProposalEntity→Organization. Catches orphan-proposal
-      from proposal-event handler FK bugs) + 3 chain-layer
-      probes. 81 smoke tests green. Still to add:
-      probabilityBounds, candlesAggregation (Candle.volume
-      = sum of contained Swap amounts within period),
-      chartShape (api unified-chart vs indexer raw),
-      conservation, cross-run monotonicity on rateSanity.
+      PROGRESS.md's invariant tables). Now 30 invariants:
+      6 api-internal + 21 indexer probes + 3 chain-layer.
+      `apiSpotCandlesHappyPath` added this slice — first
+      api data-PLANE check (vs the prior api probes that
+      were validation-only or pure passthroughs). Calls
+      /api/v1/spot-candles?ticker=… expecting 200 + JSON
+      with `spotCandles` array. Walks the api's full
+      data plane (request → validation → fetchSpotCandles
+      → spotCache → response transform → JSON write);
+      catches downstream-throw 500s, response-shape
+      regressions (renamed/dropped spotCandles field),
+      and status-code regressions that bypass
+      apiSpotCandlesValidates (which only tests the
+      400-error path). 85 smoke tests green. Still to
+      add: probabilityBounds, candlesAggregation
+      (Candle.volume = sum of contained Swap amounts
+      within period), chartShape (api unified-chart vs
+      indexer raw), conservation, cross-run
+      monotonicity on rateSanity.
 - [x] **4d-activate — orchestrator block UNCOMMENTED.**
       Replaced the `tail -f /dev/null` placeholder with
       `node orchestrator/scenario-runner.mjs`. Dropped the

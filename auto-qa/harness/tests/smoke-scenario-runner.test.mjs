@@ -39,6 +39,14 @@ function startFixture({
     // missing (matching the api behavior). Toggle to override.
     spotCandlesNoTickerStatus = 400,
     spotCandlesNoTickerBody = JSON.stringify({ error: 'ticker required' }),
+    // Spot-candles happy-path (slice 4d-scenarios-more
+    // apiSpotCandlesHappyPath): when ticker is present, default
+    // returns 200 + {spotCandles: []} matching the api's empty-
+    // result shape. Toggle to simulate data-plane failures:
+    //   - status: change to 500 to simulate downstream throw
+    //   - body: change to break shape (e.g. drop spotCandles field)
+    spotCandlesWithTickerStatus = 200,
+    spotCandlesWithTickerBody = JSON.stringify({ spotCandles: [] }),
     registryTypename = 'Query',
     candlesTypename = 'Query',
     // Direct-indexer probes (slice 4d-scenarios-more) hit /registry-direct/graphql
@@ -223,10 +231,21 @@ function startFixture({
                     response.end(JSON.stringify({ status: 'warm', queues: 0 }));
                     return;
                 }
-                if (req.url === '/api/v1/spot-candles' && req.method === 'GET') {
-                    response.statusCode = spotCandlesNoTickerStatus;
+                if (req.url?.startsWith('/api/v1/spot-candles') && req.method === 'GET') {
+                    // Dispatch on whether `ticker` query param is present.
+                    // The bare `/api/v1/spot-candles` URL has no `?` and
+                    // returns the no-ticker (400 by default) branch;
+                    // anything with `?ticker=...` returns the happy-path
+                    // (200 + spotCandles array by default).
+                    const hasTicker = req.url.includes('ticker=');
                     response.setHeader('content-type', 'application/json');
-                    response.end(spotCandlesNoTickerBody);
+                    if (hasTicker) {
+                        response.statusCode = spotCandlesWithTickerStatus;
+                        response.end(spotCandlesWithTickerBody);
+                    } else {
+                        response.statusCode = spotCandlesNoTickerStatus;
+                        response.end(spotCandlesNoTickerBody);
+                    }
                     return;
                 }
                 if (req.url === '/registry/graphql' && req.method === 'POST') {
@@ -812,6 +831,82 @@ test('runAllInvariants — failure: apiSpotCandlesValidates returns 200 (validat
         const v = results.find((r) => r.name === 'apiSpotCandlesValidates');
         assert.equal(v.ok, false);
         assert.match(v.error, /should 400, got 200/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiSpotCandlesHappyPath happy: 200 + empty spotCandles array', async () => {
+    // Default fixture: ticker present → 200 + {spotCandles: []}.
+    // Empty array is the documented happy-path empty case (still
+    // 200, JSON, has the expected field — just no data).
+    const fx = await startFixture();
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'apiSpotCandlesHappyPath');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /200 \+ spotCandles array of length 0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — apiSpotCandlesHappyPath happy: 200 + spotCandles with data', async () => {
+    const fx = await startFixture({
+        spotCandlesWithTickerBody: JSON.stringify({
+            spotCandles: [
+                { periodStartUnix: '1700000000', close: '0.42' },
+                { periodStartUnix: '1700003600', close: '0.45' },
+            ],
+        }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'apiSpotCandlesHappyPath');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /200 \+ spotCandles array of length 2/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiSpotCandlesHappyPath data-plane error (500 from downstream throw)', async () => {
+    // Validation passed but the downstream fetchSpotCandles call
+    // throws and the catch-all returns 500. apiSpotCandlesValidates
+    // (the 400-path probe) STILL passes because it tests a different
+    // request — distinguishes the two failure modes.
+    const fx = await startFixture({
+        spotCandlesWithTickerStatus: 500,
+        spotCandlesWithTickerBody: JSON.stringify({ error: 'downstream timeout', spotCandles: [] }),
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiSpotCandlesHappyPath');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /expected 200, got 500|data plane broken/);
+        const validates = results.find((r) => r.name === 'apiSpotCandlesValidates');
+        assert.equal(validates.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: apiSpotCandlesHappyPath response-shape regression (missing spotCandles field)', async () => {
+    // Endpoint returns 200 + JSON but the `spotCandles` key is gone.
+    // Could be a refactor that returned the raw spotData object
+    // instead of {spotCandles: candles}, or a renamed field.
+    const fx = await startFixture({
+        spotCandlesWithTickerBody: JSON.stringify({ candles: [] }),  // wrong key
+    });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const inv = results.find((r) => r.name === 'apiSpotCandlesHappyPath');
+        assert.equal(inv.ok, false);
+        assert.match(inv.error, /missing spotCandles array|transform regression/);
     } finally {
         await fx.stop();
     }
@@ -1631,6 +1726,7 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /apiHealth/);
     assert.match(r.stdout, /apiWarmer/);
     assert.match(r.stdout, /apiSpotCandlesValidates/);
+    assert.match(r.stdout, /apiSpotCandlesHappyPath/);
     assert.match(r.stdout, /apiCanReachRegistry/);
     assert.match(r.stdout, /apiCanReachCandles/);
     assert.match(r.stdout, /apiCandlesMatchesDirect/);

@@ -154,6 +154,55 @@ export const INVARIANTS = [
         },
     },
     {
+        name: 'apiSpotCandlesHappyPath',
+        description: 'api /api/v1/spot-candles?ticker=… returns 200 + JSON with spotCandles array (data-plane reachable through validation → fetchSpotCandles → response transform)',
+        layer: 'api',
+        check: async (ctx) => {
+            // Complement to apiSpotCandlesValidates (which only
+            // exercises the 400-error path on missing ticker).
+            // This walks the api's full data plane:
+            //   request → validation → fetchSpotCandles call →
+            //   spotCache lookup → response transform → JSON write
+            //
+            // Bug shapes caught (distinct from the 400-path probe):
+            //   * Validation passes but downstream call throws and
+            //     the catch-all returns 500 (api still serves but
+            //     the data plane is broken)
+            //   * Response transform regression that drops the
+            //     `spotCandles` field (renamed, refactored, or
+            //     accidentally returns the raw spotData object
+            //     instead of the wrapped shape)
+            //   * Status code regression — endpoint silently turns
+            //     into 204/202/etc.
+            //
+            // Vacuous when the upstream returns no data: an empty
+            // array is the documented happy-path empty case
+            // (see src/index.js: filter(c => c.time >= min) yields
+            // [] when no candles match) — still 200 + JSON, just
+            // with empty array. So an empty array is PASSING, not
+            // vacuous.
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/api/v1/spot-candles?ticker=harness-probe-ticker`, { signal: ctrl.signal });
+                if (r.status !== 200) {
+                    throw new Error(`expected 200, got ${r.status} (data plane broken: validation passed but downstream errored)`);
+                }
+                const ct = r.headers.get('content-type') || '';
+                if (!ct.includes('json')) {
+                    throw new Error(`expected JSON content-type, got "${ct}"`);
+                }
+                const j = await r.json();
+                if (!Array.isArray(j?.spotCandles)) {
+                    throw new Error(`response missing spotCandles array (transform regression?); body=${JSON.stringify(j)?.slice(0, 100)}`);
+                }
+                return { ok: true, detail: `200 + spotCandles array of length ${j.spotCandles.length}` };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
         name: 'apiCanReachRegistry',
         description: 'api /registry/graphql proxies the __typename probe to registry checkpoint',
         layer: 'api↔registry',
