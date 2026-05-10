@@ -46,11 +46,14 @@ function startFixture({
     // "direct" in the same fixture.
     registryDirectTypename = 'Query',
     candlesDirectTypename = 'Query',
-    // Data-aware probes (registryHasProposalEntities, candlesHasPools)
-    // — counts of mock entities returned by the direct endpoints. Set
-    // to 0 to simulate "indexer reachable but empty".
+    // Data-aware probes (registryHasProposalEntities, candlesHasPools,
+    // candlesHasSwaps, candlesHasCandles) — counts of mock entities
+    // returned by the direct endpoints. Set to 0 to simulate "indexer
+    // reachable but empty for that entity".
     registryProposalEntitiesCount = 1,
     candlesPoolsCount = 1,
+    candlesSwapsCount = 1,
+    candlesCandlesCount = 1,
     // Set to true to make the direct-indexer paths return 502, simulating
     // an indexer that's down even though the api passthrough still works
     // (e.g., api is caching).
@@ -118,8 +121,12 @@ function startFixture({
                     response.setHeader('content-type', 'application/json');
                     const pools = Array.from({ length: candlesPoolsCount },
                         (_, i) => ({ id: `mock-pool-${i}` }));
+                    const swaps = Array.from({ length: candlesSwapsCount },
+                        (_, i) => ({ id: `mock-swap-${i}` }));
+                    const candles = Array.from({ length: candlesCandlesCount },
+                        (_, i) => ({ id: `mock-candle-${i}` }));
                     response.end(JSON.stringify({
-                        data: { __typename: candlesDirectTypename, pools },
+                        data: { __typename: candlesDirectTypename, pools, swaps, candles },
                     }));
                     return;
                 }
@@ -510,6 +517,66 @@ test('runAllInvariants — failure: candles checkpoint empty (sync not done)', a
     }
 });
 
+test('runAllInvariants — candlesHasSwaps happy: 1 swap indexed', async () => {
+    const fx = await startFixture();  // default candlesSwapsCount=1
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'candlesHasSwaps');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /sample id: mock-swap-0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candles has pools but no swaps (post-pool sync lag)', async () => {
+    const fx = await startFixture({ candlesSwapsCount: 0 });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const swaps = results.find((r) => r.name === 'candlesHasSwaps');
+        assert.equal(swaps.ok, false);
+        assert.match(swaps.error, /0 Swap rows|sync not complete past pool deployment|no trades yet/);
+        // Pools probe still passes — verifies the two invariants
+        // distinguish different sync stages
+        const pools = results.find((r) => r.name === 'candlesHasPools');
+        assert.equal(pools.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — candlesHasCandles happy: 1 candle aggregated', async () => {
+    const fx = await startFixture();  // default candlesCandlesCount=1
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, true);
+        const inv = results.find((r) => r.name === 'candlesHasCandles');
+        assert.equal(inv.ok, true);
+        assert.match(inv.detail, /sample id: mock-candle-0/);
+    } finally {
+        await fx.stop();
+    }
+});
+
+test('runAllInvariants — failure: candles has swaps but no candles (aggregator broken)', async () => {
+    const fx = await startFixture({ candlesCandlesCount: 0 });
+    try {
+        const { pass, results } = await runAllInvariants(fullCtx(fx.url));
+        assert.equal(pass, false);
+        const candles = results.find((r) => r.name === 'candlesHasCandles');
+        assert.equal(candles.ok, false);
+        assert.match(candles.error, /0 Candle rows|aggregator broken/);
+        // Swap probe still passes — distinguishes "swap sync done"
+        // from "aggregation step failed"
+        const swaps = results.find((r) => r.name === 'candlesHasSwaps');
+        assert.equal(swaps.ok, true);
+    } finally {
+        await fx.stop();
+    }
+});
+
 test('scenario-runner CLI — dry-run exits 0 without network', () => {
     const r = spawnSync('node', [RUNNER], {
         env: {
@@ -530,6 +597,8 @@ test('scenario-runner CLI — dry-run exits 0 without network', () => {
     assert.match(r.stdout, /candlesDirect/);
     assert.match(r.stdout, /registryHasProposalEntities/);
     assert.match(r.stdout, /candlesHasPools/);
+    assert.match(r.stdout, /candlesHasSwaps/);
+    assert.match(r.stdout, /candlesHasCandles/);
     assert.match(r.stdout, /anvilBlockNumber/);
     assert.match(r.stdout, /anvilChainId/);
     assert.match(r.stdout, /rateSanity/);

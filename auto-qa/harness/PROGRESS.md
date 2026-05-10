@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 12 invariants — 5 api-internal + 4 indexer + 3 chain-layer; 25 smoke tests green). 30/30 browser tests green. Phase 3 25+25 smoke tests pass on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire + 4c-prep + 4c-activate + 4d-prep + 4d-scenarios (scaffold) + 4d-activate + 4d-scenarios-more (apiCanReachCandles + registryDirect + candlesDirect + rateSanity + anvilBlockNumber + anvilChainId + apiWarmer + apiSpotCandlesValidates + registryHasProposalEntities + candlesHasPools + candlesHasSwaps + candlesHasCandles)** on api side (`docker compose config --services` returns 8 — full stack STRUCTURALLY COMPLETE; orchestrator now ships with 14 invariants — 5 api-internal + 6 indexer + 3 chain-layer; 29 smoke tests green). 30/30 browser tests green. Phase 3 25+29 smoke tests pass on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -2185,6 +2185,81 @@ Phase 7 slice 4d-scenarios-more (registryHasProposalEntities + candlesHasPools) 
   with indexer raw) OR probabilityBounds (price ∈ [0, 1]
   on a real pool — needs deciding which pool the harness
   exercises by default).
+
+Phase 7 slice 4d-scenarios-more (candlesHasSwaps + candlesHasCandles) summary (this iteration on the api side):
+
+- **Two more data-aware probes for the candles checkpoint**,
+  mirroring `candlesHasPools` for the other two indexed
+  entities. Each catches a DISTINCT stage of the candles
+  sync pipeline:
+  * `candlesHasPools` (existing) — pool-deployment events
+    landed
+  * `candlesHasSwaps` (new) — per-trade Swap events landed
+  * `candlesHasCandles` (new) — period-aggregator job is
+    producing aggregated rows
+
+- **Why these matter as a triplet**: each represents a
+  different async failure mode. A pool can exist without
+  swaps (no trades yet, OR sync caught up to deployment
+  but not past); swaps can exist without candles (raw
+  events landed but the period-aggregator is broken or
+  dragging behind). The three invariants together
+  fingerprint exactly which step of the pipeline is
+  unhealthy — much better than a single "candles indexer
+  empty" check.
+
+- **Concrete failure modes the triplet distinguishes**:
+  * Indexer not started → all 3 fail
+  * Indexer started but didn't reach pool-deployment block
+    → candlesDirect passes, candlesHas{Pools,Swaps,Candles}
+    all fail
+  * Indexer caught up to pool deployment but trading hasn't
+    started OR per-trade event subscription is broken →
+    candlesHasPools passes, candlesHasSwaps + candlesHasCandles
+    fail
+  * Swaps landing but period-aggregator broken (a real bug
+    class — Checkpoint's @aggregate jobs can fall behind or
+    silently die) → candlesHasPools + candlesHasSwaps pass,
+    candlesHasCandles fails
+
+- **What was added to invariants.mjs**:
+  * `candlesHasSwaps` — query `{ swaps(first: 1) { id } }`,
+    assert array non-empty
+  * `candlesHasCandles` — query `{ candles(first: 1) { id } }`,
+    assert array non-empty
+  * Both follow the same shape as `candlesHasPools` — pure
+    additive, ~10 lines each
+
+- **Smoke fixture extension**: candles-direct response now
+  returns `pools` + `swaps` + `candles` arrays in one
+  superset payload. Two new options:
+  `candlesSwapsCount`, `candlesCandlesCount` (default 1,
+  set to 0 for "indexer empty for that entity" simulation).
+
+- **Smoke test coverage** — 4 new tests:
+  * candlesHasSwaps happy at 1 swap
+  * failure: pools exist but no swaps (verifies
+    candlesHasPools STILL passes — distinguishes the two
+    failure modes cleanly)
+  * candlesHasCandles happy at 1 candle
+  * failure: swaps exist but no candles (verifies
+    candlesHasSwaps STILL passes — distinguishes
+    "aggregator broken" from "swap sync done")
+
+- **Validation**:
+  * `npm run smoke:scenarios` → 29/29 pass (284ms — was
+    25/25)
+  * `npm run scenarios:dry` → exits 0; lists 14 invariants
+    in catalog
+  * `docker compose config --quiet` still passes;
+    8-service list unchanged
+
+- Slice 4 progress: ~89% (18 of ~20 sub-slices total —
+  4d-scenarios-more keeps expanding the invariant set).
+  Next bot-doable: same set as before — `candlesAggregation`
+  (cross-layer reconciliation, the natural next step after
+  the per-stage probes), `chartShape`, `probabilityBounds`,
+  `conservation`, cross-run `rateSanity` monotonicity.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 

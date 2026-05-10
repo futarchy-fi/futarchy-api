@@ -277,6 +277,56 @@ export const INVARIANTS = [
             return { ok: true, detail: `candles has ≥1 pool (sample id: ${j.data.pools[0].id})` };
         },
     },
+    {
+        name: 'candlesHasSwaps',
+        description: 'candles checkpoint has ≥1 Swap indexed (event-level sync verified)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Different from candlesHasPools: pools come from deployment
+            // events (one-shot per pool); swaps come from per-trade
+            // Swap events. If pools exist but swaps don't, the indexer
+            // started AFTER the pool was created but is still
+            // catching up (or no one has traded yet). Either way, a
+            // distinct sync-state vs candlesHasPools.
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: '{ swaps(first: 1) { id } }' }),
+            });
+            if (!Array.isArray(j?.data?.swaps)) {
+                throw new Error(`unexpected swaps response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.swaps.length === 0) {
+                throw new Error('candles checkpoint has 0 Swap rows (sync not complete past pool deployment, or no trades yet)');
+            }
+            return { ok: true, detail: `candles has ≥1 swap (sample id: ${j.data.swaps[0].id})` };
+        },
+    },
+    {
+        name: 'candlesHasCandles',
+        description: 'candles checkpoint has ≥1 Candle aggregated (period-aggregator alive)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Different from candlesHasSwaps: candles are aggregated
+            // per period (e.g., 1h buckets) over swaps. If swaps exist
+            // but candles don't, the period-aggregator job inside the
+            // checkpoint indexer is broken — distinct from sync lag.
+            // Catches the candlesAggregation invariant's "is the
+            // aggregator running at all" prerequisite.
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: '{ candles(first: 1) { id } }' }),
+            });
+            if (!Array.isArray(j?.data?.candles)) {
+                throw new Error(`unexpected candles response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.candles.length === 0) {
+                throw new Error('candles checkpoint has 0 Candle rows (period-aggregator broken or no swap activity)');
+            }
+            return { ok: true, detail: `candles has ≥1 candle (sample id: ${j.data.candles[0].id})` };
+        },
+    },
     // ── Chain-process probes ────────────────────────────────────────
     // Validate the chain process itself before checking contract state.
     // If anvilBlockNumber + anvilChainId pass but rateSanity fails,
