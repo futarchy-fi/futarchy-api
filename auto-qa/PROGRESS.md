@@ -9,10 +9,10 @@ is never modified — only tests on the `auto-qa` branch.
 | Field | Value |
 |---|---|
 | Branch | `auto-qa` (off `origin/main`) |
-| Iterations completed | 19 |
+| Iterations completed | 20 |
 | PRs catalogued | 9 / 9 (full history) |
 | PRs classified | 9 |
-| Tests added | 128 (2 path-prefix + 7 passthrough-contract + 4 unified-chart + 3 multi-proposal-smoke + 3 spot-candles + 3 indexer-freshness + 4 registry-org-shape + 6 legacy-v1-prices + 3 operational-endpoints + 11 passthrough-smoke + 21 cors-headers + 6 cache-headers + 9 chart-window-invariants + 6 legacy-subgraph-alias + 11 chart-envelope-shape + 8 proposal-id-handling + 21 chain-prefix-helpers — 127 passing, 1 skipped) |
+| Tests added | 144 (2 path-prefix + 7 passthrough-contract + 4 unified-chart + 3 multi-proposal-smoke + 3 spot-candles + 3 indexer-freshness + 4 registry-org-shape + 6 legacy-v1-prices + 3 operational-endpoints + 11 passthrough-smoke + 21 cors-headers + 6 cache-headers + 9 chart-window-invariants + 6 legacy-subgraph-alias + 11 chart-envelope-shape + 8 proposal-id-handling + 21 chain-prefix-helpers + 16 extract-tokens-from-pools — 143 passing, 1 skipped) |
 | Cross-cutting catches | catastrophic-empty guards, indexer freshness bounds, metadata parseability, **parse-error status inconsistency between passthroughs**, CORS preflight + Apollo header allow-list + expose-headers, cache-layer disablement / stale-key / TTL drift |
 | Ops invariants tracked | indexer lag (candles + registry) bounded vs. Gnosis chain tip |
 | PRs covered by tests | **8 / 9** (#1, #3, #4, #5, #6, #7, #8, #9 — only #2 infra remains) |
@@ -51,7 +51,7 @@ is never modified — only tests on the `auto-qa` branch.
 - **Hypothesis**: `unified-chart.js` / `market-events.js` only inspected `CONDITIONAL` pools to derive company/currency token symbols. New markets where CONDITIONAL pools weren't yet indexed (or didn't exist) fell through to the `'PNK'` hardcode → wrong ticker on charts. Fix: walk pools in priority `CONDITIONAL > EXPECTED_VALUE > PREDICTION` and parse the pool name regex.
 - **Ideal test**: Snapshot test against `GET /api/v2/proposals/:id/chart` for proposals representing each (CONDITIONAL+, EXPECTED_VALUE+, PREDICTION-only) state — assert `company_tokens.base.tokenSymbol` is plausible and is NEVER literally `"PNK"` unless the proposal really is for PNK.
 - **Tools needed**: HTTP client + fixtures for each market lifecycle stage. Hard part is finding/keeping a "PREDICTION-only" fixture stable.
-- **Test status**: **landed-passing** (`auto-qa/tests/unified-chart.test.mjs` PR #6 case — asserts `base.tokenSymbol === "GNO"` and explicitly rejects `"PNK"`)
+- **Test status**: **landed-passing — TWO LAYERS** (a) `auto-qa/tests/unified-chart.test.mjs` PR #6 case asserts the end-to-end `base.tokenSymbol === "GNO"` against the live API; (b) `auto-qa/tests/extract-tokens-from-pools.test.mjs` (16 cases) directly pins the `extractTokensFromPools` priority chain (CONDITIONAL > EXPECTED_VALUE > PREDICTION), pattern matching, defensive null/missing-name handling, whitespace tolerance, and explicitly that no code path returns "PNK"
 
 ### PR #5 — fix(api): fall back to PREDICTION/EXPECTED_VALUE pools for new markets
 - **Class**: bug-fix
