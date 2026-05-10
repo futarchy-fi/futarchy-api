@@ -9,11 +9,11 @@ is never modified — only tests on the `auto-qa` branch.
 | Field | Value |
 |---|---|
 | Branch | `auto-qa` (off `origin/main`) |
-| Iterations completed | 12 |
+| Iterations completed | 13 |
 | PRs catalogued | 9 / 9 (full history) |
 | PRs classified | 9 |
-| Tests added | 46 (2 path-prefix + 7 passthrough-contract + 4 unified-chart + 3 multi-proposal-smoke + 3 spot-candles + 3 indexer-freshness + 4 registry-org-shape + 6 legacy-v1-prices + 3 operational-endpoints + 11 passthrough-smoke — 45 passing, 1 skipped) |
-| Cross-cutting catches | catastrophic-empty guards, indexer freshness bounds, metadata parseability, **parse-error status inconsistency between passthroughs** |
+| Tests added | 67 (2 path-prefix + 7 passthrough-contract + 4 unified-chart + 3 multi-proposal-smoke + 3 spot-candles + 3 indexer-freshness + 4 registry-org-shape + 6 legacy-v1-prices + 3 operational-endpoints + 11 passthrough-smoke + 21 cors-headers — 66 passing, 1 skipped) |
+| Cross-cutting catches | catastrophic-empty guards, indexer freshness bounds, metadata parseability, **parse-error status inconsistency between passthroughs**, CORS preflight + Apollo header allow-list + expose-headers |
 | Ops invariants tracked | indexer lag (candles + registry) bounded vs. Gnosis chain tip |
 | PRs covered by tests | **8 / 9** (#1, #3, #4, #5, #6, #7, #8, #9 — only #2 infra remains) |
 | API surfaces with smoke tests | **3 / 3** (`/api/v2/.../chart`, `/candles/graphql`, `/api/v1/spot-candles`) |
@@ -95,6 +95,14 @@ is never modified — only tests on the `auto-qa` branch.
 | bug-fix | 7 | #1, #4, #5, #6, #7, #8, #9 |
 | feature | 1 | #3 |
 | infra | 1 | #2 |
+
+## Cross-cutting tests (not tied to a single PR)
+
+| Test | Catches | File |
+|---|---|---|
+| **CORS headers** | cors() middleware dropped, stricter origin allowlist, missing Apollo-Require-Preflight, expose-headers regression | `auto-qa/tests/cors-headers.test.mjs` (21 cases — preflight × origin matrix + actual-response CORS + Apollo header allow-list + X-Cache observability headers + pinned-policy ratchet) |
+| **Operational endpoints** | /health stale, /warmer broken, edge cache freezing /health timestamp | `auto-qa/tests/operational-endpoints.test.mjs` |
+| **Indexer freshness** | candles + registry indexer stalls (lag vs. Gnosis chain tip) | `auto-qa/tests/indexer-freshness.test.mjs` |
 
 ## Tooling backlog
 
