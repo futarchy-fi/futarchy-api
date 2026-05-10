@@ -9,10 +9,11 @@ is never modified — only tests on the `auto-qa` branch.
 | Field | Value |
 |---|---|
 | Branch | `auto-qa` (off `origin/main`) |
-| Iterations completed | 1 |
+| Iterations completed | 2 |
 | PRs catalogued | 9 / 9 (full history) |
 | PRs classified | 9 |
-| Tests added | 0 |
+| Tests added | 1 (`path-prefix.test.mjs` — passing) |
+| Test runner | `node --test` via `npm run auto-qa:test` |
 | Tooling backlog | see below |
 
 ## PR ledger
@@ -78,7 +79,7 @@ is never modified — only tests on the `auto-qa` branch.
 - **Hypothesis**: After Cloud Run migration the legacy AWS API Gateway `/charts/...` path prefix was lost. The Snapshot widget at `snapshot-labs/sx-monorepo` still hits `https://api.futarchy.fi/charts/api/v2/...`. Without the prefix-strip middleware the route 404'd. Fix: add Express middleware that strips `/charts` from incoming URLs.
 - **Ideal test**: Send `GET /charts/api/v2/proposals/:id/chart` and `GET /api/v2/proposals/:id/chart` to the same fixture proposal — assert they return identical JSON. Catches future accidental removal of the prefix-strip middleware.
 - **Tools needed**: HTTP client + fixture proposal.
-- **Test status**: not-started
+- **Test status**: **landed-passing** (`auto-qa/tests/path-prefix.test.mjs`, 2 cases, both green against live api.futarchy.fi)
 
 ## Class summary
 
@@ -101,14 +102,16 @@ Ranked by leverage across the catalogue.
 
 **Iteration plan**: Tool #3 first (trivial, cheap win, demonstrates the test runner is in place). Then #1 (highest catch count). Then #2.
 
-## Test runner — open question
+## Test runner — resolved
 
-This repo has no test framework configured today. Options:
+Settled on `node --test` (zero deps). Run with:
 
-- `node --test` (built-in, zero deps, sufficient for HTTP assertions)
-- `vitest` (richer assertions but adds a dep)
+```sh
+npm run auto-qa:test
+```
 
-Default to `node --test` to keep the auto-qa surface area minimal. Future iteration: scaffold the runner script + first trivial test (#3).
+Glob: `auto-qa/tests/**/*.test.mjs`. First green test:
+`auto-qa/tests/path-prefix.test.mjs` (covers PR #1).
 
 ## Cross-repo notes
 

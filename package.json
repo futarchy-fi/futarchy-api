@@ -11,7 +11,8 @@
     "scripts": {
         "start": "node src/index.js",
         "dev": "node --watch src/index.js",
-        "test:lib": "node lib/test.js"
+        "test:lib": "node lib/test.js",
+        "auto-qa:test": "node --test 'auto-qa/tests/**/*.test.mjs'"
     },
     "dependencies": {
         "cors": "^2.8.5",
