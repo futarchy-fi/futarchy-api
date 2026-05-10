@@ -98,10 +98,13 @@ services:
     #     #     - "3001:3001"   # GraphQL endpoint for direct dev access
 
     # ────────────────────────────────────────────────────────────────
-    # Phase 2: futarchy-api pointed at the local indexer + anvil.
+    # Phase 2 / Phase 7 slice 4a: futarchy-api pointed at the local
+    # anvil. The indexer dependency is intentionally OMITTED until
+    # slice 4b adds the indexer service — without it, request-time
+    # endpoints that proxy to CHECKPOINT_URL will fail, but the
+    # Express server itself still starts and `docker compose build api`
+    # / `up api` succeed.
     #
-    # Dockerfile + .dockerignore at the api repo root were tracked in
-    # Phase 7 slice 4a-prep so this block can be activated. The
     # Dockerfile uses node:22-alpine, runs `npm ci --omit=dev`, and
     # `EXPOSE 3031`. `src/index.js:25` hardcodes `const PORT = 3031`
     # (does NOT read process.env.PORT), so PORT here is informational
@@ -109,23 +112,31 @@ services:
     # If you need a different external port, change the host side of
     # the `ports:` mapping below, not the container side.
     # ────────────────────────────────────────────────────────────────
-    # api:
-    #     build:
-    #         context: ../../..
-    #         dockerfile: Dockerfile
-    #     container_name: harness-api
-    #     networks: [harness-net]
-    #     depends_on:
-    #         anvil:
-    #             condition: service_healthy
-    #         indexer:
-    #             condition: service_started
-    #     environment:
-    #         RPC_URL: http://anvil:8545
-    #         CHECKPOINT_URL: http://indexer:3001/graphql
-    #         PORT: 3031   # informational — src/index.js hardcodes 3031
-    #     # ports:
-    #     #     - "3031:3031"   # api — host:container both 3031
+    api:
+        build:
+            # Build context = api repo root (where Dockerfile + package.json live).
+            # Path is `../..` from this compose file's location
+            # (auto-qa/harness/), not `../../..` as the original Phase 0
+            # scaffold had — that was a slice-4a finding (the Phase 0
+            # path landed at /Users/kas/, the parent of the repo).
+            context: ../..
+            dockerfile: Dockerfile
+        container_name: harness-api
+        networks: [harness-net]
+        depends_on:
+            anvil:
+                condition: service_healthy
+            # indexer:
+            #     condition: service_started
+            # Re-enable when the indexer service is added in slice 4b.
+        environment:
+            RPC_URL: http://anvil:8545
+            CHECKPOINT_URL: http://indexer:3001/graphql  # not yet wired; slice 4b
+            PORT: 3031   # informational — src/index.js hardcodes 3031
+        # ports:
+        #     - "3031:3031"   # api — host:container both 3031
+        # Uncomment if you want host access to the api during local debug
+        # (compose-internal traffic uses the service name, not host port).
 
     # ────────────────────────────────────────────────────────────────
     # Phase 5: Next.js dev server from the sibling interface repo,

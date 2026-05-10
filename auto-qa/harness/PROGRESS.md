@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slice **4a-prep** (api Dockerfile + .dockerignore tracked; compose api block port corrected) on api side. CI workflows still await maintainer promotion. 30/30 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a** on api side (compose api block UNCOMMENTED; `docker compose config` parses cleanly with anvil + api). 4a-verify pending (needs running Docker daemon for `docker compose build api`). 30/30 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -1151,6 +1151,51 @@ Phase 7 slice 4a-prep summary (this iteration on the api side):
 - Validation: `npx js-yaml@4 auto-qa/harness/docker-compose.yml`
   parses cleanly; the named-service tree shows `anvil` as the
   only active service (api block stays a YAML comment).
+
+Phase 7 slice 4a summary (this iteration on the api side):
+
+- The api block in `auto-qa/harness/docker-compose.yml` is now
+  UNCOMMENTED + structurally validated. `docker compose config`
+  parses cleanly with both `anvil` + `api` services active.
+- **Real bug surfaced**: the original Phase 0 scaffold had
+  `context: ../../..` which resolved to `/Users/kas/` (the
+  parent of the api repo, NOT the repo root). Three levels up
+  from `auto-qa/harness/` is one too many — should be
+  `context: ../..` (api repo root, where Dockerfile +
+  package.json live). This is the SECOND port/path bug
+  surfaced by activating the api service (the first being the
+  PORT discovery in slice 4a-prep). Fixed in this slice;
+  comment block above the field documents the gotcha.
+- **Why indexer dependency stays commented out**: the original
+  api block had `depends_on: indexer: condition: service_started`,
+  but the indexer service doesn't exist in compose yet (slice 4b
+  adds it). With the dependency uncommented, `docker compose up
+  api` would fail with `service "indexer" is not defined`.
+  Removing the dep means the api can start without the indexer
+  — request-time endpoints that proxy to CHECKPOINT_URL will
+  fail until 4b lands, but `docker compose build api` and
+  `up api` themselves succeed. The dep gets re-added in slice
+  4b alongside the indexer service.
+- **Why ports comment stays commented out**: compose-internal
+  traffic uses the service name (`api:3031` from inside the
+  network), so host port mapping isn't needed for the
+  in-network case. The comment block tells future
+  contributors how to flip it on for local debugging.
+- **What WAS validated**: `docker compose config --quiet`
+  succeeds; `docker compose config --services` returns
+  `anvil` + `api`; build context resolves to the correct path
+  per `docker compose config | grep context:`.
+- **What WASN'T validated** (out of bot scope this iteration):
+  the actual `docker compose build api`. The Docker daemon is
+  not running on the machine the bot is on (`Cannot connect to
+  the Docker daemon at unix:///Users/kas/.docker/run/docker.sock`).
+  Pinned as 4a-verify in CHECKLIST — a small human step
+  (start Docker Desktop, then `docker compose -f
+  auto-qa/harness/docker-compose.yml build api`).
+- Slice 4 is now ~17% done (4a-prep + 4a out of 4a-prep + 4a +
+  4b + 4c + 4d + 4e). Next bot-doable: slice 4b (add Phase 3
+  indexer service to compose) — bigger lift, decisions to make
+  about Checkpoint image source.
 
 Slice 4c v3b summary (previous iteration on the interface side):
 

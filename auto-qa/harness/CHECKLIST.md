@@ -582,11 +582,28 @@ freshly-generated addresses as recipients; documented in
       commented `ports:` mapping changed from `3000:3000` to
       `3031:3031` to match Dockerfile EXPOSE + actual bind.
       Block remains commented; activating it is slice 4a.
-- [ ] **4a — uncomment compose api block + verify
-      `docker compose build api` succeeds.** Activates the
-      futarchy-api service in the local stack. Doesn't need
-      indexer to BUILD (only at runtime), so 4a is doable
-      before the indexer service is added in 4b.
+- [x] **4a — compose api block UNCOMMENTED + structurally
+      verified.** `docker compose config` parses cleanly
+      with both `anvil` + `api` services active. Build
+      context corrected from `../../..` (which resolved to
+      `/Users/kas/`, ABOVE the api repo root — a Phase 0
+      scaffold bug surfaced by this slice) to `../..`
+      (correct: api repo root where Dockerfile +
+      package.json live). Indexer dependency commented
+      out so api doesn't fail to start before slice 4b
+      adds the indexer service; api will start fine, but
+      request-time endpoints that proxy to CHECKPOINT_URL
+      will fail until indexer exists.
+- [ ] **4a-verify — human build smoke test:**
+      `docker compose -f auto-qa/harness/docker-compose.yml
+      build api` (requires running Docker daemon). Expected
+      output: builds the node:22-alpine image, runs
+      `npm ci --omit=dev` against the api's
+      package-lock.json (~1.2 MB), tags as
+      `futarchy-replay-harness-api`. First build will pull
+      ~50 MB node:22-alpine + run a multi-minute npm
+      install; subsequent builds use the layer cache and
+      complete in ~10s if package-lock.json hasn't changed.
 - [ ] **4b — add Phase 3 indexer service** to compose. Has to
       decide between published Checkpoint image vs build-from-
       source; the SQLite migration cold-start is the biggest
