@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 3 — slices 1+1.5+2 landed (sibling clone discovery + start-indexers wrapper + 5 contract tests). 16 smoke tests pass + 2 skips (compose-anvil + start-indexers daemon-up branch). Slice 3 next. |
+| Phase | 3 — slices 1+1.5+2+3 landed. bootstrap-start-block now exists (psql injector for `_metadatas.last_indexed_block`). 25 smoke tests pass + 2 skips. Slice 4 (THE roundtrip invariant) next. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -530,17 +530,79 @@ Phase 2 slice 4 — multi-spawn stress (3 cycles) ✓ ~8.2s
                                        TOTAL: 16 pass + 2 skip
 ```
 
+- **slice 3** (this iteration) — `scripts/bootstrap-start-block.mjs`
+  (new): pre-seeds `_metadatas.last_indexed_block` so the Checkpoint
+  indexer skips from genesis to anvil's fork height. Per Spike-001:
+  `Container.getStartBlockNum()` reads this row at indexer start and
+  returns `max(configStart, lastBlock + 1)`. Writing
+  `lastBlock = startBlock - 1` makes the next scan begin at exactly
+  `startBlock`.
+
+  - **SQL via `docker compose exec postgres psql`** — no host psql
+    install needed. Uses `-T` for non-TTY, `ON_ERROR_STOP=1`, and
+    parameterized indexer name (default 'gnosis' — both indexers
+    register under that name per `src/index.ts`).
+  - **Public surface**: `bootstrapStartBlock({kind, startBlock,
+    indexerName})`, `readStartBlock({kind, indexerName})`. `kind` is
+    `'registry'` or `'candles'`.
+  - **CLI**: `node scripts/bootstrap-start-block.mjs --kind registry
+    --start 46100000` or `--read` to inspect.
+  - **Exit codes**: 0 ok / 1 args / 2 indexers-not-found /
+    3 docker-down / 4 SQL-failed.
+  - **Container name handling**: registry compose sets explicit
+    `container_name: futarchy-registry-postgres`, candles uses
+    default. `docker compose -p PROJECT exec postgres` is project-aware
+    so it finds either correctly.
+
+  - `tests/smoke-bootstrap-start-block.test.mjs` (new): 9 cases
+    covering CLI arg validation + programmatic API contract WITHOUT
+    requiring docker:
+      1. CLI --help prints usage + exits 0
+      2. CLI without --kind exits 1
+      3. CLI with bad --kind exits 1
+      4. CLI without --start exits 1
+      5. CLI with negative --start exits 1
+      6. CLI with valid args + daemon down exits 3 (skips when up)
+      7. Programmatic: throws on startBlock=0
+      8. Programmatic: throws on negative startBlock
+      9. Programmatic: throws on unknown kind
+    All 9 pass in 1s.
+
+  - npm scripts: `smoke:bootstrap`, `indexers:bootstrap` in harness;
+    `auto-qa:e2e:smoke:bootstrap`, `auto-qa:e2e:indexers:bootstrap`
+    at root.
+
+**Smoke summary (post-Phase 3 slice 3):**
+
+```
+[Phase 1]
+  start-fork + block-clock                         ✓ ~3s
+  setNextTimestamp                                 ✓ ~2.5s
+  setBalance                                       ✓ ~2.5s
+  impersonateAccount                               ✓ ~3s
+  compose smoke                                     ⊘ skipped (daemon down)
+[Phase 2]
+  orchestrator dual-source                          ✓ ~3.5s
+  passthrough verbatim                              ✓ ~280ms
+  passthrough 500                                   ✓ ~280ms
+  passthrough 502 unreachable                       ✓ ~270ms
+  multi-spawn stress (3 cycles)                    ✓ ~8.2s
+[Phase 3]
+  detect-indexers (happy)                           ✓ ~25ms
+  detect-indexers (missing-override)                ✓ ~1ms
+  start-indexers contract (5 cases + 1 skip)       ✓ ~2.3s
+  bootstrap-start-block contract (9 cases)         ✓ ~1s
+                                       TOTAL: 25 pass + 2 skip
+```
+
 **Phase 3 wrap-up — remaining:**
 
-- slice 3 — `last_indexed_block` postgres injection (per spike).
-  Add `bootstrapStartBlock(startBlock)` that runs `psql` against the
-  indexer's postgres and INSERTs/UPDATEs the `_metadatas` row before
-  the indexer's first scan. Then GraphQL readiness probe waits for
-  indexer head ≥ anvil head.
 - slice 4 — `tests/smoke-indexer-roundtrip.test.mjs` (THE Phase 3
   invariant): anvil event → wait for indexer → query both indexer
   GraphQL AND api passthrough → assert agreement. **First true
-  cross-layer block invariant.**
+  cross-layer block invariant.** Will require docker daemon UP to
+  fully validate; should still ship the test code that runs when
+  daemon comes up.
 - slice 5 — Cold-start optimization: explore pre-warmed postgres
   image strategy if cold-start exceeds 90s on CI. Per Spike-001 the
   expected cost is 50-90s per indexer; on CI may be slower.

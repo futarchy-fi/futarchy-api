@@ -16,6 +16,8 @@
         "smoke:stress": "node --test tests/smoke-multi-spawn.test.mjs",
         "smoke:detect:indexers": "node --test tests/smoke-detect-indexers.test.mjs",
         "smoke:start:indexers": "node --test tests/smoke-start-indexers.test.mjs",
+        "smoke:bootstrap": "node --test tests/smoke-bootstrap-start-block.test.mjs",
+        "indexers:bootstrap": "node scripts/bootstrap-start-block.mjs",
         "indexers:start": "node scripts/start-indexers.mjs",
         "indexers:stop": "node scripts/start-indexers.mjs --stop",
         "replay": "echo 'TODO Phase 6 — scenario replay runner' && exit 1",
