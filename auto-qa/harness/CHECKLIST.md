@@ -161,12 +161,13 @@ both layers in parallel and probe each via its native protocol.
       `useWaitForTransactionReceipt` hard-codes `poll: true`). No
       shim infrastructure needed. Already implemented in
       `fixtures/wallet-stub.mjs::SUBSCRIPTION_METHODS`.
-- [/] `installWalletStub` PARTIAL: `createProvider` (the testable
-      in-process core) works end-to-end against live anvil — verified
-      by 8-case node:test in `tests/smoke-wallet-stub.test.mjs`
-      (5s runtime). The browser-injection wrapper (literal
-      `installWalletStub` returning JS source for Playwright
-      `addInitScript`) still throws and lands in Phase 5.
+- [x] `installWalletStub` complete (in-process core in Phase 4,
+      browser-injection wrapper in Phase 5 slice 1). The in-process
+      `createProvider` is verified by 8-case node:test in
+      `tests/smoke-wallet-stub.test.mjs` (5s runtime). The
+      browser-injection wrapper returns self-executing JS source
+      for Playwright `addInitScript`, validated by 6-case
+      `flows/wallet-injection.spec.mjs` (2.4s, all green).
 - [x] `nStubWallets(N)` derives canonical anvil dev addresses from
       the foundry mnemonic (verified: 0xf39F…, 0x7099…, 0x3C44…).
       Returns `{address, privateKey}` per account; rejects n<1.
@@ -210,11 +211,52 @@ freshly-generated addresses as recipients; documented in
 
 **Goal:** frontend in the loop; UI consistency catches.
 
-- [ ] `@playwright/test` installed in `interface/auto-qa/harness/`
-- [ ] Browser binaries provisioned (`npx playwright install chromium`)
-- [ ] `webServer` block in playwright.config launches local Next.js
-- [ ] Wallet stub injected via `addInitScript` BEFORE Wagmi/RainbowKit
-      hydrate
+**Phase 5 slice 1 (browser-injection smoke) — DONE:**
+
+- [x] `@playwright/test ^1.59.1` installed in
+      `interface/auto-qa/harness/`
+- [x] chromium browser binary provisioned (`npx playwright install
+      chromium` — ~92 MiB headless shell + ffmpeg)
+- [x] `playwright.config.mjs` rewritten to use real `defineConfig`
+      (was a placeholder); single `chromium` project (firefox/webkit
+      deferred to Phase 7); `webServer` auto-launches Next.js dev
+      unless `HARNESS_NO_WEBSERVER=1` (slice 1 opts out — slice 3
+      will be the first run that exercises the dev server)
+- [x] Wallet stub injected via `context.addInitScript(installWalletStub({…}))`
+      BEFORE page navigation — validated against `about:blank` only
+      in slice 1 (no Wagmi/RainbowKit yet; that's slice 3)
+- [x] `flows/wallet-injection.spec.mjs` — 6 browser tests, all green
+      (2.4s):
+        1. window.ethereum exposes address/chain/MetaMask flag
+        2. wallet_switchEthereumChain emits chainChanged
+        3. eth_subscribe rejected -32601 (per Spike-002)
+        4. signing methods rejected -32601 (slice 2 will enable)
+        5. EIP-6963 announcement fires (RainbowKit auto-discovery)
+        6. eth_blockNumber forwards to configured RPC (intercepted
+           via `context.route` — about:blank's null origin blocks
+           direct fetch even with permissive CORS)
+- [x] npm scripts wired: `ui` / `ui:ui` / `ui:report` in harness;
+      `auto-qa:e2e:ui` and `auto-qa:e2e:ui:ui` at interface root
+
+**Phase 5 slice 2 (signing in-page) — TODO:**
+
+- [ ] Inline @noble/secp256k1 in the browser stub so
+      `personal_sign`, `eth_signTypedData_v4`, `eth_sendTransaction`
+      work against `window.ethereum` (currently return -32601)
+- [ ] Browser test: sign a personal_sign message, verify recoverable
+      address matches `eth_accounts[0]`
+- [ ] Browser test: send a 1-XDAI tx via `eth_sendTransaction`,
+      decode receipt, assert sender debited
+
+**Phase 5 slice 3 (futarchy app in the loop) — TODO:**
+
+- [ ] First test that drops `HARNESS_NO_WEBSERVER` and lets
+      Playwright launch the Next.js dev server
+- [ ] Confirm Wagmi/RainbowKit auto-discover the harness wallet
+      via the EIP-6963 announcement and "Connect" surfaces it
+
+**Phase 5 slice 4 (DOM↔API invariant) — TODO:**
+
 - [ ] First DOM↔API check: navigate to a proposal page, scrape the
       visible price, compare to the api response that produced it
 

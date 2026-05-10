@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 4 — slices 1+2+3 in interface. Wallet stub + contract-call surface validated end-to-end against live Gnosis fork (sDAI reads, WXDAI deposit + Deposit event decode + balance assert). Phase 3 25 smoke tests pass + 4 skips. |
+| Phase | 5 slice 1 landed on interface side (browser-injection smoke: Playwright + chromium installed, `installWalletStub` browser wrapper wires window.ethereum + EIP-6963, 6/6 wallet-injection browser tests green in 2.4s). Phase 4 slices 1+2+3 prior — wallet stub + contract-call surface validated end-to-end against live Gnosis fork. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -736,3 +736,44 @@ Phase 2 slice 4 — multi-spawn stress (3 cycles) ✓ ~8.2s
 - Anvil ↔ indexer RPC compat unknown until spike completes.
 - Container shutdown ordering matters (indexer may loop trying to
   reach a dead anvil). `stopAll()` will need `stopOrdered()`.
+
+### Phase 4 — Synthetic wallet + first scripted swap (UI side)
+
+All Phase 4 slices live in the interface repo
+(`interface/auto-qa/harness/PROGRESS.md` for the detailed log).
+Summary of what shipped:
+
+- slices 1+3 — wallet stub `createProvider` (in-process EIP-1193
+  provider wrapping a viem account), `nStubWallets`, 8-case live
+  anvil smoke, anvil dev-account quirk diagnosed and worked around
+- slice 2 — contract-call surface (`scripts/contracts.mjs`) with
+  ERC20/WXDAI/RATE_PROVIDER ABIs, sDAI reads + WXDAI.deposit +
+  Deposit event decode validated against live Gnosis fork
+- slice 4 — end-to-end roundtrip (wallet stub + Phase 3 indexer)
+  PENDING; gated on Docker Desktop start
+
+### Phase 5 — Playwright + DOM↔API assertions (UI side)
+
+All Phase 5 slices live in the interface repo
+(`interface/auto-qa/harness/PROGRESS.md` for the detailed log).
+Summary of slice 1:
+
+- **slice 1** (this iteration on the interface side) — browser-
+  injection smoke landed:
+  - `@playwright/test ^1.59.1` + chromium binary installed
+  - `playwright.config.mjs` rewritten to real `defineConfig`
+    (single chromium project, webServer auto-launches Next.js
+    unless `HARNESS_NO_WEBSERVER=1`)
+  - `installWalletStub` browser wrapper now returns self-executing
+    JS source for `addInitScript` — wires window.ethereum +
+    EIP-6963 announcement; in-page handles wallet-local methods
+    + chainChanged emission; signing methods reject -32601 (slice
+    2 will inline @noble/secp256k1); other methods fetch-forward
+    to the configured RPC
+  - `flows/wallet-injection.spec.mjs` — 6 browser tests green in
+    2.4s. Resolved a CORS/null-origin gotcha by switching the
+    eth_blockNumber forward test from a real http server to
+    `context.route(...)` interception (chromium drops fetches from
+    `about:blank` to local addresses regardless of CORS headers)
+- Slices 2 (in-page signing), 3 (futarchy app + Wagmi
+  auto-discovery), 4 (DOM↔API price invariant) still TODO
