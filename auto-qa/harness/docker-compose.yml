@@ -26,34 +26,42 @@
 
 name: futarchy-replay-harness
 
+# ────────────────────────────────────────────────────────────────────
+# Phase 7 slice 4b-network-wire: indexers integrated via per-service
+# `extends:` (replaces the slice 4b-include `include:` block).
+#
+# Why we switched away from `include:`:
+#   `include:` is for IMPORTING services as-is. Compose v2.34 rejects
+#   same-name service definitions in the parent compose file
+#   (`services.registry-checkpoint conflicts with imported resource`),
+#   so we couldn't add network-bridge or RPC overrides to the included
+#   indexer services. Per-service `extends:` gives us merge semantics
+#   without name collisions — see ADR-002's "wrapper service that
+#   delegates to it" leg.
+#
+# Tradeoff: each indexer service must be declared explicitly here
+# (4 blocks: registry-checkpoint, registry-postgres, checkpoint,
+# postgres). Plus the top-level networks + volumes that the included
+# compose files declared internally (registry-net, checkpoint-net,
+# registry-postgres-data, candles-postgres-data) need to be re-declared
+# at the harness compose level since `extends:` only operates at the
+# service level.
+# ────────────────────────────────────────────────────────────────────
+
 networks:
     harness-net:
         driver: bridge
+    # Re-declared from the indexer compose files because `extends:`
+    # only inherits service-level config, not top-level networks/volumes.
+    registry-net:
+        driver: bridge
+    checkpoint-net:
+        driver: bridge
 
-# ────────────────────────────────────────────────────────────────────
-# Phase 7 slice 4b-include: pull in the sibling indexer compose files.
-#
-# Per ADR-002 (Accepted), the harness uses build-from-source indexers
-# via a sibling `futarchy-indexers` clone. Phase 3 implemented this via
-# `scripts/start-indexers.mjs` (per-indexer compose projects, native
-# anvil). For the Phase 7 single-stack vision, the harness compose now
-# `include:`s the indexer compose files so `docker compose -f
-# auto-qa/harness/docker-compose.yml up -d` brings everything up in
-# one shot.
-#
-# Service-name reality (different from the Phase 0 stub's assumptions):
-#   registry compose: registry-checkpoint (port 3003), registry-postgres (5435)
-#   candles  compose: checkpoint          (port 3001), postgres          (5434)
-#
-# Note: candles uses `checkpoint` + `postgres` as bare service names,
-# NOT `candles-checkpoint` + `candles-postgres`. The container_names
-# are prefixed (`futarchy-candles-checkpoint-1`) but the service names
-# in the included compose are bare. The harness's network/env merge
-# blocks below have to use those bare names.
-include:
-    - path: ../../../futarchy-indexers/futarchy-complete/checkpoint/docker-compose.yml
-    - path: ../../../futarchy-indexers/proposals-candles/checkpoint/docker-compose.yml
-# ────────────────────────────────────────────────────────────────────
+volumes:
+    # Same story — re-declared so the postgres bind mounts work.
+    registry-postgres-data:
+    candles-postgres-data:
 
 # Top-level service stubs — ALL DISABLED in Phase 0.
 # Each block lists the eventual command + the phase that turns it on.
@@ -102,34 +110,76 @@ services:
             start_period: 5s
 
     # ────────────────────────────────────────────────────────────────
-    # Phase 7 slice 4b-network-wire: TODO.
+    # Phase 7 slice 4b-network-wire: indexers via per-service `extends:`.
     #
-    # Naive approach (declaring same-name service blocks here to
-    # extend included services) FAILS in compose v2.34:
-    #   `services.registry-checkpoint conflicts with imported resource`
-    # `include:` rejects same-name service definitions in the parent.
+    # See top-of-file comment for why we picked extends over include.
+    # Each block here delegates the bulk of the service definition to
+    # the sibling futarchy-indexers compose files, then layers harness-
+    # specific overrides on top:
+    #   - environment override: redirect the indexer at our anvil
+    #     (RPC_URL for registry, GNOSIS_RPC_URL for candles)
+    #   - networks: dual-homed (indexer's own net + harness-net) so
+    #     the api can reach them
+    #   - depends_on: add anvil's healthcheck so indexers don't try
+    #     to ingest before anvil is ready
     #
-    # Three alternatives to evaluate next iteration:
-    #
-    # (a) Override-list form: `include: - path: [base.yml, overrides.yml]`
-    #     where overrides.yml has a `services:` block. Compose applies
-    #     the standard multi-file merge BEFORE include, so name
-    #     collisions don't happen.
-    #
-    # (b) Per-service `extends:` + drop `include:`. Each indexer
-    #     service is declared here with `extends: { file: ..., service:
-    #     ... }` plus the harness overrides. ~4 service blocks
-    #     (registry-checkpoint, registry-postgres, checkpoint,
-    #     postgres) but no include conflict.
-    #
-    # (c) Multi-file `docker compose -f base.yml -f overrides.yml`
-    #     instead of include:. Breaks the "single docker-compose.yml"
-    #     promise of the slice 4 acceptance gate; rejected.
-    #
-    # Approach (b) is the closest fit for ADR-002's "wrapper service
-    # that delegates to it" leg. The decision will be made + executed
-    # in slice 4b-network-wire next iteration.
+    # Compose extends merge semantics:
+    #   - Maps (environment, depends_on long-form) MERGE
+    #   - Sequences (networks, ports) REPLACE — must repeat the
+    #     original network alongside harness-net
     # ────────────────────────────────────────────────────────────────
+    registry-checkpoint:
+        extends:
+            file: ../../../futarchy-indexers/futarchy-complete/checkpoint/docker-compose.yml
+            service: registry-checkpoint
+        environment:
+            # Override the included default of https://rpc.gnosischain.com
+            # so this indexer ingests from our anvil fork, not real Gnosis.
+            RPC_URL: http://anvil:8545
+            RESET: ${RESET:-true}
+        depends_on:
+            anvil:
+                condition: service_healthy
+            registry-postgres:
+                condition: service_healthy
+        networks:
+            # Sequence override: must repeat registry-net (from extended
+            # service) AND add harness-net so the api can reach this.
+            - registry-net
+            - harness-net
+
+    registry-postgres:
+        extends:
+            file: ../../../futarchy-indexers/futarchy-complete/checkpoint/docker-compose.yml
+            service: registry-postgres
+        # No env / network / dep override needed; this service only
+        # talks to registry-checkpoint over registry-net. extends pulls
+        # in image, env, volumes (postgres-data + init.sql), healthcheck.
+
+    # Candles indexer: bare service name `checkpoint` per the included
+    # compose file (NOT `candles-checkpoint`). Env var is `GNOSIS_RPC_URL`,
+    # NOT `RPC_URL` (different from registry — extends merge would not
+    # touch RPC_URL since the candles indexer never reads it).
+    checkpoint:
+        extends:
+            file: ../../../futarchy-indexers/proposals-candles/checkpoint/docker-compose.yml
+            service: checkpoint
+        environment:
+            GNOSIS_RPC_URL: http://anvil:8545
+            RESET: ${RESET:-true}
+        depends_on:
+            anvil:
+                condition: service_healthy
+            postgres:
+                condition: service_healthy
+        networks:
+            - checkpoint-net
+            - harness-net
+
+    postgres:
+        extends:
+            file: ../../../futarchy-indexers/proposals-candles/checkpoint/docker-compose.yml
+            service: postgres
 
     # ────────────────────────────────────────────────────────────────
     # Phase 2 / Phase 7 slice 4a: futarchy-api pointed at the local
@@ -158,17 +208,19 @@ services:
         container_name: harness-api
         networks: [harness-net]
         depends_on:
+            # All three deps now safely declarable: slice 4b-network-wire
+            # extends both checkpoint services to be dual-homed on
+            # harness-net, so the api can reach them via service name.
+            # service_started (not service_healthy) for the indexers
+            # because they have no healthcheck — declaring service_healthy
+            # would block forever. Adding healthchecks on the indexer
+            # services would belong in futarchy-indexers/, not here.
             anvil:
                 condition: service_healthy
-            # registry-checkpoint + checkpoint deps are intentionally
-            # NOT declared here yet because they're on different
-            # networks (registry-net / checkpoint-net) and the api is
-            # on harness-net. Until slice 4b-network-wire bridges
-            # those networks, declaring these deps would prevent the
-            # api from starting (compose would wait forever for
-            # cross-network healthchecks). Slice 4b-api-env (this
-            # change) corrects ONLY the env var names; depends_on
-            # waits for slice 4b-network-wire.
+            registry-checkpoint:
+                condition: service_started
+            checkpoint:
+                condition: service_started
         environment:
             RPC_URL: http://anvil:8545
             # Phase 0 stub used `CHECKPOINT_URL` — but the api never

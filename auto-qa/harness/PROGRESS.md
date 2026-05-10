@@ -13,7 +13,7 @@ in `interface/auto-qa/harness/`.
 
 | Field | Value |
 |---|---|
-| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env** on api side (`docker compose config` now returns 6 services; api env corrected to REGISTRY_URL + CANDLES_URL). Slice 4b-network-wire blocked by compose v2 include-conflict; 3 alternatives documented for next iteration. 30/30 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
+| Phase | 5 done + Phase 6 fully done + Phase 7 slices 1+2 done + Phase 7 slices 3a + 3c + 3d STAGED on interface side + Phase 7 slices **4a-prep + 4a + 4b-plan + 4b-include + 4b-api-env + 4b-network-wire** on api side (per-service `extends:` replaces the `include:` block; indexers dual-homed on harness-net + their own networks; api depends_on registry-checkpoint + checkpoint declared). 30/30 browser tests green. Phase 3 25 smoke tests pass + 4 skips on api side. |
 | Branch | `auto-qa` (both repos) |
 | Location | `auto-qa/harness/` in both `interface` and `futarchy-api` |
 | Runner | `npm run auto-qa:e2e` (separate from `npm run auto-qa:test`) |
@@ -1341,6 +1341,71 @@ Phase 7 slice 4b-include + 4b-api-env summary (this iteration on the api side):
   4b-include + 4b-api-env / ~12 sub-slices total). Still 5
   bot-doable sub-slices to go in slice 4b alone before the
   full stack works.
+
+Phase 7 slice 4b-network-wire summary (this iteration on the api side):
+
+- Indexers wired into the harness compose via per-service
+  `extends:` (approach b from the prior iteration's options
+  list — closest fit for ADR-002's "wrapper service that
+  delegates to it" leg).
+
+- **What changed in compose**:
+  * `include:` block REMOVED (it was rejecting same-name
+    overrides).
+  * Top-level `networks:` expanded with `registry-net` +
+    `checkpoint-net` (not just `harness-net`).
+  * Top-level `volumes:` declared with `registry-postgres-data`
+    + `candles-postgres-data`. Both new top-level blocks needed
+    because `extends:` only inherits service-level config.
+  * 4 new service blocks: `registry-checkpoint`,
+    `registry-postgres`, `checkpoint`, `postgres`. Each uses
+    `extends: { file: ../../../futarchy-indexers/.../docker-compose.yml,
+    service: <bare name> }` to pull in the indexer's full
+    definition (build, ports, volumes, image, healthcheck).
+  * The two checkpoint services get harness overrides:
+      RPC_URL / GNOSIS_RPC_URL = http://anvil:8545 (override
+      the included default of https://rpc.gnosischain.com so
+      indexers ingest from anvil, not real Gnosis)
+      RESET=${RESET:-true} (fresh DB on each harness start)
+      networks: dual-homed (their own net + harness-net)
+      depends_on: anvil + their respective postgres
+  * api service depends_on now safely declares
+    registry-checkpoint + checkpoint (service_started since
+    indexers have no healthcheck).
+
+- **Compose extends merge semantics confirmed by test**:
+  * Maps (`environment`, `depends_on` long-form) MERGE —
+    environment override layered cleanly on top of the
+    included defaults; full env block visible in
+    `docker compose config` output.
+  * Sequences (`networks`, `ports`) REPLACE — must repeat
+    the original network alongside `harness-net`.
+  * Build context resolves to the EXTENDED file's directory,
+    not the harness's. registry-checkpoint context resolves
+    to `/Users/kas/futarchy-indexers/futarchy-complete/checkpoint`
+    (correct), candles to
+    `/Users/kas/futarchy-indexers/proposals-candles/checkpoint`
+    (correct).
+
+- **Validation**: `docker compose config --quiet` succeeds;
+  `--services` returns 6 (anvil, api, postgres, checkpoint,
+  registry-postgres, registry-checkpoint); merged config shows
+  RPC_URL=http://anvil:8545 on registry-checkpoint and
+  GNOSIS_RPC_URL=http://anvil:8545 on candles checkpoint;
+  api depends_on lists all three.
+
+- **What's still left to verify (slice 4b-verify, requires
+  Docker daemon)**: actual `docker compose up -d` brings up the
+  stack; the indexers can reach `http://anvil:8545` over
+  harness-net; the api can resolve `http://registry-checkpoint:3000`
+  + `http://checkpoint:3000` and get back GraphQL responses;
+  the postgres healthchecks work end-to-end. Pinned as
+  4b-verify in CHECKLIST.
+
+- Slice 4 progress: ~42% done (6 of ~12 sub-slices total).
+  Next: slice 4b-verify (daemon-required smoke test, mostly
+  human) OR slice 4c (interface-dev block — Next.js dev
+  server in compose).
 
 Slice 4c v3b summary (previous iteration on the interface side):
 

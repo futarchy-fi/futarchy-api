@@ -637,26 +637,31 @@ freshly-generated addresses as recipients; documented in
       3001/3003 only matter from the host). The api's
       depends_on on the indexer services is intentionally
       NOT added yet — see 4b-network-wire below.
-- [ ] **4b-network-wire — bridge registry-net + checkpoint-net
-      with harness-net + override RPC URLs.** Naive override
-      attempt FAILED: declaring same-name service blocks here
-      to extend included services produces
-      `services.registry-checkpoint conflicts with imported
-      resource`. Compose v2.34's `include:` rejects same-name
-      service definitions in the parent. Three alternatives
-      to evaluate next iteration (documented in compose
-      comment block):
-      (a) Override-list form: `include: - path:
-          [base.yml, overrides.yml]`. Compose merges base +
-          overrides BEFORE include, so name collisions don't
-          happen.
-      (b) Per-service `extends:` + drop `include:`. Each
-          indexer service declared here with `extends:
-          { file: ..., service: ... }` plus harness overrides.
-      (c) Multi-file `docker compose -f base.yml -f
-          overrides.yml`. Rejected: breaks the
-          single-docker-compose.yml acceptance gate.
-      Approach (b) is closest fit for ADR-002's wrapper leg.
+- [x] **4b-network-wire — indexers wired via per-service
+      `extends:` (approach b).** Dropped `include:`; replaced
+      with 4 `extends:` blocks (registry-checkpoint,
+      registry-postgres, checkpoint, postgres) each pulling
+      their definition from the sibling futarchy-indexers
+      compose files. The two checkpoint services get harness
+      overrides layered on top:
+        - environment: RPC_URL/GNOSIS_RPC_URL=http://anvil:8545
+          (override the included default of
+          https://rpc.gnosischain.com so indexers ingest from
+          our anvil fork, not real Gnosis); RESET=true (fresh
+          DB on each harness start)
+        - networks: dual-homed (registry-net OR checkpoint-net,
+          plus harness-net) so the api can reach them via
+          compose service name
+        - depends_on: anvil + their respective postgres (with
+          service_healthy on postgres so the indexer doesn't
+          start before its DB)
+      Top-level `networks:` and `volumes:` re-declared
+      (registry-net, checkpoint-net, registry-postgres-data,
+      candles-postgres-data) because `extends:` only inherits
+      service-level config, not top-level keys. Api service
+      depends_on now safely includes registry-checkpoint +
+      checkpoint (service_started, since indexers have no
+      healthcheck).
 - [ ] **4b-verify — full smoke test.**
       `docker compose config --services` returns 6 (currently
       passes); `docker compose build api` still succeeds
