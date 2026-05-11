@@ -26,13 +26,25 @@ file from this location (Actions only scans `.github/workflows/`).
 
 ## Currently staged
 
-| File                                | Phase 7 sub-slice | Triggers           | Runtime  | Status       |
-|-------------------------------------|-------------------|--------------------|----------|--------------|
-| `auto-qa-harness-smoke.yml.staged`  | 4d-smoke-ci       | `workflow_dispatch` | <1 min  | ⏳ awaiting promotion |
+| File                                              | Phase 7 sub-slice           | Triggers           | Runtime  | Status       |
+|---------------------------------------------------|-----------------------------|--------------------|----------|--------------|
+| `auto-qa-harness-smoke.yml.staged`                | 4d-smoke-ci                 | `workflow_dispatch` | <1 min  | ⏳ awaiting promotion |
+| `auto-qa-harness-architecture-sync.yml.staged`    | 4d-architecture-sync-ci     | `workflow_dispatch` | <1 min  | ⏳ awaiting promotion |
 
 The smoke-test workflow runs the orchestrator's invariant battery
 (130+ tests) against an in-process node:http fixture. No docker,
 no real services. ~1.5s of test time + Node setup overhead.
+
+The architecture-sync workflow curls the **interface-side**
+`ARCHITECTURE.md` from raw.githubusercontent.com and diffs it
+against the local copy — fails loudly if the shared spec drifted.
+Sister workflow on the interface side mirrors it in reverse. Both
+take an optional `sister_branch` input (default `auto-qa`; switch
+to `main` once both repos merge).
+
+**Promote in any order**: each workflow is independent. The
+smoke workflow has the broader coverage; the architecture-sync
+workflow has the smallest blast radius (single doc check).
 
 ## Why this dance
 

@@ -589,6 +589,26 @@ freshly-generated addresses as recipients; documented in
       Also created `auto-qa/harness/ci/README.md` on api
       side (mirrors interface ci/README.md) explaining the
       staging dance + currently-staged table.
+- [x] **4d-architecture-sync-ci — cross-repo ARCHITECTURE.md
+      drift workflow STAGED.** New
+      `auto-qa/harness/ci/auto-qa-harness-architecture-sync.yml.staged`
+      curls the sister-side `ARCHITECTURE.md` from
+      raw.githubusercontent.com (public; no token), diffs it
+      against the local copy, fails loudly on byte mismatch.
+      Sister-side workflow on interface mirrors it in reverse.
+      Together with the doc-side smoke test
+      (`tests/smoke-architecture-sync.test.mjs`), gives
+      complete drift coverage: smoke test handles dev-with-
+      sibling-clone, workflow handles CI-with-one-repo-clone.
+      Trigger: `workflow_dispatch` only with optional
+      `sister_branch` input (default `auto-qa`; switch to
+      `main` post-merge). YAML re-validated via `js-yaml@4`;
+      simulated locally against live raw URLs (both pass).
+- [ ] **4d-architecture-sync-ci-promote** — maintainer task:
+      copy this slice's staged file into
+      `.github/workflows/auto-qa-harness-architecture-sync.yml`
+      on the api repo. Independent of the other staged
+      workflows; promote in any order.
 - [x] **3e-extend — INVARIANTS.md drift check.** Two new
       steps appended to `auto-qa-harness-smoke.yml.staged`:
       "Regenerate invariants catalog" (runs `npm run

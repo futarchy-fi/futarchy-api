@@ -1104,7 +1104,63 @@ Phase 7 slice 3d summary (this iteration on the interface side):
   smoke-tested live first). Then slice 4 — full-stack
   docker-compose.
 
-Phase 0 slice 41-doc-side summary (this iteration, both sides):
+Phase 7 slice 4d-architecture-sync-ci summary (this iteration, both sides):
+
+- **CI integration slice** (no new invariant). Cross-
+  repo complement to the just-shipped doc-side smoke
+  test. Together they give COMPLETE drift coverage of
+  the shared `ARCHITECTURE.md` spec:
+
+  * **Smoke test** (previous iteration): catches dev-with-
+    sibling-clone case at `npm test` time. Skips if
+    sister not present.
+  * **Workflow** (this iteration): catches CI-with-one-
+    repo-checked-out case. Curls sister via
+    raw.githubusercontent.com (public; no token),
+    diffs against local. Fails loudly on byte
+    mismatch.
+
+- **Mirrored on both sides**:
+  * api-side stages `auto-qa-harness-architecture-sync
+    .yml.staged` pointing at the interface sister.
+  * interface-side stages the same workflow pointing at
+    the api sister.
+
+- **Optional `sister_branch` input** defaults to
+  `auto-qa` (current state — both repos' bot work lives
+  on this branch). Maintainer can dispatch with `main`
+  once both repos merge.
+
+- **Validation**:
+  * Both YAMLs re-parsed clean via `js-yaml@4`
+    (`workflow_dispatch.inputs.sister_branch` shape
+    matches GitHub Actions schema).
+  * Both raw URLs return HTTP/2 200 from this dev
+    machine (publicly accessible).
+  * Simulated both workflows locally:
+    `curl -sSf <sister-url> > /tmp/x; diff -u <local> /tmp/x`
+    on each side → both PASS against the current
+    baseline.
+
+- **README staged-tables updated** on both sides; promote
+  order revised to put architecture-sync between smoke
+  and scenarios (smallest blast radius after the smoke
+  battery).
+
+- **Trigger remains workflow_dispatch only**, matching
+  the conservative roll-out pattern of every other
+  staged workflow. Future iterations can add
+  `pull_request: paths: ['auto-qa/harness/ARCHITECTURE.md']`
+  + nightly drift sweep cron.
+
+- **Why this iteration is CI-only on both sides**: same
+  reason as the last several slices — safe parallel
+  work that pays off whichever strategic direction the
+  user picks. Adds workflow-level coverage of the new
+  bug class (cross-repo spec drift) introduced by the
+  prior smoke-test slice.
+
+Phase 0 slice 41-doc-side summary (previous iteration, both sides):
 
 - **Phase 0 doc-side equivalent of CHECKLIST item 41**
   ("Sister-link verified: fresh checkout of both repos
