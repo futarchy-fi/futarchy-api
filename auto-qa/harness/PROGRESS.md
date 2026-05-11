@@ -1104,7 +1104,44 @@ Phase 7 slice 3d summary (this iteration on the interface side):
   smoke-tested live first). Then slice 4 — full-stack
   docker-compose.
 
-Phase 7 slice 3e-extend summary (this iteration on the api side):
+Phase 0 slice 41-doc-side summary (this iteration, both sides):
+
+- **Phase 0 doc-side equivalent of CHECKLIST item 41**
+  ("Sister-link verified: fresh checkout of both repos
+  in `~/code/futarchy-fi/`"). The original item bundles
+  doc + docker checks; this slice ships the doc-side
+  half on autopilot.
+
+- Mirrored `tests/smoke-architecture-sync.test.mjs` on
+  both sides. Each resolves the SISTER repo's
+  `ARCHITECTURE.md` at the sibling-clone path
+  (`../{other-repo}/auto-qa/harness/ARCHITECTURE.md`,
+  4 levels up from the test file), skips cleanly with
+  `t.skip()` if the sister isn't present, and asserts
+  byte-identical content otherwise.
+
+- **Skip behavior** is deliberate: CI runners + one-repo
+  clones don't see the sister, and a hard fail there
+  would just be noise. The cross-repo workflow-level
+  drift check is a future slice.
+
+- **Validation**: both sister repos exist on the dev
+  machine; both tests pass (1/1 each in isolation).
+  Baseline confirmed: `diff -q` between the two
+  ARCHITECTURE.md copies exits silently (byte-identical).
+
+- CHECKLIST item 41 gets a sub-bullet recording the doc-
+  side coverage; the docker-side half remains unchecked
+  (daemon-required).
+
+- **Why this iteration is doc-protection on both sides**:
+  same reason as the last several slices — safe parallel
+  work that pays off whichever strategic direction the
+  user picks. Adds a new bug class to the catch-net
+  (cross-repo spec drift) without committing to any
+  scenario or invariant direction.
+
+Phase 7 slice 3e-extend summary (previous iteration on the api side):
 
 - **CI integration slice** (no new invariant). The api-
   side staged smoke workflow (slice 3e) currently runs

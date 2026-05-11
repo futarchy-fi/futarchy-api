@@ -40,6 +40,12 @@ agreed-upon, without installing heavy deps or running real services.
       "Proposed" to "Accepted"
 - [ ] Sister-link verified: a fresh checkout of both repos in
       `~/code/futarchy-fi/` runs `docker compose config` cleanly
+  - [x] **Doc-side equivalent**: mirrored
+        `tests/smoke-architecture-sync.test.mjs` on both repos
+        asserts `ARCHITECTURE.md` is byte-identical to the
+        sister copy. Skips cleanly when sibling clone isn't
+        present (CI / one-repo clones); fails loudly when both
+        clones are present and the spec drifted.
 
 **When all items above are checked → Phase 0 is complete.**
 
