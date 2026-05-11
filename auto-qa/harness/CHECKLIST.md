@@ -609,6 +609,17 @@ freshly-generated addresses as recipients; documented in
       `.github/workflows/auto-qa-harness-architecture-sync.yml`
       on the api repo. Independent of the other staged
       workflows; promote in any order.
+- [x] **3e-extend-2 — daemon-free smoke files in CI.** Two
+      new steps in `auto-qa-harness-smoke.yml.staged` running
+      `smoke-invariants-catalog.test.mjs` (drift assertion
+      at unit level — sister to the workflow-level
+      git-diff check) + `smoke-architecture-sync.test.mjs`
+      (Phase 0 doc-side sister-link; SKIPS in CI's single-
+      repo checkout — that's expected, the cross-repo
+      workflow handles actual sister drift). Both files
+      shipped earlier this session and were not exercised
+      by the existing `smoke:scenarios` step. YAML
+      re-validated; both tests pass 1/1 locally.
 - [x] **3e-extend — INVARIANTS.md drift check.** Two new
       steps appended to `auto-qa-harness-smoke.yml.staged`:
       "Regenerate invariants catalog" (runs `npm run

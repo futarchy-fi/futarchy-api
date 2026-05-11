@@ -1104,7 +1104,44 @@ Phase 7 slice 3d summary (this iteration on the interface side):
   smoke-tested live first). Then slice 4 — full-stack
   docker-compose.
 
-Phase 7 slice 4d-architecture-sync-ci summary (this iteration, both sides):
+Phase 7 slice 3e-extend-2 summary (this iteration on the api side):
+
+- **CI integration slice** (no new invariant). The api-
+  side staged smoke workflow currently runs only
+  `smoke:scenarios` (one file). Two daemon-free smoke
+  files shipped earlier this session
+  (`smoke-invariants-catalog.test.mjs`,
+  `smoke-architecture-sync.test.mjs`) were NOT exercised
+  by CI. This slice adds explicit steps for each.
+
+- **What ships in `auto-qa-harness-smoke.yml.staged`**:
+  * Step "Run invariants-catalog smoke test" → unit-
+    level drift assertion (sister to the workflow-level
+    git-diff check shipped in slice 3e-extend).
+  * Step "Run architecture-sync smoke test" → Phase 0
+    doc-side sister-link check. SKIPS cleanly in CI's
+    single-repo checkout (sister not present); that's
+    expected. The cross-repo
+    `auto-qa-harness-architecture-sync.yml.staged`
+    workflow is the one that fails on actual sister
+    drift; this step documents the assertion exists
+    and future-proofs against a hypothetical workflow
+    that DOES check out both repos.
+
+- **Why explicit steps vs broadening to `npm test`**:
+  the api harness has 9 daemon-required smoke files
+  (smoke-fork, smoke-compose, smoke-multi-spawn, etc.)
+  that would fail in CI without anvil + indexers + api
+  + docker. Listing daemon-free files explicitly avoids
+  pulling those in.
+
+- **Validation**: YAML re-parsed clean via `js-yaml@4`;
+  both new tests pass 1/1 in isolation locally.
+
+- **Trigger remains workflow_dispatch only**; conservative
+  roll-out unchanged.
+
+Phase 7 slice 4d-architecture-sync-ci summary (previous iteration, both sides):
 
 - **CI integration slice** (no new invariant). Cross-
   repo complement to the just-shipped doc-side smoke
