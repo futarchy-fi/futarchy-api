@@ -22,6 +22,7 @@ import { ENDPOINTS, IS_CHECKPOINT } from '../config/endpoints.js';
 import { registryCache } from '../utils/cache.js';
 
 const AGGREGATOR_ADDRESS = '0xc5eb43d53e2fe5fdde5faf400cc4167e5b5d4fc1';
+const BYTES32_ID_RE = /^0x[a-f0-9]{64}$/;
 
 // ============================================================================
 // ON-CHAIN SNAPSHOT LINK REGISTRY (canonical source of truth)
@@ -395,7 +396,13 @@ export async function resolveProposalId(proposalId) {
         return orgResult;
     }
 
-    // 4. Use ID directly
+    // 4. Snapshot proposal IDs are bytes32 values. If no explicit mapping was
+    // found above, do not fall through to a generic empty market response.
+    if (BYTES32_ID_RE.test(normalized)) {
+        return null;
+    }
+
+    // 5. Use ID directly for Futarchy proposal/trading contract addresses.
     const fallback = {
         proposalId: normalized,
         proposalAddress: normalized,
