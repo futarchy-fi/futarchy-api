@@ -463,6 +463,15 @@ export async function handleMarketEventsRequest(req, res) {
         const resolved = IS_CHECKPOINT
             ? await resolveProposalAdapter(proposalId)
             : await resolveProposalId(proposalId);
+
+        if (!resolved) {
+            return res.status(404).json({
+                status: 'not_found',
+                error: 'No Futarchy market is linked to this Snapshot proposal',
+                proposal_id: proposalId
+            });
+        }
+
         // Use proposalAddress (trading contract) for pool lookup
         const tradingContractId = resolved.proposalAddress || resolved.proposalId;
         console.log(`   🔗 Resolved to trading contract: ${tradingContractId?.slice(0, 10)}...`);

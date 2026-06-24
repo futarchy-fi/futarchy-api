@@ -83,6 +83,15 @@ export async function handleUnifiedChartRequest(req, res) {
         // ── Step 1: Resolve proposal using EXISTING adapter ──
         const t1 = Date.now();
         const resolved = await resolveProposalAdapter(proposalId);
+
+        if (!resolved) {
+            return res.status(404).json({
+                status: 'not_found',
+                error: 'No Futarchy market is linked to this Snapshot proposal',
+                proposal_id: proposalId
+            });
+        }
+
         const tradingContractId = resolved.proposalAddress || resolved.proposalId;
         const ticker = resolved.coingeckoTicker || null;
         const chartStartRange = resolved.startCandleUnix || null;
