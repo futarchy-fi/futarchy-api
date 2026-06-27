@@ -1,0 +1,427 @@
+# Forked Replay Harness — service composition
+#
+# Phase 0 SCAFFOLD ONLY. Nothing here is wired up; this file documents
+# the eventual service topology so the layout is reviewable now.
+#
+# Phases that activate which services:
+#   Phase 1 — anvil (uncomment + add the build/image)
+#   Phase 2 — futarchy-api (point at anvil)
+#   Phase 3 — checkpoint indexer (point at anvil)
+#   Phase 4 — orchestrator (drives anvil + sends txs)
+#   Phase 5 — interface-dev (Next.js dev server pointed at anvil; only
+#             needed when running Playwright e2e — a sibling clone of
+#             interface repo is mounted)
+#
+# Run target (Phase 7+):
+#   docker compose -f auto-qa/harness/docker-compose.yml up -d
+#   then: npm run auto-qa:e2e:replay
+#
+# Conventions:
+#   - All services on a single internal network "harness-net"
+#   - Anvil always exposes 8545; everything else routes via this name
+#   - No ports exposed to host EXCEPT for debug (commented blocks below)
+#   - Volumes go into ./.compose-volumes/ (gitignored)
+
+# Note: no top-level `version` key — Docker Compose v2+ deprecates it.
+
+name: futarchy-replay-harness
+
+# ────────────────────────────────────────────────────────────────────
+# Phase 7 slice 4b-network-wire: indexers integrated via per-service
+# `extends:` (replaces the slice 4b-include `include:` block).
+#
+# Why we switched away from `include:`:
+#   `include:` is for IMPORTING services as-is. Compose v2.34 rejects
+#   same-name service definitions in the parent compose file
+#   (`services.registry-checkpoint conflicts with imported resource`),
+#   so we couldn't add network-bridge or RPC overrides to the included
+#   indexer services. Per-service `extends:` gives us merge semantics
+#   without name collisions — see ADR-002's "wrapper service that
+#   delegates to it" leg.
+#
+# Tradeoff: each indexer service must be declared explicitly here
+# (4 blocks: registry-checkpoint, registry-postgres, checkpoint,
+# postgres). Plus the top-level networks + volumes that the included
+# compose files declared internally (registry-net, checkpoint-net,
+# registry-postgres-data, candles-postgres-data) need to be re-declared
+# at the harness compose level since `extends:` only operates at the
+# service level.
+# ────────────────────────────────────────────────────────────────────
+
+networks:
+    harness-net:
+        driver: bridge
+    # Re-declared from the indexer compose files because `extends:`
+    # only inherits service-level config, not top-level networks/volumes.
+    registry-net:
+        driver: bridge
+    checkpoint-net:
+        driver: bridge
+
+volumes:
+    # Same story — re-declared so the postgres bind mounts work.
+    registry-postgres-data:
+    candles-postgres-data:
+    # Slice 4c-prep: named volume for the interface-dev container's
+    # node_modules. Declared eagerly here (vs lazily at activation
+    # time) so 4c-activate is a one-step uncomment with no top-level
+    # changes. The host's node_modules has macOS/darwin binaries that
+    # wouldn't run in the Linux container; the named volume keeps a
+    # separate Linux node_modules tree without touching the host's.
+    interface-node-modules:
+    # Slice 4d-prep: same story for the orchestrator container.
+    # The harness package.json deps (viem, playwright in dev) get
+    # installed once in this volume rather than re-installed per run.
+    orchestrator-node-modules:
+
+# Top-level service stubs — ALL DISABLED in Phase 0.
+# Each block lists the eventual command + the phase that turns it on.
+services:
+    # ────────────────────────────────────────────────────────────────
+    # Phase 1: Anvil fork of Gnosis. Forks `latest` by default; for
+    # scenario replays (Phase 6) override FORK_BLOCK with a specific
+    # block number — but note the command list below does NOT yet
+    # plumb FORK_BLOCK through (it requires a shell wrapper to handle
+    # the "no flag when latest" case; deferred to Phase 6 when we
+    # actually need pinned blocks).
+    #
+    # We use the published Foundry image rather than building locally
+    # so CI doesn't need to compile Rust.
+    # ────────────────────────────────────────────────────────────────
+    anvil:
+        image: ghcr.io/foundry-rs/foundry:latest
+        container_name: harness-anvil
+        networks: [harness-net]
+        environment:
+            FORK_URL: ${FORK_URL:-https://rpc.gnosis.gateway.fm}
+        command:
+            - anvil
+            - --host
+            - "0.0.0.0"
+            - --port
+            - "8545"
+            - --fork-url
+            - ${FORK_URL:-https://rpc.gnosis.gateway.fm}
+            - --chain-id
+            - "100"
+            - --no-mining
+            - --accounts
+            - "10"
+            - --balance
+            - "10000"
+        ports:
+            # Expose to host for the harness test runner. Comment out
+            # if running fully containerized (orchestrator inside compose).
+            - "${ANVIL_HOST_PORT:-8545}:8545"
+        healthcheck:
+            test: ["CMD", "cast", "block-number", "--rpc-url", "http://localhost:8545"]
+            interval: 2s
+            timeout: 2s
+            retries: 30
+            start_period: 5s
+
+    # ────────────────────────────────────────────────────────────────
+    # Phase 7 slice 4b-network-wire: indexers via per-service `extends:`.
+    #
+    # See top-of-file comment for why we picked extends over include.
+    # Each block here delegates the bulk of the service definition to
+    # the sibling futarchy-indexers compose files, then layers harness-
+    # specific overrides on top:
+    #   - environment override: redirect the indexer at our anvil
+    #     (RPC_URL for registry, GNOSIS_RPC_URL for candles)
+    #   - networks: dual-homed (indexer's own net + harness-net) so
+    #     the api can reach them
+    #   - depends_on: add anvil's healthcheck so indexers don't try
+    #     to ingest before anvil is ready
+    #
+    # Compose extends merge semantics:
+    #   - Maps (environment, depends_on long-form) MERGE
+    #   - Sequences (networks, ports) REPLACE — must repeat the
+    #     original network alongside harness-net
+    # ────────────────────────────────────────────────────────────────
+    registry-checkpoint:
+        extends:
+            file: ../../../futarchy-indexers/futarchy-complete/checkpoint/docker-compose.yml
+            service: registry-checkpoint
+        environment:
+            # Override the included default of https://rpc.gnosischain.com
+            # so this indexer ingests from our anvil fork, not real Gnosis.
+            RPC_URL: http://anvil:8545
+            RESET: ${RESET:-true}
+        depends_on:
+            anvil:
+                condition: service_healthy
+            registry-postgres:
+                condition: service_healthy
+        networks:
+            # Sequence override: must repeat registry-net (from extended
+            # service) AND add harness-net so the api can reach this.
+            - registry-net
+            - harness-net
+
+    registry-postgres:
+        extends:
+            file: ../../../futarchy-indexers/futarchy-complete/checkpoint/docker-compose.yml
+            service: registry-postgres
+        # No env / network / dep override needed; this service only
+        # talks to registry-checkpoint over registry-net. extends pulls
+        # in image, env, volumes (postgres-data + init.sql), healthcheck.
+
+    # Candles indexer: bare service name `checkpoint` per the included
+    # compose file (NOT `candles-checkpoint`). Env var is `GNOSIS_RPC_URL`,
+    # NOT `RPC_URL` (different from registry — extends merge would not
+    # touch RPC_URL since the candles indexer never reads it).
+    checkpoint:
+        extends:
+            file: ../../../futarchy-indexers/proposals-candles/checkpoint/docker-compose.yml
+            service: checkpoint
+        environment:
+            GNOSIS_RPC_URL: http://anvil:8545
+            RESET: ${RESET:-true}
+        depends_on:
+            anvil:
+                condition: service_healthy
+            postgres:
+                condition: service_healthy
+        networks:
+            - checkpoint-net
+            - harness-net
+
+    postgres:
+        extends:
+            file: ../../../futarchy-indexers/proposals-candles/checkpoint/docker-compose.yml
+            service: postgres
+
+    # ────────────────────────────────────────────────────────────────
+    # Phase 2 / Phase 7 slice 4a: futarchy-api pointed at the local
+    # anvil. The indexer dependency is intentionally OMITTED until
+    # slice 4b adds the indexer service — without it, request-time
+    # endpoints that proxy to CHECKPOINT_URL will fail, but the
+    # Express server itself still starts and `docker compose build api`
+    # / `up api` succeed.
+    #
+    # Dockerfile uses node:22-alpine, runs `npm ci --omit=dev`, and
+    # `EXPOSE 3031`. `src/index.js:25` hardcodes `const PORT = 3031`
+    # (does NOT read process.env.PORT), so PORT here is informational
+    # only — changing it would NOT actually re-bind the api server.
+    # If you need a different external port, change the host side of
+    # the `ports:` mapping below, not the container side.
+    # ────────────────────────────────────────────────────────────────
+    api:
+        build:
+            # Build context = api repo root (where Dockerfile + package.json live).
+            # Path is `../..` from this compose file's location
+            # (auto-qa/harness/), not `../../..` as the original Phase 0
+            # scaffold had — that was a slice-4a finding (the Phase 0
+            # path landed at /Users/kas/, the parent of the repo).
+            context: ../..
+            dockerfile: Dockerfile
+        container_name: harness-api
+        networks: [harness-net]
+        depends_on:
+            # All three deps now safely declarable: slice 4b-network-wire
+            # extends both checkpoint services to be dual-homed on
+            # harness-net, so the api can reach them via service name.
+            # service_started (not service_healthy) for the indexers
+            # because they have no healthcheck — declaring service_healthy
+            # would block forever. Adding healthchecks on the indexer
+            # services would belong in futarchy-indexers/, not here.
+            anvil:
+                condition: service_healthy
+            registry-checkpoint:
+                condition: service_started
+            checkpoint:
+                condition: service_started
+        environment:
+            RPC_URL: http://anvil:8545
+            # Phase 0 stub used `CHECKPOINT_URL` — but the api never
+            # reads that. `src/config/endpoints.js` reads
+            # `REGISTRY_URL` + `CANDLES_URL` (defaults
+            # `localhost:3003` + `localhost:3001`). Now wired to the
+            # included indexer services by their compose-internal
+            # service name + container port (NOT the host port).
+            # Note: until 4b-network-wire bridges the networks, the
+            # api won't actually be able to reach these — but the env
+            # contract is right and matches src/config/endpoints.js.
+            REGISTRY_URL: http://registry-checkpoint:3000/graphql
+            CANDLES_URL:  http://checkpoint:3000/graphql
+            FUTARCHY_MODE: checkpoint
+            PORT: 3031   # informational — src/index.js hardcodes 3031
+        # ports:
+        #     - "3031:3031"   # api — host:container both 3031
+        # Uncomment if you want host access to the api during local debug
+        # (compose-internal traffic uses the service name, not host port).
+
+    # ────────────────────────────────────────────────────────────────
+    # Phase 5 / Phase 7 slice 4c: Next.js dev server from the sibling
+    # interface repo, pointed at the local api + anvil.
+    #
+    # Slice 4c-prep findings (Phase 0 stub had FIVE issues, all fixed
+    # below; uncommenting is now slice 4c-activate, atomic):
+    #
+    #   (i)   Path bug: original `../../../../interface` resolves to
+    #         `/` (four levels up from auto-qa/harness/, not three).
+    #         Correct path is `../../../interface` (= /Users/kas/interface
+    #         on the standard layout).
+    #   (ii)  Port bug: original `NEXT_PUBLIC_API_URL: http://api:3000`
+    #         pointed at the wrong port. The api service binds to 3031
+    #         (Dockerfile EXPOSE 3031 + src/index.js:25 hardcoded);
+    #         see slice 4a-prep for the discovery story.
+    #   (iii) Missing anvil dep: NEXT_PUBLIC_RPC_URL points at
+    #         http://anvil:8545, so the dev server should depend on
+    #         anvil being healthy too, not just the api.
+    #   (iv)  Bare `npm run dev` won't work in a fresh container —
+    #         the bind-mount provides source files but no node_modules.
+    #         Replaced with `sh -c "if no node_modules then npm install
+    #         && next dev --hostname 0.0.0.0"`. The `--hostname 0.0.0.0`
+    #         is critical: by default `next dev` binds to localhost
+    #         which isn't reachable from outside the container.
+    #   (v)   Node version: original image was node:20-bookworm-slim;
+    #         the harness convention (per api Dockerfile + CI workflows)
+    #         is node:22-alpine. Standardized on node:22-alpine here too.
+    #
+    # Activation gate for slice 4c-activate: the standard layout
+    # assumes the interface clone is a sibling of futarchy-api at
+    # /Users/kas/interface. If a contributor clones it elsewhere,
+    # set INTERFACE_PATH=/path/to/interface in the compose env or
+    # a .env file. detect-indexers.mjs has a similar discovery helper
+    # for the indexer clone — consider a parallel detect-interface.mjs
+    # in slice 4c-activate or a future polish slice.
+    #
+    # The named volume `interface-node-modules` is REQUIRED to keep
+    # the container's node_modules separate from the host's (host's
+    # node_modules wouldn't have the right Linux binaries; mounting
+    # them in would shadow valid Linux installs).
+    # ────────────────────────────────────────────────────────────────
+    interface-dev:
+        image: node:22-alpine
+        container_name: harness-interface
+        networks: [harness-net]
+        depends_on:
+            anvil:
+                condition: service_healthy
+            api:
+                condition: service_started
+        working_dir: /app
+        volumes:
+            - ${INTERFACE_PATH:-../../../interface}:/app
+            - interface-node-modules:/app/node_modules
+        environment:
+            NEXT_PUBLIC_RPC_URL: http://anvil:8545
+            NEXT_PUBLIC_API_URL: http://api:3031
+        command:
+            - sh
+            - -c
+            - |
+                if [ ! -d node_modules ] || [ -z "$(ls -A node_modules)" ]; then
+                    echo "[interface-dev] installing deps (first run)..."
+                    npm install --no-audit --no-fund
+                fi
+                exec npx next dev --hostname 0.0.0.0 --port 3000
+        # ports:
+        #     - "3010:3000"   # uncomment for host-side dev server access
+        # Compose-internal traffic uses `interface-dev:3000` from
+        # other services on harness-net.
+
+    # ────────────────────────────────────────────────────────────────
+    # Phase 4 / Phase 7 slice 4d: Orchestrator. Drives anvil's clock,
+    # sends synthetic swap txs, and runs cross-layer assertions per
+    # ARCHITECTURE.md.
+    #
+    # Slice 4d-prep findings (Phase 0 stub had FIVE issues, all fixed
+    # below; this is the same productive pattern as 4a-prep + 4c-prep):
+    #
+    #   (i)   Path bug: original `../../../auto-qa/harness` resolves
+    #         to `/Users/kas/auto-qa/harness/` (three levels up from
+    #         compose, then auto-qa/harness on top of that — but
+    #         /Users/kas doesn't have an auto-qa dir). Corrected to
+    #         `.` (the dir containing this compose file IS the
+    #         harness dir = /Users/kas/futarchy-api/auto-qa/harness).
+    #   (ii)  Port bug: original `API_URL: http://api:3000` pointed
+    #         at the wrong port. Api binds to 3031 (slice 4a-prep
+    #         finding). Corrected to `http://api:3031`.
+    #   (iii) Wrong env vars: original `CHECKPOINT_URL: http://indexer:3001/graphql`
+    #         used the wrong env var (api side surfaced this in
+    #         slice 4b-api-env: real env vars are `REGISTRY_URL` +
+    #         `CANDLES_URL` per src/config/endpoints.js, and there's
+    #         no `indexer` service — it's `registry-checkpoint` +
+    #         `checkpoint`). Replaced with the correct two vars.
+    #   (iv)  Node version: 20-bookworm-slim → 22-alpine (matches
+    #         api Dockerfile + interface-dev convention).
+    #   (v)   Bare `npm run test` won't work in a fresh container
+    #         (no node_modules in bind mount). Replaced with the
+    #         same conditional install pattern as interface-dev.
+    #
+    # DEEPER SCOPE CONCERN — not fixed by this prep slice:
+    #
+    # ARCHITECTURE.md envisions an orchestrator that drives anvil's
+    # clock + sends synthetic txs + runs cross-layer assertions
+    # (orchestrator/invariants.mjs). But invariants.mjs DOESN'T EXIST
+    # YET. The orchestrator/ dir currently has only services.mjs (a
+    # process-spawner used by tests/) and stub-indexer.mjs (a Phase 2
+    # in-memory stub).
+    #
+    # Even worse, the existing services.mjs ASSUMES native-anvil +
+    # script-orchestrated indexers (Phase 3 way). Inside the compose
+    # stack, anvil + indexers are ALREADY RUNNING — orchestrator
+    # spawning them again would be a topology error.
+    #
+    # Two paths forward for slice 4d-activate (deferred):
+    #   (a) Build a new orchestrator entrypoint (e.g.,
+    #       orchestrator/scenario-runner.mjs) that, in compose mode,
+    #       does NOT spawn services — just hits the existing
+    #       compose-internal endpoints + runs assertions. Same
+    #       binary works in both compose mode (HARNESS_COMPOSE=1)
+    #       and native mode (delegates to services.mjs).
+    #   (b) Defer compose orchestrator entirely; keep using
+    #       scripts/start-indexers.mjs + tests/ in native mode for
+    #       Phase 3 work, and treat compose as a "demo/visualize the
+    #       stack" tool rather than the test runner.
+    #
+    # For now: stub command is a long-running no-op (tail -f
+    # /dev/null) so the orchestrator service starts cleanly in the
+    # stack but does nothing. Replace once 4d-scenarios builds out
+    # invariants.mjs / scenario-runner.mjs.
+    #
+    # ACTIVATED in slice 4d-activate after 4d-scenarios shipped
+    # `orchestrator/scenario-runner.mjs`. Path (a) chosen — the
+    # runner gates on HARNESS_COMPOSE=1 and runs the invariant
+    # battery from `orchestrator/invariants.mjs` against the
+    # already-running compose stack. Lifecycle is one-shot: the
+    # container starts, runs every invariant, exits 0 on all-pass
+    # or 1 on any-fail. Other services (anvil, api, indexers,
+    # interface-dev) keep running.
+    # ────────────────────────────────────────────────────────────────
+    orchestrator:
+        image: node:22-alpine
+        container_name: harness-orchestrator
+        networks: [harness-net]
+        depends_on:
+            anvil:
+                condition: service_healthy
+            api:
+                condition: service_started
+            registry-checkpoint:
+                condition: service_started
+            checkpoint:
+                condition: service_started
+        working_dir: /app
+        volumes:
+            - .:/app                      # mount harness/ itself
+            - orchestrator-node-modules:/app/node_modules
+            # Volume kept even though scenario-runner.mjs has zero
+            # runtime deps (node:22-alpine ships fetch). Future
+            # invariants that need viem / etc will install into
+            # this volume on first run.
+        environment:
+            RPC_URL: http://anvil:8545
+            API_URL: http://api:3031
+            REGISTRY_URL: http://registry-checkpoint:3000/graphql
+            CANDLES_URL: http://checkpoint:3000/graphql
+            FUTARCHY_MODE: checkpoint
+            HARNESS_COMPOSE: "1"          # signal compose mode
+        command: ["node", "orchestrator/scenario-runner.mjs"]
+
+    # ────────────────────────────────────────────────────────────────
+    # (Phase 0 placeholder removed — anvil is real now.)
+    # ────────────────────────────────────────────────────────────────

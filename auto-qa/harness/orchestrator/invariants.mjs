@@ -1,0 +1,2881 @@
+/**
+ * invariants.mjs — cross-layer assertion library for the harness.
+ *
+ * Per ARCHITECTURE.md, the orchestrator's job is to drive anvil's
+ * clock + send synthetic txs + verify cross-layer agreement
+ * (chain ↔ indexer ↔ api ↔ frontend) on every block.
+ *
+ * This module is the assertion-library half: invariants are pure
+ * predicates over the live stack. The scenario-runner half
+ * (scenario-runner.mjs) decides WHEN to call them.
+ *
+ * Each invariant is a `{ name, description, layer, check }` object.
+ * `check(ctx)` resolves to `{ ok: true, detail }` on pass or throws
+ * on fail. The aggregator `runAllInvariants(ctx)` runs all of them
+ * sequentially (parallel is a future polish if test wall-time
+ * becomes a bottleneck) and returns a structured summary.
+ *
+ * Slice 4d-scenarios (this slice) ships the scaffold + 2 starter
+ * invariants:
+ *   - apiHealth (single-layer: api itself is up)
+ *   - apiCanReachRegistry (cross-layer: api ↔ registry indexer)
+ *
+ * Future slices add more layers per PROGRESS.md's "Cross-layer
+ * invariants" + "Economic invariants (always-on)" tables:
+ *   - apiCanReachCandles (api ↔ candles indexer)
+ *   - rateSanity (sDAI rate ≥ 1, monotonically increasing per RPC)
+ *   - probabilityBounds (price ∈ [0, 1] for PREDICTION pools)
+ *   - candlesAggregation (candle aggregates match raw swaps in indexer)
+ *   - chartShape (api /v2/.../chart consistent with indexer raw)
+ *   - conservation (∑(YES + NO conditional tokens) = ∑(sDAI deposited))
+ */
+
+const PROBE_QUERY = '{ __typename }';
+
+// Default request timeout — most checks are sub-second over compose's
+// internal network. Slow checks (e.g., chain reorg verification) get
+// per-invariant overrides in their `check` body.
+const DEFAULT_TIMEOUT_MS = 5_000;
+
+// sDAI on Gnosis (chain 100). Source: src/services/rate-provider.js's
+// CHAIN_CONFIG[100].defaultRateProvider. The harness anvil fork
+// preserves mainnet contract state, so the same address works locally.
+const SDAI_GNOSIS_ADDRESS = '0x89C80A4540A00b5270347E02e2E144c71da2EceD';
+
+// keccak256("getRate()")[0:4] — the ERC-4626 rate-provider standard
+// selector. Same constant appears in src/services/rate-provider.js.
+const GET_RATE_SELECTOR = '0x679aefce';
+
+// 1e18 as a BigInt — the lower bound for a sane sDAI rate. Below this,
+// either the contract is broken, the fork is corrupt, or someone's
+// reading a wrong contract's state.
+const ONE_E18 = 10n ** 18n;
+
+async function rpcRequest(rpcUrl, method, params, timeoutMs = DEFAULT_TIMEOUT_MS) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+        const r = await fetch(rpcUrl, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+            signal: ctrl.signal,
+        });
+        if (!r.ok) throw new Error(`${rpcUrl} → HTTP ${r.status}`);
+        const j = await r.json();
+        if (j.error) throw new Error(`RPC error: ${JSON.stringify(j.error)}`);
+        return j.result;
+    } finally {
+        clearTimeout(t);
+    }
+}
+
+async function ethCall(rpcUrl, to, data, timeoutMs = DEFAULT_TIMEOUT_MS) {
+    return rpcRequest(rpcUrl, 'eth_call', [{ to, data }, 'latest'], timeoutMs);
+}
+
+async function fetchJson(url, init = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+        const r = await fetch(url, { ...init, signal: ctrl.signal });
+        if (!r.ok) throw new Error(`${url} → HTTP ${r.status}`);
+        return await r.json();
+    } finally {
+        clearTimeout(t);
+    }
+}
+
+export const INVARIANTS = [
+    {
+        name: 'apiHealth',
+        description: 'api /health returns 200',
+        layer: 'api',
+        check: async (ctx) => {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/health`, { signal: ctrl.signal });
+                if (!r.ok) throw new Error(`/health → HTTP ${r.status}`);
+                return { ok: true, detail: `200 from ${ctx.apiUrl}/health` };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
+        name: 'apiHealthBodyShape',
+        description: 'api /health body is JSON {status: "ok", timestamp: <ISO 8601>} (catches refactor that drops fields, renames status, or changes timestamp format that ops dashboards parse)',
+        layer: 'api',
+        check: async (ctx) => {
+            // STRENGTHENS apiHealth (status-code-only). Production
+            // /health (src/index.js line 54) emits:
+            //   { status: 'ok', timestamp: new Date().toISOString() }
+            //
+            // Both fields matter to ops:
+            //   * status: 'ok' is the load-balancer's "alive" marker.
+            //     A regression that returns 'OK', 'healthy', or
+            //     anything else silently disables LB health checks
+            //     that string-match.
+            //   * timestamp: ops dashboards parse this to compute
+            //     "last-known-fresh" age. Format change (ISO 8601 →
+            //     unix epoch, missing field, malformed) silently
+            //     breaks the dashboard.
+            //
+            // Bug shapes caught (NOT caught by apiHealth):
+            //   * Refactor returns just `'ok'` (string body, not JSON)
+            //   * status field renamed to 'state'
+            //   * status value changed ('healthy' instead of 'ok')
+            //   * timestamp dropped entirely
+            //   * timestamp emitted as Unix epoch number instead of
+            //     ISO 8601 string
+            //   * timestamp is a string but malformed (e.g.,
+            //     '2024-13-45T99:99:99Z')
+            //
+            // ISO 8601 validation: we use Date.parse() — robust enough
+            // to accept the canonical `new Date().toISOString()` format
+            // and reject typical malformed inputs. Stricter regex would
+            // be brittle (variant ISO formats are valid).
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/health`, { signal: ctrl.signal });
+                if (!r.ok) throw new Error(`/health → HTTP ${r.status} (apiHealth's domain)`);
+                const ct = r.headers.get('content-type') || '';
+                if (!ct.includes('json')) {
+                    throw new Error(`expected JSON content-type, got "${ct}" (refactor returning string body?)`);
+                }
+                let body;
+                try {
+                    body = await r.json();
+                } catch (e) {
+                    throw new Error(`response not parseable as JSON: ${e?.message || e}`);
+                }
+                if (body?.status !== 'ok') {
+                    throw new Error(`expected status="ok", got status=${JSON.stringify(body?.status)} (LB string-match health checks will fail)`);
+                }
+                if (typeof body.timestamp !== 'string') {
+                    throw new Error(`expected timestamp string, got ${typeof body.timestamp} (${JSON.stringify(body.timestamp)?.slice(0, 60)}) — ops dashboards parsing 'last-fresh' age silently break`);
+                }
+                const parsed = Date.parse(body.timestamp);
+                if (!Number.isFinite(parsed)) {
+                    throw new Error(`timestamp ${JSON.stringify(body.timestamp)} not parseable as a date (Date.parse → NaN; expected ISO 8601 like "2024-01-15T12:34:56.789Z")`);
+                }
+                return { ok: true, detail: `status=ok, timestamp=${body.timestamp}` };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
+        name: 'apiWarmer',
+        description: 'api /warmer returns 200 + JSON (warmer-status endpoint reachable)',
+        layer: 'api',
+        check: async (ctx) => {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/warmer`, { signal: ctrl.signal });
+                if (!r.ok) throw new Error(`/warmer → HTTP ${r.status}`);
+                const ct = r.headers.get('content-type') || '';
+                if (!ct.includes('json')) {
+                    throw new Error(`/warmer returned non-JSON content-type: ${ct}`);
+                }
+                // Just verify the body parses as JSON; getWarmerStatus()
+                // can return any shape and we don't want to over-couple.
+                // (apiWarmerBodyShape — sister invariant — does the
+                // shape validation; this one stays cheap.)
+                await r.json();
+                return { ok: true, detail: '200 + JSON body from /warmer' };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
+        name: 'apiWarmerBodyShape',
+        description: 'api /warmer body conforms to getWarmerStatus() shape: {active, maxEntries, refreshIntervalSec, retentionDays} are non-negative finite numbers + entries is array (catches refactor that drops fields, renames, or changes numeric types to strings)',
+        layer: 'api',
+        check: async (ctx) => {
+            // Sister to apiHealthBodyShape (just shipped). Same
+            // pattern: status-code-only sister + body-shape probe.
+            // STRENGTHENS apiWarmer (which only checks 200 + JSON
+            // parse) into a body validation. Production /warmer
+            // (src/index.js line 59 → src/utils/warmer.js
+            // getWarmerStatus()) emits:
+            //   {
+            //     active: warmList.size,                    // number
+            //     maxEntries: WARMER_MAX_ENTRIES,           // number
+            //     refreshIntervalSec: WARMER_INTERVAL_SEC,  // number
+            //     retentionDays: WARMER_RETENTION_DAYS,     // number
+            //     entries: [...]                            // array
+            //   }
+            //
+            // Why each field matters:
+            //   * active — ops dashboards plot this as a gauge
+            //   * maxEntries — capacity-planning signal (shows
+            //     when warmer hit its cap)
+            //   * refreshIntervalSec — config-drift detection
+            //     (regression that changed a constant without
+            //     updating dashboards)
+            //   * retentionDays — same
+            //   * entries — array contract; consumers iterate it
+            //     and crash on non-array (e.g., null when warmer
+            //     uninitialized)
+            //
+            // Bug shapes caught (NOT caught by apiWarmer):
+            //   * Refactor renames any of the four numeric fields
+            //     (e.g., active → activeCount)
+            //   * Numeric field emitted as string ('5' instead
+            //     of 5) — silent for consumers that JS-coerce,
+            //     breaks consumers using strict typeof checks
+            //   * entries field changed to non-array (e.g., object
+            //     keyed by id) — consumers iterating with .map()
+            //     crash with "is not a function"
+            //   * Body wrapped in a `data` field by a middleware
+            //     refactor (response.json({data: ...}) instead of
+            //     response.json(...))
+            //
+            // active === 0 is allowed (warmer might have no entries
+            // yet); only NEGATIVE / non-finite values fail. maxEntries
+            // / refreshIntervalSec / retentionDays MUST be > 0
+            // (config sentinels — 0 means "disabled", which is a
+            // configuration regression).
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/warmer`, { signal: ctrl.signal });
+                if (!r.ok) throw new Error(`/warmer → HTTP ${r.status} (apiWarmer's domain)`);
+                const ct = r.headers.get('content-type') || '';
+                if (!ct.includes('json')) {
+                    throw new Error(`/warmer non-JSON content-type "${ct}" (apiWarmer's domain)`);
+                }
+                let body;
+                try {
+                    body = await r.json();
+                } catch (e) {
+                    throw new Error(`/warmer body not parseable as JSON: ${e?.message || e}`);
+                }
+                if (!body || typeof body !== 'object') {
+                    throw new Error(`/warmer body not an object (got ${typeof body}); middleware regression?`);
+                }
+                if (typeof body.active !== 'number' || !Number.isFinite(body.active) || body.active < 0) {
+                    throw new Error(`active expected non-negative finite number, got ${typeof body.active} (${JSON.stringify(body.active)?.slice(0, 40)}) — ops gauge dashboards break`);
+                }
+                for (const field of ['maxEntries', 'refreshIntervalSec', 'retentionDays']) {
+                    const val = body[field];
+                    if (typeof val !== 'number' || !Number.isFinite(val)) {
+                        throw new Error(`${field} expected finite number, got ${typeof val} (${JSON.stringify(val)?.slice(0, 40)}) — config-drift detection broken`);
+                    }
+                    if (val <= 0) {
+                        throw new Error(`${field} = ${val} (≤ 0; config sentinel — value of 0 means "disabled" which is a configuration regression)`);
+                    }
+                }
+                if (!Array.isArray(body.entries)) {
+                    throw new Error(`entries expected array, got ${typeof body.entries} (${JSON.stringify(body.entries)?.slice(0, 40)}) — consumers iterating with .map() crash with "is not a function"`);
+                }
+                return { ok: true, detail: `active=${body.active}, maxEntries=${body.maxEntries}, refreshIntervalSec=${body.refreshIntervalSec}, retentionDays=${body.retentionDays}, entries.length=${body.entries.length}` };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
+        name: 'apiSpotCandlesValidates',
+        description: 'api /api/v1/spot-candles (no ticker) returns 400 with JSON error (input validation alive)',
+        layer: 'api',
+        check: async (ctx) => {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/api/v1/spot-candles`, { signal: ctrl.signal });
+                // Per src/index.js:
+                //   if (!ticker) return res.status(400).json({ error: 'ticker required' });
+                // Catches regressions where validation is removed and the
+                // endpoint either crashes (5xx), tries to fetch undefined
+                // ticker (200 with garbage), or 404s (route disconnected).
+                if (r.status !== 400) {
+                    throw new Error(`/api/v1/spot-candles without ticker should 400, got ${r.status}`);
+                }
+                const j = await r.json();
+                if (!j?.error) {
+                    throw new Error(`expected {error:...} body, got ${JSON.stringify(j)}`);
+                }
+                return { ok: true, detail: `400 + ${JSON.stringify(j.error)}` };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
+        name: 'apiSpotCandlesHappyPath',
+        description: 'api /api/v1/spot-candles?ticker=… returns 200 + JSON with spotCandles array (data-plane reachable through validation → fetchSpotCandles → response transform)',
+        layer: 'api',
+        check: async (ctx) => {
+            // Complement to apiSpotCandlesValidates (which only
+            // exercises the 400-error path on missing ticker).
+            // This walks the api's full data plane:
+            //   request → validation → fetchSpotCandles call →
+            //   spotCache lookup → response transform → JSON write
+            //
+            // Bug shapes caught (distinct from the 400-path probe):
+            //   * Validation passes but downstream call throws and
+            //     the catch-all returns 500 (api still serves but
+            //     the data plane is broken)
+            //   * Response transform regression that drops the
+            //     `spotCandles` field (renamed, refactored, or
+            //     accidentally returns the raw spotData object
+            //     instead of the wrapped shape)
+            //   * Status code regression — endpoint silently turns
+            //     into 204/202/etc.
+            //
+            // Vacuous when the upstream returns no data: an empty
+            // array is the documented happy-path empty case
+            // (see src/index.js: filter(c => c.time >= min) yields
+            // [] when no candles match) — still 200 + JSON, just
+            // with empty array. So an empty array is PASSING, not
+            // vacuous.
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/api/v1/spot-candles?ticker=harness-probe-ticker`, { signal: ctrl.signal });
+                if (r.status !== 200) {
+                    throw new Error(`expected 200, got ${r.status} (data plane broken: validation passed but downstream errored)`);
+                }
+                const ct = r.headers.get('content-type') || '';
+                if (!ct.includes('json')) {
+                    throw new Error(`expected JSON content-type, got "${ct}"`);
+                }
+                const j = await r.json();
+                if (!Array.isArray(j?.spotCandles)) {
+                    throw new Error(`response missing spotCandles array (transform regression?); body=${JSON.stringify(j)?.slice(0, 100)}`);
+                }
+                return { ok: true, detail: `200 + spotCandles array of length ${j.spotCandles.length}` };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
+        name: 'apiMarketEventsShape',
+        description: 'api /api/v1/market-events/proposals/:id/prices returns 200 + JSON with conditional_yes/no/spot/timeline structure (closes the 3-of-3 documented api endpoint coverage)',
+        layer: 'api',
+        check: async (ctx) => {
+            // Third (and final) of the three documented /api/v*
+            // endpoint shape probes. Pairs with apiSpotCandlesHappyPath
+            // (lightest path, candles only) and apiUnifiedChartShape
+            // (heaviest path, all 3 layers). market-events sits in
+            // the middle: registry resolve + pool fetch + currency
+            // rate, but no candle aggregation.
+            //
+            // The minimal contract this asserts (per a code survey
+            // of consumers in interface/):
+            //   * status: 'ok'
+            //   * conditional_yes: { price_usd, pool_id }
+            //   * conditional_no: { price_usd, pool_id }
+            //   * spot: { price_usd }
+            //   * timeline: { start, end }
+            // Other top-level fields (event_id, company_tokens,
+            // volume) are not part of the minimal contract — drop
+            // them and the consumer still works.
+            //
+            // Bug shapes caught:
+            //   * Pool resolve returned null AND error path emits
+            //     wrong shape (missing conditional_* keys —
+            //     interface dashboard crashes destructuring)
+            //   * status field renamed (the 'ok' literal used to
+            //     differ from other endpoints; a regression that
+            //     unifies could remove or rename it)
+            //   * timeline window collapsed (start === end means
+            //     the chart range is degenerate — UI shows blank)
+            //   * Status code regression
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/api/v1/market-events/proposals/harness-probe-proposal/prices`, { signal: ctrl.signal });
+                if (r.status !== 200) {
+                    throw new Error(`expected 200, got ${r.status} (data plane broken)`);
+                }
+                const ct = r.headers.get('content-type') || '';
+                if (!ct.includes('json')) {
+                    throw new Error(`expected JSON content-type, got "${ct}"`);
+                }
+                const j = await r.json();
+                if (j?.status !== 'ok') {
+                    throw new Error(`response.status expected 'ok', got ${JSON.stringify(j?.status)} (consumers branch on this literal)`);
+                }
+                for (const side of ['conditional_yes', 'conditional_no']) {
+                    if (!j[side] || typeof j[side] !== 'object') {
+                        throw new Error(`${side} missing or not object (UI dashboard crashes destructuring)`);
+                    }
+                    if (typeof j[side].price_usd !== 'number') {
+                        throw new Error(`${side}.price_usd missing or not a number (was ${typeof j[side].price_usd})`);
+                    }
+                    if (typeof j[side].pool_id !== 'string') {
+                        throw new Error(`${side}.pool_id missing or not a string`);
+                    }
+                }
+                if (!j.spot || typeof j.spot.price_usd !== 'number') {
+                    throw new Error(`spot.price_usd missing or not a number`);
+                }
+                if (!j.timeline || typeof j.timeline.start !== 'number' || typeof j.timeline.end !== 'number') {
+                    throw new Error(`timeline.{start,end} missing or not numbers (chart range broken)`);
+                }
+                return { ok: true, detail: `200 + status=ok, conditional_{yes,no}+spot+timeline shape valid (yes=$${j.conditional_yes.price_usd}, no=$${j.conditional_no.price_usd})` };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
+        name: 'apiUnifiedChartShape',
+        description: 'api /api/v2/proposals/:id/chart returns 200 + JSON with candles.{yes,no,spot} all arrays (data-plane reachable through proposal resolve → pool fetch → candle aggregation → response transform)',
+        layer: 'api',
+        check: async (ctx) => {
+            // Sister of apiSpotCandlesHappyPath but for the unified-
+            // chart endpoint, which is a much heavier data path:
+            //   request → proposal resolve (registry adapter) →
+            //   pool fetch (candles adapter) → currency rate lookup
+            //   → parallel YES/NO/SPOT candle fetch → response
+            //   transform with applyRateToCandles → JSON write
+            //
+            // Because the path touches the registry indexer AND the
+            // candles indexer AND the chain layer (rate provider),
+            // a regression anywhere in that chain bubbles up here.
+            // The shape check is conservative — `candles.{yes,no,spot}`
+            // are the only fields the futarchy.fi UI actually
+            // depends on (per a survey of consumers), so a regression
+            // that drops one of those arrays is a hard UI break.
+            //
+            // Bug shapes caught:
+            //   * Proposal resolve returns null pools (yes/no
+            //     missing from candles object — frontend crashes
+            //     destructuring)
+            //   * applyRateToCandles regression that returns the
+            //     wrong shape (e.g., a Promise instead of an array)
+            //   * Refactor that nests candles deeper or renames
+            //     spot to spotCandles (the field name diverged
+            //     once already — see /api/v1/spot-candles which
+            //     uses spotCandles — easy to confuse)
+            //   * Status code regression (endpoint silently returns
+            //     204/202)
+            //   * Cache layer returns stale/wrong-shape object
+            //     (X-Cache: HIT path differs from MISS path)
+            //
+            // First step toward the documented chartShape invariant
+            // (api unified-chart vs indexer raw match) — that
+            // future invariant will reuse the same shape probe and
+            // additionally cross-check candle counts against the
+            // direct candles indexer.
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/api/v2/proposals/harness-probe-proposal/chart`, { signal: ctrl.signal });
+                if (r.status !== 200) {
+                    throw new Error(`expected 200, got ${r.status} (data plane broken: proposal resolve / pool fetch / response transform errored)`);
+                }
+                const ct = r.headers.get('content-type') || '';
+                if (!ct.includes('json')) {
+                    throw new Error(`expected JSON content-type, got "${ct}"`);
+                }
+                const j = await r.json();
+                if (!j?.candles || typeof j.candles !== 'object') {
+                    throw new Error(`response missing candles object (transform regression?); body=${JSON.stringify(j)?.slice(0, 100)}`);
+                }
+                for (const side of ['yes', 'no', 'spot']) {
+                    if (!Array.isArray(j.candles[side])) {
+                        throw new Error(`candles.${side} missing or not array (was ${typeof j.candles[side]}); UI consumers crash without this`);
+                    }
+                }
+                const counts = `yes=${j.candles.yes.length}, no=${j.candles.no.length}, spot=${j.candles.spot.length}`;
+                return { ok: true, detail: `200 + candles.{yes,no,spot} all arrays (${counts})` };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
+        name: 'chartCandleCountsBoundedByDirect',
+        description: 'sum of api unified-chart candles.{yes,no}.length ≤ direct candles indexer count (api filters by proposal pools so result is a strict subset)',
+        layer: 'api↔candles',
+        check: async (ctx) => {
+            // First cross-layer COUNT-CONSISTENCY check for the
+            // unified-chart endpoint. Mirrors apiCandlesMatchesDirect
+            // (which compares api passthrough vs direct on
+            // /candles/graphql) but for the higher-level chart
+            // endpoint, which performs FILTERING (only candles
+            // belonging to the proposal's YES + NO pools).
+            //
+            // The invariant: api candles ⊆ direct candles, so
+            // |api| ≤ |direct|. Catches:
+            //   * api fabricates extra candles (impossible — but
+            //     a transform regression could duplicate or
+            //     synthesize rows)
+            //   * Filter regression — api stops filtering and
+            //     returns ALL candles in the indexer instead of
+            //     just the proposal's. Result count blows up.
+            //   * Cache layer returns wrong dataset (e.g., cache
+            //     key mismatch returns a different proposal's
+            //     candles, possibly more than current direct
+            //     count if the cached proposal had more pools)
+            //
+            // Note: SPOT candles come from a different source
+            // (CoinGecko or spot-candles indexer), NOT the candles
+            // indexer — so spot is excluded from the comparison.
+            //
+            // Vacuous when direct returns no candles AND api
+            // returns no candles — nothing to compare. If api > 0
+            // but direct = 0, that's a real failure (api can't
+            // have candles the indexer doesn't).
+            const directBody = JSON.stringify({
+                query: '{ candles(first: 100) { id } }',
+            });
+            const [chartResp, directResp] = await Promise.all([
+                fetch(`${ctx.apiUrl}/api/v2/proposals/harness-probe-proposal/chart`),
+                fetchJson(ctx.candlesUrl, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: directBody,
+                }),
+            ]);
+            if (chartResp.status !== 200) {
+                throw new Error(`chart endpoint returned ${chartResp.status} (data plane down — apiUnifiedChartShape's domain)`);
+            }
+            const chart = await chartResp.json();
+            const apiYes = Array.isArray(chart?.candles?.yes) ? chart.candles.yes.length : null;
+            const apiNo = Array.isArray(chart?.candles?.no) ? chart.candles.no.length : null;
+            if (apiYes === null || apiNo === null) {
+                throw new Error(`chart response missing candles.{yes,no} arrays (apiUnifiedChartShape's domain)`);
+            }
+            const directCandles = directResp?.data?.candles;
+            if (!Array.isArray(directCandles)) {
+                throw new Error(`direct candles response shape: ${JSON.stringify(directResp)?.slice(0, 80)}`);
+            }
+            const apiTotal = apiYes + apiNo;
+            const directTotal = directCandles.length;
+            if (apiTotal > directTotal) {
+                throw new Error(`api candle count (yes=${apiYes} + no=${apiNo} = ${apiTotal}) > direct count (${directTotal}) — api can't return more than the indexer has (filter regression OR transform fabrication)`);
+            }
+            if (apiTotal === 0 && directTotal === 0) {
+                return { ok: true, detail: 'both api (yes+no) and direct return 0 candles (vacuous)' };
+            }
+            return { ok: true, detail: `api yes=${apiYes} + no=${apiNo} = ${apiTotal} ≤ direct ${directTotal} (subset relationship intact)` };
+        },
+    },
+    {
+        name: 'chartCandlesAreSubsetOfDirect',
+        description: 'every time value in api unified-chart candles.{yes,no} appears in the direct candles indexer time set (catches transform fabricating timestamps the indexer never emitted)',
+        layer: 'api↔candles',
+        check: async (ctx) => {
+            // STRENGTHENS chartCandleCountsBoundedByDirect (count
+            // bound) into a per-row TIME-PAIR check. Every candle
+            // time the api returns must correspond to a real candle
+            // the indexer actually emitted; otherwise the api is
+            // fabricating data (or mixing in another proposal's
+            // periods).
+            //
+            // Why time, not id: the unified-chart endpoint applies
+            // a presentation transform (applyRateToCandles) that
+            // reshapes raw indexer candles into {time, close, ...} —
+            // the original ID is not exposed in the response. Both
+            // layers agree on `time` (period-start unix timestamp),
+            // so we use that as the matching key.
+            //
+            // Vacuous when api returns 0 candles. If api returns
+            // rows but direct returns 0, the count check fires
+            // first; if both return 0, the count check returns
+            // vacuous and so does this one.
+            //
+            // Bug shapes caught (NOT caught by the count bound):
+            //   * Transform fills gaps with synthetic period-start
+            //     timestamps — emits a candle at t=T even when the
+            //     indexer skipped that period (no swaps in window)
+            //   * Cache layer returns a different proposal's candles
+            //     where count happens to be ≤ direct but specific
+            //     times are wrong (cache key mismatch)
+            //   * Time-bucket calculation regression — every api
+            //     time off by one second / one hour from a period-
+            //     boundary off-by-one
+            //   * SPOT side bleeds into yes/no — spot uses different
+            //     time alignment so its times wouldn't match the
+            //     candles indexer's set
+            const directBody = JSON.stringify({
+                query: '{ candles(first: 100) { time } }',
+            });
+            const [chartResp, directResp] = await Promise.all([
+                fetch(`${ctx.apiUrl}/api/v2/proposals/harness-probe-proposal/chart`),
+                fetchJson(ctx.candlesUrl, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: directBody,
+                }),
+            ]);
+            if (chartResp.status !== 200) {
+                throw new Error(`chart endpoint returned ${chartResp.status} (data plane down — apiUnifiedChartShape's domain)`);
+            }
+            const chart = await chartResp.json();
+            const apiYes = Array.isArray(chart?.candles?.yes) ? chart.candles.yes : null;
+            const apiNo = Array.isArray(chart?.candles?.no) ? chart.candles.no : null;
+            if (apiYes === null || apiNo === null) {
+                throw new Error(`chart response missing candles.{yes,no} arrays (apiUnifiedChartShape's domain)`);
+            }
+            const directCandles = directResp?.data?.candles;
+            if (!Array.isArray(directCandles)) {
+                throw new Error(`direct candles response shape: ${JSON.stringify(directResp)?.slice(0, 80)}`);
+            }
+            const apiTotal = apiYes.length + apiNo.length;
+            if (apiTotal === 0) {
+                return { ok: true, detail: 'api returned 0 candles (vacuous — nothing to match against direct)' };
+            }
+            // Build the direct time-set. Use Number() to normalize
+            // string/number variants (some indexer schemas return
+            // BigInt as string).
+            const directTimes = new Set();
+            for (const c of directCandles) {
+                const n = Number(c?.time);
+                if (Number.isFinite(n)) directTimes.add(n);
+            }
+            const checkSide = (rows, side) => {
+                for (let i = 0; i < rows.length; i++) {
+                    const t = Number(rows[i]?.time);
+                    if (!Number.isFinite(t)) {
+                        throw new Error(`api candles.${side}[${i}].time not finite (was ${JSON.stringify(rows[i]?.time)}) — transform regression`);
+                    }
+                    if (!directTimes.has(t)) {
+                        throw new Error(`api candles.${side}[${i}].time=${t} not in direct candles time set (size=${directTimes.size}) — api fabricated a timestamp the indexer never emitted (transform regression OR cache key mismatch OR period-boundary off-by-one)`);
+                    }
+                }
+            };
+            checkSide(apiYes, 'yes');
+            checkSide(apiNo, 'no');
+            return { ok: true, detail: `${apiTotal} api candles (yes=${apiYes.length} + no=${apiNo.length}) all match direct times (direct set size ${directTimes.size})` };
+        },
+    },
+    {
+        name: 'apiUnifiedChartHasObservabilityHeaders',
+        description: 'api /api/v2/proposals/:id/chart sets X-Cache (HIT|MISS) + X-Response-Time headers (catches ops-observability regressions invisible to body checks)',
+        layer: 'api',
+        check: async (ctx) => {
+            // First response-HEADER validation in the catalog. All
+            // existing api invariants probe the body (status code +
+            // JSON shape). This one checks that the unified-chart
+            // endpoint emits the observability headers ops dashboards
+            // depend on:
+            //   * X-Cache: 'HIT' or 'MISS' — set explicitly on both
+            //     code paths (line 76 cached-return + line 280
+            //     fresh-build in src/routes/unified-chart.js)
+            //   * X-Response-Time: 'Nms' — millisecond timing
+            //
+            // Bug shapes caught:
+            //   * Refactor that introduces a third cache state
+            //     ('STALE', 'BYPASS') without telling ops
+            //   * Removal of the cache layer entirely (headers gone)
+            //   * Header value format change (e.g., 'X-Response-Time'
+            //     becomes a number instead of 'Nms' string)
+            //   * Response-Time emitted as 'NaN ms' or '-1ms' from
+            //     a timing bug
+            //
+            // X-Cache-TTL not asserted here — split into its own
+            // invariant (apiUnifiedChartXCacheTtlPresent) for
+            // single-responsibility per probe. (Initial reading of
+            // the source suggested TTL was HIT-path-only; closer
+            // inspection of unified-chart.js shows BOTH paths emit
+            // it, so the dedicated invariant asserts unconditionally
+            // rather than as a conditional WHEN-HIT check.)
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/api/v2/proposals/harness-probe-proposal/chart`, { signal: ctrl.signal });
+                if (r.status !== 200) {
+                    throw new Error(`expected 200, got ${r.status} (apiUnifiedChartShape's domain)`);
+                }
+                const xCache = r.headers.get('x-cache');
+                if (xCache !== 'HIT' && xCache !== 'MISS') {
+                    throw new Error(`X-Cache header expected 'HIT' or 'MISS', got ${JSON.stringify(xCache)} (cache layer instrumentation broken or removed)`);
+                }
+                const xResponseTime = r.headers.get('x-response-time');
+                if (typeof xResponseTime !== 'string' || !/^\d+ms$/.test(xResponseTime)) {
+                    throw new Error(`X-Response-Time expected /^\\d+ms$/ format, got ${JSON.stringify(xResponseTime)} (timing-instrumentation regression)`);
+                }
+                return { ok: true, detail: `X-Cache=${xCache}, X-Response-Time=${xResponseTime}` };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
+        name: 'apiUnifiedChartXCacheTtlPresent',
+        description: 'api /api/v2/proposals/:id/chart sets X-Cache-TTL to a positive integer string on BOTH HIT and MISS paths (catches refactor that drops TTL from one path or emits a non-numeric value)',
+        layer: 'api',
+        check: async (ctx) => {
+            // SISTER probe to apiUnifiedChartHasObservabilityHeaders.
+            // That one covers X-Cache + X-Response-Time; this one
+            // covers X-Cache-TTL (split into a separate invariant for
+            // single-responsibility per probe).
+            //
+            // Both HIT and MISS paths in src/routes/unified-chart.js
+            // set X-Cache-TTL to `String(RESPONSE_TTL_SEC)` — line 74
+            // (HIT path) and line 278 (MISS path). Neither is
+            // optional; both must always emit it. So the assertion
+            // is unconditional, NOT a conditional-on-HIT check.
+            //
+            // Bug shapes caught (NOT caught by the X-Cache + X-Response-Time
+            // probe):
+            //   * Refactor drops TTL from one path but not the other
+            //     (HIT-path-only TTL — common pattern but BREAKS ops
+            //     dashboards that filter on cache age regardless of
+            //     hit/miss)
+            //   * TTL value emitted as 'NaN' or '-1' from a timing
+            //     bug or env-var fallback gone wrong
+            //   * TTL value gains a unit suffix accidentally
+            //     ('300s' instead of '300') — breaks any consumer
+            //     that does `parseInt(value)` (returns 300 by
+            //     coincidence, but a future refactor to '5m' would
+            //     return 5)
+            //   * TTL header dropped entirely (refactor removed
+            //     `res.set('X-Cache-TTL', ...)` from both paths)
+            //
+            // Format: positive integer string, no unit suffix. The
+            // src emits `String(RESPONSE_TTL_SEC)` — a bare integer.
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+            try {
+                const r = await fetch(`${ctx.apiUrl}/api/v2/proposals/harness-probe-proposal/chart`, { signal: ctrl.signal });
+                if (r.status !== 200) {
+                    throw new Error(`expected 200, got ${r.status} (apiUnifiedChartShape's domain)`);
+                }
+                const ttl = r.headers.get('x-cache-ttl');
+                if (ttl === null || ttl === undefined) {
+                    throw new Error(`X-Cache-TTL header missing (cache-TTL instrumentation removed from this code path — ops dashboards that compute cache age will silently break)`);
+                }
+                if (!/^\d+$/.test(ttl)) {
+                    throw new Error(`X-Cache-TTL expected positive integer string (no unit suffix), got ${JSON.stringify(ttl)} (consumers that parseInt() will get a wrong value or NaN)`);
+                }
+                const ttlNum = parseInt(ttl, 10);
+                if (ttlNum <= 0) {
+                    throw new Error(`X-Cache-TTL = ${ttlNum} (≤ 0 — TTL must be a positive duration; values of 0 mean "never cache" which contradicts the X-Cache header itself)`);
+                }
+                return { ok: true, detail: `X-Cache-TTL=${ttl}s` };
+            } finally {
+                clearTimeout(t);
+            }
+        },
+    },
+    {
+        name: 'apiCanReachRegistry',
+        description: 'api /registry/graphql proxies the __typename probe to registry checkpoint',
+        layer: 'api↔registry',
+        check: async (ctx) => {
+            const j = await fetchJson(`${ctx.apiUrl}/registry/graphql`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: PROBE_QUERY }),
+            });
+            if (j?.data?.__typename !== 'Query') {
+                throw new Error(`unexpected __typename response: ${JSON.stringify(j)}`);
+            }
+            return { ok: true, detail: 'registry returned __typename=Query via api passthrough' };
+        },
+    },
+    {
+        name: 'apiCandlesGraphqlForwardsIntrospection',
+        description: 'api /candles/graphql forwards __schema introspection queries (sister to apiRegistryGraphqlForwardsIntrospection — completes the introspection-passthrough probe pair across both indexers)',
+        layer: 'api↔candles',
+        check: async (ctx) => {
+            // Sister to apiRegistryGraphqlForwardsIntrospection (just
+            // shipped). Same pattern, candles side. Together with the
+            // two DIRECT-side introspection probes
+            // (registryIndexerSchemaHasRequiredTypes,
+            // candlesIndexerSchemaHasRequiredTypes), this completes
+            // a 2×2 introspection coverage MATRIX:
+            //
+            //                  | Direct-side | API-side |
+            //   ---------------+-------------+----------+
+            //   registry       |      ✓      |    ✓     |
+            //   candles        |      ✓      |    ✓     |  (this slice)
+            //
+            // For ANY introspection failure, two probes light up
+            // and the diagnostic combines into a precise root-cause
+            // statement (api-vs-indexer × registry-vs-candles).
+            //
+            // Required types: Pool, Swap, Candle (the three entities
+            // the harness queries from the candles indexer). Same as
+            // the DIRECT-side sister.
+            //
+            // Bug class (NOT caught by the DIRECT sister):
+            //   * api proxy on /candles/graphql strips __schema
+            //     (production GraphQL gateways often disable
+            //     introspection at the api layer)
+            //   * api on the candles route is misconfigured
+            //     differently from the api on the registry route
+            //     (separate proxy configs — possible to have one
+            //     stripping introspection and the other forwarding;
+            //     pairing the two api-layer probes catches per-route
+            //     proxy config drift)
+            const REQUIRED = ['Pool', 'Swap', 'Candle'];
+            const j = await fetchJson(`${ctx.apiUrl}/candles/graphql`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ __schema { types { name } } }',
+                }),
+            });
+            const types = j?.data?.__schema?.types;
+            if (!Array.isArray(types)) {
+                throw new Error(`api /candles/graphql __schema.types not an array — proxy stripped introspection or returned a malformed response (got ${JSON.stringify(j)?.slice(0, 100)}); cross-check with candlesIndexerSchemaHasRequiredTypes (DIRECT) to determine if the cause is api or indexer`);
+            }
+            const present = new Set(types.map((t) => t?.name).filter(Boolean));
+            const missing = REQUIRED.filter((name) => !present.has(name));
+            if (missing.length > 0) {
+                throw new Error(`api passthrough returned __schema but missing required type(s): ${missing.join(', ')} — candles indexer schema regressed AND api still forwards introspection (cross-check with candlesIndexerSchemaHasRequiredTypes)`);
+            }
+            return { ok: true, detail: `api forwards __schema; types include ${REQUIRED.join(', ')} (out of ${present.size} total)` };
+        },
+    },
+    {
+        name: 'apiCanReachCandles',
+        description: 'api /candles/graphql proxies the __typename probe to candles checkpoint',
+        layer: 'api↔candles',
+        check: async (ctx) => {
+            // The candles endpoint goes through proxyCandlesQuery + the
+            // candles-adapter, which forwards to the upstream Checkpoint
+            // indexer. Bare `__typename` flows through cleanly because
+            // it doesn't trigger any of the adapter's schema-translation
+            // branches (those only kick in for Pool/Candle queries).
+            const j = await fetchJson(`${ctx.apiUrl}/candles/graphql`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: PROBE_QUERY }),
+            });
+            if (j?.data?.__typename !== 'Query') {
+                throw new Error(`unexpected __typename response: ${JSON.stringify(j)}`);
+            }
+            return { ok: true, detail: 'candles returned __typename=Query via api passthrough' };
+        },
+    },
+    {
+        name: 'apiRegistryGraphqlForwardsIntrospection',
+        description: 'api /registry/graphql forwards __schema introspection queries (catches proxies that strip introspection at the api layer for security — silently breaks harness scenarios that depend on schema validation through api)',
+        layer: 'api↔registry',
+        check: async (ctx) => {
+            // Sister to registryIndexerSchemaHasRequiredTypes (DIRECT
+            // side, on orchestrator↔registry layer). This one checks
+            // the SAME __schema query through the API layer instead
+            // of direct, verifying the api proxy correctly forwards
+            // introspection queries to the upstream indexer.
+            //
+            // The bug class: many production GraphQL proxies (Apollo
+            // Gateway, Hasura, etc.) ship with introspection disabled
+            // by default at the proxy layer for security — even when
+            // the upstream indexer supports it. If a deploy
+            // accidentally turns on that toggle, harness scenarios
+            // that introspect through the api layer silently break,
+            // BUT registryIndexerSchemaHasRequiredTypes (DIRECT)
+            // still passes — making the actual cause hard to find
+            // without this distinct probe.
+            //
+            // Why a separate api-layer probe (vs. only the direct
+            // sister):
+            //   * Distinct failure mode — the api proxy can be
+            //     misconfigured independently of the indexer
+            //   * Diagnostic precision — failure says "the api
+            //     stripped introspection" instead of "the indexer
+            //     schema is broken"
+            //   * Coverage symmetry — apiCandlesMatchesDirect /
+            //     apiRegistryMatchesDirect already cover data
+            //     passthrough; this covers introspection passthrough
+            //
+            // Vacuous when api passthrough returns null __schema —
+            // could be EITHER api stripping or indexer not supporting
+            // introspection. The DIRECT sister probe distinguishes
+            // those two cases (it queries the indexer directly; if
+            // it ALSO returns null, the indexer is the cause; if it
+            // returns valid __schema but api passthrough doesn't,
+            // the api is stripping). For triage, both probes
+            // together pinpoint the layer.
+            const REQUIRED = ['ProposalEntity', 'Organization', 'Aggregator'];
+            const j = await fetchJson(`${ctx.apiUrl}/registry/graphql`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ __schema { types { name } } }',
+                }),
+            });
+            const types = j?.data?.__schema?.types;
+            if (!Array.isArray(types)) {
+                throw new Error(`api /registry/graphql __schema.types not an array — proxy stripped introspection or returned a malformed response (got ${JSON.stringify(j)?.slice(0, 100)}); cross-check with registryIndexerSchemaHasRequiredTypes to determine if the cause is api or indexer`);
+            }
+            const present = new Set(types.map((t) => t?.name).filter(Boolean));
+            const missing = REQUIRED.filter((name) => !present.has(name));
+            if (missing.length > 0) {
+                throw new Error(`api passthrough returned __schema but missing required type(s): ${missing.join(', ')} — registry indexer schema regressed AND api still forwards introspection (cross-check with registryIndexerSchemaHasRequiredTypes)`);
+            }
+            return { ok: true, detail: `api forwards __schema; types include ${REQUIRED.join(', ')} (out of ${present.size} total)` };
+        },
+    },
+    {
+        name: 'apiRegistryMatchesDirect',
+        description: 'registry entities returned via api passthrough match direct indexer (proposalEntities + organizations + aggregators all checked in one query)',
+        layer: 'api↔registry',
+        check: async (ctx) => {
+            // Mirror of apiCandlesMatchesDirect (previous slice) but
+            // for registry. Single query touches all three entity
+            // types so a per-entity drift (e.g., api caches
+            // proposalEntities but not organizations) lights up
+            // distinguishably from a wholesale-cache scenario.
+            //
+            // Bug shapes caught (in addition to the candles-side
+            // ones — caching drift, adapter rewriting, schema-
+            // translation): per-entity-type cache granularity
+            // mismatch. The api's GraphQL forward layer doesn't
+            // necessarily cache uniformly across entity types;
+            // a regression that introduces selective caching can
+            // make some entities stale while others stay fresh.
+            const query = JSON.stringify({
+                query: '{ proposalEntities(first: 5) { id } organizations(first: 5) { id } aggregators(first: 5) { id } }',
+            });
+            const fetchOpts = {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: query,
+            };
+            const [viaApi, viaDirect] = await Promise.all([
+                fetchJson(`${ctx.apiUrl}/registry/graphql`, fetchOpts),
+                fetchJson(ctx.registryUrl, fetchOpts),
+            ]);
+            const apiData = viaApi?.data;
+            const directData = viaDirect?.data;
+            if (!apiData || !directData) {
+                throw new Error(`response shape: api=${JSON.stringify(viaApi)?.slice(0, 80)}, direct=${JSON.stringify(viaDirect)?.slice(0, 80)}`);
+            }
+            const entities = ['proposalEntities', 'organizations', 'aggregators'];
+            const summary = [];
+            for (const ent of entities) {
+                const apiArr = apiData[ent];
+                const directArr = directData[ent];
+                if (!Array.isArray(apiArr) || !Array.isArray(directArr)) {
+                    throw new Error(`${ent}: shape mismatch (api=${typeof apiArr}, direct=${typeof directArr})`);
+                }
+                if (apiArr.length !== directArr.length) {
+                    throw new Error(`${ent}: length mismatch — api=${apiArr.length}, direct=${directArr.length} (per-entity cache drift or adapter dropping rows)`);
+                }
+                for (let i = 0; i < apiArr.length; i++) {
+                    if (apiArr[i].id !== directArr[i].id) {
+                        throw new Error(`${ent}[${i}].id: api=${apiArr[i].id} ≠ direct=${directArr[i].id} (api may be serving cached/translated rows for ${ent})`);
+                    }
+                }
+                summary.push(`${ent}=${apiArr.length}`);
+            }
+            return { ok: true, detail: `registry match: ${summary.join(', ')}` };
+        },
+    },
+    {
+        name: 'apiCandlesMatchesDirect',
+        description: 'latest Candle returned via api passthrough matches the one returned by direct indexer query (catches api caching drift, adapter rewriting, schema translation bugs)',
+        layer: 'api↔candles',
+        check: async (ctx) => {
+            // Issues the SAME GraphQL query against the api passthrough
+            // (/candles/graphql) AND the direct candles indexer
+            // endpoint, then compares the responses. Bug shapes caught:
+            //
+            //  * api-side caching gone stale (api serves an old
+            //    snapshot while direct shows fresh data)
+            //  * adapter transformation drops/rewrites fields (the
+            //    candles-adapter's schema-translation layer mutates
+            //    output unexpectedly)
+            //  * schema-mismatch between api's expectation of the
+            //    upstream schema and what the indexer actually emits
+            //
+            // This is the FIRST true api↔indexer match invariant in
+            // the catalog. Existing api↔* probes only assert "api
+            // can reach the indexer" (via __typename); existing
+            // candles* probes only assert "indexer has data". This
+            // probe asserts they AGREE, which is a strictly stronger
+            // check than either alone.
+            //
+            // Vacuous when both sides return zero candles (no data
+            // to compare). If one side has data and the other doesn't,
+            // that's a real divergence and fails.
+            const query = JSON.stringify({
+                query: '{ candles(first: 5, orderBy: time, orderDirection: desc) { id time } }',
+            });
+            const fetchOpts = {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: query,
+            };
+            const [viaApi, viaDirect] = await Promise.all([
+                fetchJson(`${ctx.apiUrl}/candles/graphql`, fetchOpts),
+                fetchJson(ctx.candlesUrl, fetchOpts),
+            ]);
+            const apiCandles = viaApi?.data?.candles;
+            const directCandles = viaDirect?.data?.candles;
+            if (!Array.isArray(apiCandles) || !Array.isArray(directCandles)) {
+                throw new Error(`response shape mismatch: api=${JSON.stringify(viaApi)?.slice(0, 80)}, direct=${JSON.stringify(viaDirect)?.slice(0, 80)}`);
+            }
+            if (apiCandles.length === 0 && directCandles.length === 0) {
+                return { ok: true, detail: 'both sides have 0 candles (vacuously matching)' };
+            }
+            if (apiCandles.length !== directCandles.length) {
+                throw new Error(`length mismatch: api returned ${apiCandles.length} candles, direct returned ${directCandles.length} (cache drift or pagination divergence)`);
+            }
+            for (let i = 0; i < apiCandles.length; i++) {
+                if (apiCandles[i].id !== directCandles[i].id) {
+                    throw new Error(`candles[${i}].id: api=${apiCandles[i].id} ≠ direct=${directCandles[i].id} (api may be serving cached/translated data inconsistent with indexer)`);
+                }
+                // Time field is the strongest match signal — ID match
+                // alone could miss a renamed-row scenario where the id
+                // happens to align by position.
+                if (Number(apiCandles[i].time) !== Number(directCandles[i].time)) {
+                    throw new Error(`candles[${i}].time: api=${apiCandles[i].time} ≠ direct=${directCandles[i].time} (id matches but time drifted — partial-cache or partial-rewrite bug)`);
+                }
+            }
+            return { ok: true, detail: `${apiCandles.length} candles match between api passthrough and direct indexer` };
+        },
+    },
+    {
+        name: 'proposalEntityOrganizationReferentialIntegrity',
+        description: 'latest ProposalEntity references an Organization that exists in the registry indexer (closes the registry FK chain coverage)',
+        layer: 'orchestrator↔registry',
+        check: async (ctx) => {
+            // Closes the registry FK chain coverage. With this
+            // invariant in place, every documented FK relationship
+            // in the system has a check:
+            //
+            //   Aggregator (root)
+            //     ← Organization (← organizationAggregatorRefIntegrity)
+            //       ← ProposalEntity (← THIS invariant)
+            //   Pool
+            //     ← Swap (← swapPoolReferentialIntegrity)
+            //     ← Candle (← candlePoolReferentialIntegrity)
+            //
+            // Bug shapes caught (lower-link specific):
+            //   * Proposal-event handler derives organization id
+            //     wrong (proposals belong to orgs; if the FK
+            //     derivation reads the wrong topic slot, every new
+            //     proposal becomes orphan)
+            //   * Organization entity deleted/superseded but its
+            //     proposals weren't garbage-collected (orphan
+            //     proposals — distinct from orphan orgs because
+            //     proposal sync may run independently of org sync)
+            //   * Schema migration that renamed Organization
+            //     without updating ProposalEntity's foreign key
+            //   * Handler dropped organization FK (returns null)
+            //
+            // Vacuous when no proposalEntities exist. Distinct from
+            // "organizations=0 but proposals>0" — that's an
+            // integrity FAIL (every proposal is orphan).
+            const j = await fetchJson(ctx.registryUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ proposalEntities(first: 1) { id organization { id } } organizations(first: 50) { id } }',
+                }),
+            });
+            const proposals = j?.data?.proposalEntities;
+            const organizations = j?.data?.organizations;
+            if (!Array.isArray(proposals) || !Array.isArray(organizations)) {
+                throw new Error(`unexpected response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (proposals.length === 0) {
+                return { ok: true, detail: 'no proposalEntities to check (vacuously true)' };
+            }
+            const proposal = proposals[0];
+            const refOrgId = proposal?.organization?.id;
+            if (typeof refOrgId !== 'string' || refOrgId.length === 0) {
+                throw new Error(`proposalEntity ${proposal.id}: organization.id missing or non-string (handler dropped FK; got ${JSON.stringify(proposal.organization)})`);
+            }
+            const orgIds = new Set(organizations.map((o) => o.id));
+            if (!orgIds.has(refOrgId)) {
+                throw new Error(`proposalEntity ${proposal.id}: references organization ${refOrgId} but no such organization in organizations(first: 50) — orphan proposal (FK derivation bug or organization deletion)`);
+            }
+            return { ok: true, detail: `proposalEntity ${proposal.id} → organization ${refOrgId} (FK intact; ${organizations.length} organization(s) total)` };
+        },
+    },
+    {
+        name: 'organizationAggregatorReferentialIntegrity',
+        description: 'latest Organization references an Aggregator that exists in the registry indexer (catches orphan-org from FK derivation bugs)',
+        layer: 'orchestrator↔registry',
+        check: async (ctx) => {
+            // Registry-side analog of swapPoolReferentialIntegrity /
+            // candlePoolReferentialIntegrity. The registry has its
+            // own FK chain:
+            //
+            //   Aggregator ← Organization ← ProposalEntity
+            //
+            // (Each ProposalEntity belongs to an Organization;
+            // each Organization belongs to an Aggregator.) This
+            // invariant pins the upper link — Organization →
+            // Aggregator — so a registry indexer with a broken
+            // org-event handler that derives the wrong aggregator
+            // FK lights up here. Distinct from the existence
+            // invariants (registryHasOrganizations,
+            // registryHasAggregators) which only assert each
+            // entity has rows independently.
+            //
+            // Bug shapes caught:
+            //   * Org-event handler derives aggregator id wrong
+            //     (reads wrong topic slot, address mangled by
+            //     transform)
+            //   * Aggregator entity deleted/superseded but its
+            //     organizations weren't garbage-collected (orphan
+            //     orgs)
+            //   * Schema migration that renamed Aggregator without
+            //     updating Organization's foreign key
+            //   * Handler dropped aggregator FK (returns null)
+            //
+            // Vacuous when no organizations exist. Distinct from
+            // "no aggregators but orgs>0" which is an integrity
+            // FAIL (every org is orphan), NOT vacuous.
+            const j = await fetchJson(ctx.registryUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ organizations(first: 1) { id aggregator { id } } aggregators(first: 50) { id } }',
+                }),
+            });
+            const organizations = j?.data?.organizations;
+            const aggregators = j?.data?.aggregators;
+            if (!Array.isArray(organizations) || !Array.isArray(aggregators)) {
+                throw new Error(`unexpected response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (organizations.length === 0) {
+                return { ok: true, detail: 'no organizations to check (vacuously true)' };
+            }
+            const org = organizations[0];
+            const refAggId = org?.aggregator?.id;
+            if (typeof refAggId !== 'string' || refAggId.length === 0) {
+                throw new Error(`organization ${org.id}: aggregator.id missing or non-string (handler dropped FK; got ${JSON.stringify(org.aggregator)})`);
+            }
+            const aggIds = new Set(aggregators.map((a) => a.id));
+            if (!aggIds.has(refAggId)) {
+                throw new Error(`organization ${org.id}: references aggregator ${refAggId} but no such aggregator in aggregators(first: 50) — orphan org (FK derivation bug or aggregator deletion)`);
+            }
+            return { ok: true, detail: `organization ${org.id} → aggregator ${refAggId} (FK intact; ${aggregators.length} aggregator(s) total)` };
+        },
+    },
+    // ── Direct-indexer probes ───────────────────────────────────────
+    // The two below bypass the api and hit the indexer GraphQL
+    // endpoints directly. They validate that the orchestrator
+    // container can reach the indexers over harness-net (the
+    // dual-homing from slice 4b-network-wire). If the api↔* invariants
+    // pass but these fail, the api is somehow reaching the indexers
+    // by a different route than the orchestrator can — useful debug
+    // signal.
+    {
+        name: 'registryDirect',
+        description: 'registry-checkpoint GraphQL responds to __typename without going through api',
+        layer: 'orchestrator↔registry',
+        check: async (ctx) => {
+            const j = await fetchJson(ctx.registryUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: PROBE_QUERY }),
+            });
+            if (j?.data?.__typename !== 'Query') {
+                throw new Error(`unexpected __typename response: ${JSON.stringify(j)}`);
+            }
+            return { ok: true, detail: `direct registry returned __typename=Query (${ctx.registryUrl})` };
+        },
+    },
+    {
+        name: 'candlesDirect',
+        description: 'candles-checkpoint GraphQL responds to __typename without going through api',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: PROBE_QUERY }),
+            });
+            if (j?.data?.__typename !== 'Query') {
+                throw new Error(`unexpected __typename response: ${JSON.stringify(j)}`);
+            }
+            return { ok: true, detail: `direct candles returned __typename=Query (${ctx.candlesUrl})` };
+        },
+    },
+    // ── Data-aware indexer probes ────────────────────────────────────
+    // One step deeper than the bare __typename probes: assert the
+    // indexer not only responds but has actually indexed data.
+    // Catches "indexer reachable but empty" — sync didn't complete,
+    // wrong fork block, contracts didn't emit events, etc.
+    {
+        name: 'registryIndexerSchemaHasRequiredTypes',
+        description: 'registry indexer GraphQL __schema introspection lists ProposalEntity, Organization, and Aggregator types (catches schema-rename regressions invisible to data probes that surface them as misleading "indexer empty" errors)',
+        layer: 'orchestrator↔registry',
+        check: async (ctx) => {
+            // Sister to candlesIndexerSchemaHasRequiredTypes (just
+            // shipped). Same INTROSPECTION pattern, registry side.
+            // Symmetrically completes schema-validation coverage
+            // across both indexers.
+            //
+            // Why a separate registry probe instead of one combined
+            // invariant:
+            //   * Registry and candles are SEPARATE Checkpoint
+            //     deployments — they can be regenerated/migrated
+            //     independently. A schema rename on the registry
+            //     side doesn't necessarily happen on candles
+            //     (and vice versa).
+            //   * Failure diagnostics stay precise: which indexer's
+            //     schema regressed, not "one of them did".
+            //   * Different required type names (registry =
+            //     ProposalEntity/Organization/Aggregator; candles =
+            //     Pool/Swap/Candle).
+            //
+            // Bug shapes caught (NOT caught by data probes):
+            //   * Schema regeneration renamed ProposalEntity →
+            //     Proposal (data probes return "Cannot query field
+            //     'proposalEntities'" — looks like indexer-empty)
+            //   * A required type was DROPPED entirely (the
+            //     registry no longer indexes Aggregator)
+            //   * Schema introspection itself was disabled
+            //
+            // Required types: the THREE entities the harness queries
+            // from the registry. ProposalEntity is the futarchy
+            // proposal record; Organization is the DAO that hosts
+            // it; Aggregator is the on-chain factory that emitted
+            // the proposal events. All three are load-bearing —
+            // each is referenced by other invariants (FK probes,
+            // pin probes, registry adapter probes).
+            const REQUIRED = ['ProposalEntity', 'Organization', 'Aggregator'];
+            const j = await fetchJson(ctx.registryUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ __schema { types { name } } }',
+                }),
+            });
+            const types = j?.data?.__schema?.types;
+            if (!Array.isArray(types)) {
+                throw new Error(`__schema.types not an array — introspection disabled or schema-shape regression (got ${JSON.stringify(j)?.slice(0, 100)})`);
+            }
+            const present = new Set(types.map((t) => t?.name).filter(Boolean));
+            const missing = REQUIRED.filter((name) => !present.has(name));
+            if (missing.length > 0) {
+                throw new Error(`registry schema missing required type(s): ${missing.join(', ')} — schema rename or type-dropped regression; data probes against the renamed type would surface as misleading "indexer empty" errors`);
+            }
+            return { ok: true, detail: `registry schema has all required types: ${REQUIRED.join(', ')} (out of ${present.size} total types)` };
+        },
+    },
+    {
+        name: 'registryHasProposalEntities',
+        description: 'registry checkpoint has ≥1 ProposalEntity indexed',
+        layer: 'orchestrator↔registry',
+        check: async (ctx) => {
+            // Schema: ProposalEntity → auto-gen plural is `proposalEntities`.
+            // (Different from candles' `Proposal` type; registry tracks
+            // proposal metadata, candles tracks the AMM pool wrapper.)
+            const j = await fetchJson(ctx.registryUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: '{ proposalEntities(first: 1) { id } }' }),
+            });
+            if (!Array.isArray(j?.data?.proposalEntities)) {
+                throw new Error(`unexpected proposalEntities response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.proposalEntities.length === 0) {
+                throw new Error('registry checkpoint has 0 ProposalEntity rows (sync not complete or fork has no proposal activity)');
+            }
+            return { ok: true, detail: `registry has ≥1 proposal (sample id: ${j.data.proposalEntities[0].id})` };
+        },
+    },
+    {
+        name: 'registryHasOrganizations',
+        description: 'registry checkpoint has ≥1 Organization indexed',
+        layer: 'orchestrator↔registry',
+        check: async (ctx) => {
+            // Organizations are the "who runs this market" entity, indexed
+            // from a separate Organization event stream. A registry that
+            // sees ProposalEntity but not Organization would mean
+            // proposal sync is past Organization-creation but the Org
+            // event handler is broken — distinct sync failure mode from
+            // ProposalEntity.
+            const j = await fetchJson(ctx.registryUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: '{ organizations(first: 1) { id } }' }),
+            });
+            if (!Array.isArray(j?.data?.organizations)) {
+                throw new Error(`unexpected organizations response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.organizations.length === 0) {
+                throw new Error('registry checkpoint has 0 Organization rows (sync not complete or org event handler broken)');
+            }
+            return { ok: true, detail: `registry has ≥1 org (sample id: ${j.data.organizations[0].id})` };
+        },
+    },
+    {
+        name: 'registryHasAggregators',
+        description: 'registry checkpoint has ≥1 Aggregator indexed',
+        layer: 'orchestrator↔registry',
+        check: async (ctx) => {
+            // Aggregator is the top-of-tree entity (organizations belong to
+            // aggregators; proposals belong to organizations). The
+            // futarchy.fi production setup has exactly one Aggregator at
+            // 0xc5eb43d53e2fe5fdde5faf400cc4167e5b5d4fc1 (per
+            // src/routes/unified-chart.js); the harness fork should
+            // inherit that.
+            const j = await fetchJson(ctx.registryUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: '{ aggregators(first: 1) { id } }' }),
+            });
+            if (!Array.isArray(j?.data?.aggregators)) {
+                throw new Error(`unexpected aggregators response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.aggregators.length === 0) {
+                throw new Error('registry checkpoint has 0 Aggregator rows (sync didn\'t reach root entity OR aggregator event handler broken)');
+            }
+            return { ok: true, detail: `registry has ≥1 aggregator (sample id: ${j.data.aggregators[0].id})` };
+        },
+    },
+    {
+        name: 'registryHasFutarchyProdAggregator',
+        description: 'registry indexer has the production futarchy aggregator (0xc5eb43d53e2fe5fdde5faf400cc4167e5b5d4fc1, hardcoded in 3 api source files)',
+        layer: 'orchestrator↔registry',
+        check: async (ctx) => {
+            // High-value PINNING check. The api layer hardcodes the
+            // futarchy aggregator address in:
+            //   src/adapters/registry-adapter.js
+            //   src/routes/unified-chart.js
+            //   src/routes/market-events.js
+            // If the indexer has aggregators but NOT this specific one,
+            // the api passes existence checks but every consumer
+            // breaks because resolve→pool→fetch chains all start from
+            // this address.
+            //
+            // This is the registry-side analog of anvilChainId: chain
+            // pin proves we forked Gnosis (not bare anvil); this pin
+            // proves the indexer was bootstrapped with the right
+            // chain + block + contract config.
+            //
+            // Bug shapes caught:
+            //   * Indexer bootstrapped against a block BEFORE
+            //     aggregator deployment (start_block too early)
+            //   * Indexer pointed at the wrong chain (no futarchy
+            //     deployment there) but indexer started anyway
+            //     and produced ghost aggregators
+            //   * Indexer's data was wiped without re-syncing the
+            //     full history (the prod aggregator's deployment
+            //     event missed)
+            //   * Schema migration that mangled aggregator IDs
+            //
+            // Vacuous when no aggregators exist — that's
+            // registryHasAggregators's concern; this only fires
+            // when there ARE aggregators but the prod one is
+            // missing.
+            const PROD_AGGREGATOR = '0xc5eb43d53e2fe5fdde5faf400cc4167e5b5d4fc1';
+            const j = await fetchJson(ctx.registryUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ aggregators(first: 50) { id } }',
+                }),
+            });
+            const aggregators = j?.data?.aggregators;
+            if (!Array.isArray(aggregators)) {
+                throw new Error(`unexpected aggregators response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (aggregators.length === 0) {
+                return { ok: true, detail: 'no aggregators (registryHasAggregators concern; vacuous here)' };
+            }
+            const ids = aggregators.map((a) => a.id?.toLowerCase()).filter((x) => x);
+            if (!ids.includes(PROD_AGGREGATOR)) {
+                throw new Error(`prod aggregator ${PROD_AGGREGATOR} not in indexer (saw ${aggregators.length}: ${ids.slice(0, 3).join(', ')}...) — wrong start_block, wrong chain, OR data wipe missed re-sync`);
+            }
+            return { ok: true, detail: `prod aggregator ${PROD_AGGREGATOR.slice(0, 10)}… present (${aggregators.length} total)` };
+        },
+    },
+    {
+        name: 'candlesIndexerSchemaHasRequiredTypes',
+        description: 'candles indexer GraphQL __schema introspection lists Pool, Swap, and Candle types (catches schema-rename regressions invisible to data probes that hit the renamed-but-still-valid endpoint via fluke)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // First INTROSPECTION-based invariant in the catalog.
+            // Distinct dimension from data probes (candlesHasPools,
+            // candlesHasSwaps, candlesHasCandles): those query
+            // `pools/swaps/candles` directly and verify they return
+            // ≥1 row. If the indexer schema is regenerated and a
+            // type is RENAMED (e.g., `Pool` → `LiquidityPool`),
+            // those data probes start returning the GraphQL error
+            // "Cannot query field 'pools' on type 'Query'", which
+            // surfaces as the existing data-probe failure — but
+            // the diagnostic message is misleading ("indexer
+            // empty" vs. the actual cause "indexer schema
+            // changed").
+            //
+            // This probe asks the schema directly:
+            //   { __schema { types { name } } }
+            // and asserts the three core type names exist. When
+            // the rename happens, this invariant fails first
+            // with a clearly-named error pointing at the renamed
+            // type, making triage take seconds instead of minutes
+            // of "why is the indexer empty?".
+            //
+            // Bug shapes caught (NOT caught by data probes):
+            //   * Schema regeneration renamed Pool → LiquidityPool
+            //     (data probes return "Cannot query field 'pools'"
+            //     which looks like an indexer-down error)
+            //   * A required type was DROPPED entirely from the
+            //     schema (the indexer no longer indexes it)
+            //   * Schema introspection itself was disabled (some
+            //     production GraphQL servers disable it for
+            //     security; the harness needs it on to run this
+            //     check, so a disablement regression also fails
+            //     here with a clear diagnostic)
+            //
+            // Vacuous when introspection returns null — indexer
+            // misconfigured but schema not introspectable. Other
+            // probes will catch the broader brokenness.
+            const REQUIRED = ['Pool', 'Swap', 'Candle'];
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ __schema { types { name } } }',
+                }),
+            });
+            const types = j?.data?.__schema?.types;
+            if (!Array.isArray(types)) {
+                throw new Error(`__schema.types not an array — introspection disabled or schema-shape regression (got ${JSON.stringify(j)?.slice(0, 100)})`);
+            }
+            const present = new Set(types.map((t) => t?.name).filter(Boolean));
+            const missing = REQUIRED.filter((name) => !present.has(name));
+            if (missing.length > 0) {
+                throw new Error(`schema is missing required type(s): ${missing.join(', ')} — schema rename or type-dropped regression; data probes against the renamed type would surface as misleading "indexer empty" errors`);
+            }
+            return { ok: true, detail: `schema has all required types: ${REQUIRED.join(', ')} (out of ${present.size} total types)` };
+        },
+    },
+    {
+        name: 'candlesHasPools',
+        description: 'candles checkpoint has ≥1 Pool indexed',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Schema: Pool → auto-gen plural is `pools`.
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: '{ pools(first: 1) { id } }' }),
+            });
+            if (!Array.isArray(j?.data?.pools)) {
+                throw new Error(`unexpected pools response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.pools.length === 0) {
+                throw new Error('candles checkpoint has 0 Pool rows (sync not complete or fork has no pool deployments)');
+            }
+            return { ok: true, detail: `candles has ≥1 pool (sample id: ${j.data.pools[0].id})` };
+        },
+    },
+    {
+        name: 'poolTypeIsValidEnum',
+        description: 'all pools (first 50) have type ∈ {CONDITIONAL, PREDICTION, EXPECTED_VALUE} (catches schema drift, null types, and typos)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // First indexer-side enum validation in the catalog.
+            // Distinct from existing pool checks:
+            //   * candlesHasPools (existence count)
+            //   * swapPoolReferentialIntegrity / candlePoolRef…
+            //     (FK resolution)
+            //   * probabilityBounds (filters BY type, vacuous on
+            //     non-PREDICTION — so a typo'd type like
+            //     "PRDICTION" silently slips through)
+            //
+            // This invariant iterates ALL returned pools (new pattern
+            // — most other indexer checks look at first 1 or count-
+            // only) and asserts each has a recognized type enum
+            // value. The set of valid types is sourced from
+            // unified-chart.js's findPoolByOutcome() — those are
+            // the three the api consumes; any other value is a bug.
+            //
+            // Bug shapes caught:
+            //   * Schema migration adds a 4th type without updating
+            //     the api adapter (UI starts dropping pools)
+            //   * Indexer returns null type for some pools (handler
+            //     regression dropping the field write)
+            //   * Typo'd type value (e.g., "PRDICTION") — passes
+            //     existence + FK checks but breaks the api's
+            //     pool-type lookup
+            //   * String-vs-int encoding regression
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ pools(first: 50) { id type } }',
+                }),
+            });
+            const pools = j?.data?.pools;
+            if (!Array.isArray(pools)) {
+                throw new Error(`unexpected pools response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (pools.length === 0) {
+                return { ok: true, detail: 'no pools to check (vacuously true)' };
+            }
+            const VALID_TYPES = new Set(['CONDITIONAL', 'PREDICTION', 'EXPECTED_VALUE']);
+            const seen = new Set();
+            for (const p of pools) {
+                if (!VALID_TYPES.has(p.type)) {
+                    throw new Error(`pool ${p.id}: type=${JSON.stringify(p.type)} ∉ {CONDITIONAL, PREDICTION, EXPECTED_VALUE} (schema drift, null, or typo — api adapter's findPoolByOutcome() will silently drop this pool)`);
+                }
+                seen.add(p.type);
+            }
+            return { ok: true, detail: `${pools.length} pool(s) all have valid enum type (saw: ${[...seen].sort().join(', ')})` };
+        },
+    },
+    {
+        name: 'candlesHasSwaps',
+        description: 'candles checkpoint has ≥1 Swap indexed (event-level sync verified)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Different from candlesHasPools: pools come from deployment
+            // events (one-shot per pool); swaps come from per-trade
+            // Swap events. If pools exist but swaps don't, the indexer
+            // started AFTER the pool was created but is still
+            // catching up (or no one has traded yet). Either way, a
+            // distinct sync-state vs candlesHasPools.
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: '{ swaps(first: 1) { id } }' }),
+            });
+            if (!Array.isArray(j?.data?.swaps)) {
+                throw new Error(`unexpected swaps response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.swaps.length === 0) {
+                throw new Error('candles checkpoint has 0 Swap rows (sync not complete past pool deployment, or no trades yet)');
+            }
+            return { ok: true, detail: `candles has ≥1 swap (sample id: ${j.data.swaps[0].id})` };
+        },
+    },
+    {
+        name: 'candlesHasCandles',
+        description: 'candles checkpoint has ≥1 Candle aggregated (period-aggregator alive)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Different from candlesHasSwaps: candles are aggregated
+            // per period (e.g., 1h buckets) over swaps. If swaps exist
+            // but candles don't, the period-aggregator job inside the
+            // checkpoint indexer is broken — distinct from sync lag.
+            // Catches the candlesAggregation invariant's "is the
+            // aggregator running at all" prerequisite.
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ query: '{ candles(first: 1) { id } }' }),
+            });
+            if (!Array.isArray(j?.data?.candles)) {
+                throw new Error(`unexpected candles response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.candles.length === 0) {
+                throw new Error('candles checkpoint has 0 Candle rows (period-aggregator broken or no swap activity)');
+            }
+            return { ok: true, detail: `candles has ≥1 candle (sample id: ${j.data.candles[0].id})` };
+        },
+    },
+    {
+        name: 'candleOHLCOrdering',
+        description: 'latest candle satisfies OHLC: low ≤ {open, close} ≤ high (vacuously true when no candles)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // OHLC ordering is the most fundamental sanity check on
+            // aggregated candle data. A `high < low` or `close > high`
+            // (or analogous violations) means the period-aggregator's
+            // running min/max accumulators have a bug — either a
+            // signedness error, a swap-direction misclassification,
+            // or an uninitialized-min-equals-max edge case.
+            //
+            // Schema: open/high/low/close are String-encoded decimals
+            // (Algebra prices are stored as raw integers but
+            // Checkpoint's String type lets handlers emit decimal
+            // strings; either way parseFloat tolerates the format).
+            //
+            // Vacuously true when 0 candles exist — that's a
+            // distinct concern (candlesHasCandles).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ candles(first: 1, orderBy: time, orderDirection: desc) { id open high low close } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.candles)) {
+                throw new Error(`unexpected candles response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.candles.length === 0) {
+                return { ok: true, detail: 'no candles to check (vacuously true)' };
+            }
+            const c = j.data.candles[0];
+            const open = parseFloat(c.open);
+            const high = parseFloat(c.high);
+            const low = parseFloat(c.low);
+            const close = parseFloat(c.close);
+            for (const [name, val] of [['open', open], ['high', high], ['low', low], ['close', close]]) {
+                if (!Number.isFinite(val)) {
+                    throw new Error(`candle ${c.id}: ${name}="${c[name]}" is not a finite number`);
+                }
+            }
+            if (low > high) {
+                throw new Error(`candle ${c.id}: low=${low} > high=${high} (impossible OHLC ordering)`);
+            }
+            if (open < low || open > high) {
+                throw new Error(`candle ${c.id}: open=${open} outside [low=${low}, high=${high}]`);
+            }
+            if (close < low || close > high) {
+                throw new Error(`candle ${c.id}: close=${close} outside [low=${low}, high=${high}]`);
+            }
+            return { ok: true, detail: `candle ${c.id}: OHLC=${open}/${high}/${low}/${close} consistent` };
+        },
+    },
+    {
+        name: 'candleOHLCAllRowsConsistent',
+        description: 'every candle (up to first 50) satisfies low ≤ {open, close} ≤ high (catches per-period min/max accumulator bugs that LATEST-only candleOHLCOrdering misses)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // ITERATE-ALL-ROWS strengthening of candleOHLCOrdering
+            // (latest only). Sister to candleVolumesAllRowsNonNegative
+            // and swapAmountsAllRowsPositive — completes the iterate-
+            // all-rows triad on the indexer's main accumulator entities.
+            //
+            // Why both candleOHLCOrdering AND this exist:
+            //   * candleOHLCOrdering (LATEST only) — cheap probe;
+            //     catches min/max accumulator bugs uniform across
+            //     all periods. Most regressions land here first.
+            //   * THIS one (UP-TO-50 rows) — catches bugs affecting
+            //     SUBSETS of periods without affecting the latest:
+            //       * Per-period decoder bug — aggregator's running-
+            //         min initialization differs by period (e.g.,
+            //         resets to 0 instead of +Infinity for periods
+            //         with the first swap > 0)
+            //       * Indexer reorg re-processed historical periods
+            //         and corrupted those candle rows' OHLC fields
+            //       * Pool-specific aggregator bug — only candles
+            //         for a particular pool get wrong OHLC
+            //         (latest happens to be a different pool)
+            //       * Period-boundary off-by-one — the swap counted
+            //         in the wrong period had a price outside the
+            //         window's bounds
+            //
+            // The 50-row cap matches the candle and swap iterate-
+            // all-rows siblings: cheap to query, enough signal.
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ candles(first: 50, orderBy: time, orderDirection: desc) { id open high low close } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.candles)) {
+                throw new Error(`unexpected candles response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.candles.length === 0) {
+                return { ok: true, detail: 'no candles to check (vacuously true)' };
+            }
+            for (const c of j.data.candles) {
+                const open = parseFloat(c.open);
+                const high = parseFloat(c.high);
+                const low = parseFloat(c.low);
+                const close = parseFloat(c.close);
+                for (const [name, val] of [['open', open], ['high', high], ['low', low], ['close', close]]) {
+                    if (!Number.isFinite(val)) {
+                        throw new Error(`candle ${c.id}: ${name}="${c[name]}" parseFloat = ${val} (not finite — partial-rewrite or per-period decoder bug; latest candle is unaffected)`);
+                    }
+                }
+                if (low > high) {
+                    throw new Error(`candle ${c.id}: low=${low} > high=${high} (per-period min/max accumulator bug; latest candle is unaffected)`);
+                }
+                if (open < low || open > high) {
+                    throw new Error(`candle ${c.id}: open=${open} outside [low=${low}, high=${high}] (per-period min/max accumulator bug; latest candle is unaffected)`);
+                }
+                if (close < low || close > high) {
+                    throw new Error(`candle ${c.id}: close=${close} outside [low=${low}, high=${high}] (per-period min/max accumulator bug; latest candle is unaffected)`);
+                }
+            }
+            return { ok: true, detail: `${j.data.candles.length} candles all satisfy low ≤ {open, close} ≤ high` };
+        },
+    },
+    {
+        name: 'swapAmountsPositive',
+        description: 'latest swap has amountIn > 0 AND amountOut > 0 (vacuously true when no swaps)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Algebra's Swap event has SIGNED amount0/amount1 (the
+            // "from" token's amount is negative by convention). The
+            // indexer's handler should derive UNSIGNED amountIn /
+            // amountOut by taking |amount0| or |amount1| based on
+            // direction. If the handler assigns the signed amount
+            // directly to amountIn/Out, one of them is negative or
+            // zero — distinct bug class from candleVolumesNonNegative
+            // (which catches an aggregator bug; this catches a
+            // per-swap event-decoder bug).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ swaps(first: 1, orderBy: timestamp, orderDirection: desc) { id amountIn amountOut } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.swaps)) {
+                throw new Error(`unexpected swaps response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.swaps.length === 0) {
+                return { ok: true, detail: 'no swaps to check (vacuously true)' };
+            }
+            const s = j.data.swaps[0];
+            const ain = parseFloat(s.amountIn);
+            const aout = parseFloat(s.amountOut);
+            for (const [name, val] of [['amountIn', ain], ['amountOut', aout]]) {
+                if (!Number.isFinite(val)) {
+                    throw new Error(`swap ${s.id}: ${name}="${s[name]}" is not a finite number`);
+                }
+                if (val <= 0) {
+                    throw new Error(`swap ${s.id}: ${name}=${val} ≤ 0 (signed-amount handler bug)`);
+                }
+            }
+            return { ok: true, detail: `swap ${s.id}: amountIn=${ain}, amountOut=${aout} both > 0` };
+        },
+    },
+    {
+        name: 'swapAmountsBoundedAbove',
+        description: 'latest swap has amountIn < 1e15 AND amountOut < 1e15 (catches raw uint256 leaks where parseFloat returns 1e18 instead of a decimal-formatted string)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Mirrors candlePricesNonNegative + probabilityBounds —
+            // magnitude-sanity bound on the swap side. Closes the
+            // gap left by swapAmountsPositive (which only checks
+            // > 0): a raw uint256 leak from the indexer (e.g.,
+            // amountIn = "1000000000000000000" instead of decimal
+            // "1.0") passes the >0 check but represents a serious
+            // formatting bug.
+            //
+            // The 1e15 threshold is generous — even huge real swaps
+            // (e.g., a $1M trade in sDAI = "1000000.0") are far
+            // below it. Raw uint256 of any reasonable token is
+            // ≥ 1e18 (assuming 18 decimals), so the bound cleanly
+            // separates real values from raw-int leaks.
+            //
+            // Bug shapes caught:
+            //   * Raw uint256 leak — indexer emits amountIn as
+            //     "1000000000000000000" instead of "1.0"; parseFloat
+            //     returns 1e18. Real swaps are nowhere near that.
+            //   * parseFloat overflow / scientific-notation
+            //     misformatting (e.g., "1e30")
+            //   * Token-decimal misalignment — wrong-decimals
+            //     scaling that 1e6x's the value
+            //
+            // Vacuous when no swaps. Distinct concern from
+            // swapAmountsPositive (existence + sign) and
+            // swapTimestampSensible (time field).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ swaps(first: 1, orderBy: timestamp, orderDirection: desc) { id amountIn amountOut } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.swaps)) {
+                throw new Error(`unexpected swaps response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.swaps.length === 0) {
+                return { ok: true, detail: 'no swaps to check (vacuously true)' };
+            }
+            const s = j.data.swaps[0];
+            const SANE_MAX = 1e15;
+            for (const [name, raw] of [['amountIn', s.amountIn], ['amountOut', s.amountOut]]) {
+                const val = parseFloat(raw);
+                if (!Number.isFinite(val)) {
+                    throw new Error(`swap ${s.id}: ${name}="${raw}" parseFloat = ${val} (not finite)`);
+                }
+                if (val >= SANE_MAX) {
+                    throw new Error(`swap ${s.id}: ${name}=${val} ≥ ${SANE_MAX} (raw uint256 leak — got "${raw}" instead of decimal-formatted string)`);
+                }
+            }
+            return { ok: true, detail: `swap ${s.id}: amountIn=${parseFloat(s.amountIn)}, amountOut=${parseFloat(s.amountOut)} both < ${SANE_MAX}` };
+        },
+    },
+    {
+        name: 'swapAmountsAllRowsPositive',
+        description: 'every swap (up to first 50) has amountIn > 0 AND amountOut > 0 (catches partial-rewrite or per-block-decoder bugs that LATEST-only checks miss)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // ITERATE-ALL-ROWS strengthening of swapAmountsPositive
+            // (which only checks the latest swap). Mirrors the
+            // poolTypeIsValidEnum pattern (iterate-all-rows enum
+            // check at the indexer layer).
+            //
+            // Why both invariants exist:
+            //   * swapAmountsPositive (LATEST only) — cheap probe
+            //     that catches event-decoder bugs uniform across
+            //     ALL swaps. Most regressions land here first.
+            //   * THIS one (UP-TO-50 rows) — catches bugs that
+            //     affect SUBSETS of swaps without affecting the
+            //     latest:
+            //       * Indexer reorg re-processed historical blocks
+            //         and corrupted those rows (latest is fine,
+            //         old rows wrong)
+            //       * Block-context-dependent decoder bug —
+            //         decoder reads a "decimals" field from the
+            //         pool's CURRENT state instead of the swap's
+            //         block, so historical swaps from before a
+            //         decimals change get wrong amounts
+            //       * Partial-rewrite bug — a fix re-emitted only
+            //             swaps from a specific block range with the
+            //             corrupted shape
+            //       * Pool-specific decoder bug — only swaps for
+            //         a particular pool get the wrong amounts
+            //         (latest happens to be a different pool)
+            //
+            // The 50-row cap: keep the query cheap. If the indexer
+            // has thousands of swaps and 49/50 are wrong, that's
+            // already a strong signal; full-table iteration would
+            // bloat the smoke-test runtime without proportional
+            // signal gain.
+            //
+            // Vacuous when no swaps. When ≥1 swap, every row's
+            // amountIn AND amountOut must be > 0.
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ swaps(first: 50, orderBy: timestamp, orderDirection: desc) { id amountIn amountOut } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.swaps)) {
+                throw new Error(`unexpected swaps response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.swaps.length === 0) {
+                return { ok: true, detail: 'no swaps to check (vacuously true)' };
+            }
+            for (const s of j.data.swaps) {
+                const ain = parseFloat(s.amountIn);
+                const aout = parseFloat(s.amountOut);
+                for (const [name, val] of [['amountIn', ain], ['amountOut', aout]]) {
+                    if (!Number.isFinite(val)) {
+                        throw new Error(`swap ${s.id}: ${name}="${s[name]}" parseFloat = ${val} (not finite — partial-rewrite or block-context decoder bug; latest swap is unaffected)`);
+                    }
+                    if (val <= 0) {
+                        throw new Error(`swap ${s.id}: ${name}=${val} ≤ 0 (signed-amount or per-block-decoder bug; this row was decoded with the wrong logic, latest swap is unaffected)`);
+                    }
+                }
+            }
+            return { ok: true, detail: `${j.data.swaps.length} swaps all have amountIn > 0 AND amountOut > 0` };
+        },
+    },
+    {
+        name: 'swapTimestampSensible',
+        description: 'latest swap timestamp is in a sane range (catches event-topic-decoder bugs)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // The indexer reads timestamp from the block context. If
+            // the event handler reads the wrong topic slot (off-by-one
+            // in the decoder), timestamp lands at 0 or some massive
+            // value pulled from a hash. Sane range: between
+            // 2020-01-01 and now + 1 day clock skew.
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ swaps(first: 1, orderBy: timestamp, orderDirection: desc) { id timestamp } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.swaps)) {
+                throw new Error(`unexpected swaps response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.swaps.length === 0) {
+                return { ok: true, detail: 'no swaps to check (vacuously true)' };
+            }
+            const s = j.data.swaps[0];
+            const t = Number(s.timestamp);
+            if (!Number.isFinite(t)) {
+                throw new Error(`swap ${s.id}: timestamp="${s.timestamp}" is not a finite number`);
+            }
+            const MIN_TS = 1_577_836_800;             // 2020-01-01 UTC
+            const MAX_TS = Math.floor(Date.now() / 1000) + 86_400;  // now + 1 day clock skew
+            if (t < MIN_TS) {
+                throw new Error(`swap ${s.id}: timestamp=${t} < ${MIN_TS} (2020-01-01 — likely uninitialized or wrong topic slot)`);
+            }
+            if (t > MAX_TS) {
+                throw new Error(`swap ${s.id}: timestamp=${t} > ${MAX_TS} (now + 1d — likely garbage from wrong topic slot)`);
+            }
+            const iso = new Date(t * 1000).toISOString();
+            return { ok: true, detail: `swap ${s.id}: timestamp=${t} (${iso})` };
+        },
+    },
+    {
+        name: 'candleTimeMonotonic',
+        description: 'recent candles are STRICTLY decreasing by time when ordered desc (catches duplicate-period or misordered candles)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Candles cover unique periods (one row per period), so when
+            // ordered `time desc` they MUST be strictly decreasing. A
+            // duplicate or equal time means the period-aggregator
+            // emitted two rows for the same bucket — common bug shape
+            // when the bucket-key derivation has an off-by-one or the
+            // upsert logic re-inserts instead of updating.
+            //
+            // Distinct from candlesHasCandles (existence), candleOHLC
+            // (per-row shape), and candleVolumes (per-row shape): this
+            // is a CROSS-ROW shape check. First multi-row invariant
+            // in the catalog — establishes the pattern for future
+            // cross-row checks (TWAP-window monotonicity, conservation
+            // sums, etc.).
+            //
+            // Vacuous when fewer than 2 candles exist (can't compare).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ candles(first: 5, orderBy: time, orderDirection: desc) { id time } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.candles)) {
+                throw new Error(`unexpected candles response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.candles.length < 2) {
+                return { ok: true, detail: `only ${j.data.candles.length} candle(s); monotonicity vacuous` };
+            }
+            for (let i = 1; i < j.data.candles.length; i++) {
+                const prev = Number(j.data.candles[i - 1].time);
+                const curr = Number(j.data.candles[i].time);
+                if (!Number.isFinite(prev) || !Number.isFinite(curr)) {
+                    throw new Error(`candles[${i - 1}].time=${j.data.candles[i - 1].time}, candles[${i}].time=${j.data.candles[i].time}: not both finite`);
+                }
+                if (curr >= prev) {
+                    throw new Error(`candles[${i - 1}].time=${prev} ≤ candles[${i}].time=${curr} (ordered desc but not strictly decreasing — duplicate period or aggregator bug)`);
+                }
+            }
+            return { ok: true, detail: `${j.data.candles.length} candles strictly decreasing by time` };
+        },
+    },
+    {
+        name: 'swapTimeMonotonicNonStrict',
+        description: 'recent swaps are non-strictly decreasing by timestamp when ordered desc (multiple swaps per block share a timestamp; going BACKWARDS is the bug)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Swaps within the same block share a timestamp (block.ts
+            // is the source). So unlike candles (strictly decreasing),
+            // swaps can be EQUAL adjacent — the invariant is only
+            // violated by curr > prev (timestamp going backwards in a
+            // descending list). Bug shape: the indexer's orderBy is
+            // broken, OR an event handler stamped the wrong block's
+            // timestamp on a swap (off-by-one block context).
+            //
+            // Pairs with candleTimeMonotonic: same shape (multi-row
+            // ordering check), different semantics (≥ vs >). Catches
+            // a different bug class than swapTimestampSensible (which
+            // is a single-row range check).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ swaps(first: 5, orderBy: timestamp, orderDirection: desc) { id timestamp } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.swaps)) {
+                throw new Error(`unexpected swaps response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.swaps.length < 2) {
+                return { ok: true, detail: `only ${j.data.swaps.length} swap(s); monotonicity vacuous` };
+            }
+            for (let i = 1; i < j.data.swaps.length; i++) {
+                const prev = Number(j.data.swaps[i - 1].timestamp);
+                const curr = Number(j.data.swaps[i].timestamp);
+                if (!Number.isFinite(prev) || !Number.isFinite(curr)) {
+                    throw new Error(`swaps[${i - 1}].timestamp=${j.data.swaps[i - 1].timestamp}, swaps[${i}].timestamp=${j.data.swaps[i].timestamp}: not both finite`);
+                }
+                if (curr > prev) {
+                    throw new Error(`swaps[${i - 1}].timestamp=${prev} < swaps[${i}].timestamp=${curr} (ordered desc but timestamp going backwards — orderBy broken or wrong-block context)`);
+                }
+            }
+            return { ok: true, detail: `${j.data.swaps.length} swaps non-strictly decreasing by timestamp` };
+        },
+    },
+    {
+        name: 'candleSwapTimeWindowConsistency',
+        description: 'latest swap.timestamp ≥ latest candle.time (catches future-period candle creation, stale swap data, time-field misalignment)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // First cross-entity TIME-COHERENCE check in the catalog.
+            // The relationship: candles aggregate swaps. The latest
+            // candle's `time` represents the START of its (period-
+            // bucketed) window; the latest swap's `timestamp` is the
+            // moment of the most recent trade. These two should be
+            // CONSISTENT — specifically, the latest swap's timestamp
+            // must be >= the latest candle's time, because:
+            //
+            //   * Swaps create candles. A swap at time T causes a
+            //     candle at floor(T/period)*period.
+            //   * If latestSwap.timestamp < latestCandle.time, then
+            //     a candle exists for a period that has no contained
+            //     swap — clock skew, future-bucketing bug, or the
+            //     period-aggregator using the wrong time source.
+            //
+            // Distinct failure mode from the per-row time-shape
+            // probes (swapTimestampSensible / candleTimeMonotonic):
+            // those validate each entity's time field on its own
+            // terms; this validates that the two entities' time
+            // fields are MUTUALLY consistent.
+            //
+            // Bug shapes caught:
+            //   * Candle creation in future periods (clock-skew bug,
+            //     setTimeout loop with wrong delta, etc.)
+            //   * Stale swap stream (indexer dropped recent swaps
+            //     while period-aggregator kept producing buckets)
+            //   * Period-aggregator pulls time from a different
+            //     source than swap-handler (different RPC, different
+            //     block context)
+            //
+            // Vacuous when EITHER side is empty — without both
+            // entities populated, there's nothing to compare.
+            // (Existence is candlesHasSwaps + candlesHasCandles's
+            // concern; this is purely about cross-entity time
+            // coherence when both exist.)
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ swaps(first: 1, orderBy: timestamp, orderDirection: desc) { id timestamp } candles(first: 1, orderBy: time, orderDirection: desc) { id time } }',
+                }),
+            });
+            const swaps = j?.data?.swaps;
+            const candles = j?.data?.candles;
+            if (!Array.isArray(swaps) || !Array.isArray(candles)) {
+                throw new Error(`unexpected response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (swaps.length === 0 || candles.length === 0) {
+                return { ok: true, detail: `vacuous (swaps=${swaps.length}, candles=${candles.length})` };
+            }
+            const swap = swaps[0];
+            const candle = candles[0];
+            const swapTs = Number(swap.timestamp);
+            const candleTime = Number(candle.time);
+            if (!Number.isFinite(swapTs) || !Number.isFinite(candleTime)) {
+                throw new Error(`finite-number check: swap.timestamp=${swap.timestamp}, candle.time=${candle.time}`);
+            }
+            if (swapTs < candleTime) {
+                const diff = candleTime - swapTs;
+                throw new Error(`latest swap ${swap.id} timestamp=${swapTs} < latest candle ${candle.id} time=${candleTime} (diff=${diff}s; candle is in the FUTURE relative to most recent swap — aggregator clock-skew or stale swap stream)`);
+            }
+            return { ok: true, detail: `latest swap ${swap.id} (ts=${swapTs}) ≥ latest candle ${candle.id} (time=${candleTime}); diff=${swapTs - candleTime}s` };
+        },
+    },
+    {
+        name: 'candlePoolReferentialIntegrity',
+        description: 'latest Candle references a Pool that exists in the indexer (catches orphan candle aggregates from FK derivation bugs)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Mirror of swapPoolReferentialIntegrity (previous slice)
+            // but for the Candle entity. Distinct failure mode:
+            //
+            //   * swap FK is set per-event by the swap-event handler
+            //     (one FK derivation per Swap event)
+            //   * candle FK is set per-bucket by the period-aggregator
+            //     (one FK derivation per Candle aggregation)
+            //
+            // So an indexer where the swap handler is correct but
+            // the period-aggregator's FK derivation is broken would
+            // pass swapPoolReferentialIntegrity but fail this one.
+            // The two checks together pin the FK contract on both
+            // entity-emit paths.
+            //
+            // Bug shapes caught:
+            //   * Period-aggregator picks wrong pool when bucketing
+            //     swaps (e.g., uses last-seen pool instead of swap's
+            //     pool — would also light up candlesAggregation when
+            //     that lands)
+            //   * Pool entity deleted/superseded but candle aggregates
+            //     weren't garbage-collected (orphan candles)
+            //   * Schema migration that renamed Pool but didn't
+            //     update Candle's foreign key
+            //   * Aggregator handler returns null pool (FK dropped)
+            //
+            // Vacuous when no candles exist. Distinct from "no pools
+            // but candles>0" which is an integrity FAIL (orphan-storm).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ candles(first: 1, orderBy: time, orderDirection: desc) { id pool { id } } pools(first: 50) { id } }',
+                }),
+            });
+            const candles = j?.data?.candles;
+            const pools = j?.data?.pools;
+            if (!Array.isArray(candles) || !Array.isArray(pools)) {
+                throw new Error(`unexpected response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (candles.length === 0) {
+                return { ok: true, detail: 'no candles to check (vacuously true)' };
+            }
+            const candle = candles[0];
+            const refPoolId = candle?.pool?.id;
+            if (typeof refPoolId !== 'string' || refPoolId.length === 0) {
+                throw new Error(`candle ${candle.id}: pool.id missing or non-string (period-aggregator dropped FK; got ${JSON.stringify(candle.pool)})`);
+            }
+            const poolIds = new Set(pools.map((p) => p.id));
+            if (!poolIds.has(refPoolId)) {
+                throw new Error(`candle ${candle.id}: references pool ${refPoolId} but no such pool in pools(first: 50) — orphan candle (aggregator FK bug or pool deletion)`);
+            }
+            return { ok: true, detail: `candle ${candle.id} → pool ${refPoolId} (FK intact; ${pools.length} pool(s) total)` };
+        },
+    },
+    {
+        name: 'swapPoolReferentialIntegrity',
+        description: 'latest swap references a Pool that exists in the indexer (catches orphan swap rows from FK derivation bugs)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // First cross-entity FK check in the catalog. Different
+            // failure mode from any single-entity probe:
+            //
+            //   * candlesHasPools / candlesHasSwaps assert each
+            //     entity has data, independently
+            //   * apiCandlesMatchesDirect asserts api↔indexer agree
+            //     on each entity, independently
+            //   * THIS asserts the entities are CONSISTENT WITH EACH
+            //     OTHER — swap.pool.id must exist in the pools table
+            //
+            // Bug shapes caught:
+            //   * Indexer's swap-event handler derives pool id wrong
+            //     (e.g., reads the wrong topic slot, or applies a
+            //     transform that mangles the address)
+            //   * Pool entity got deleted/superseded but its swaps
+            //     weren't garbage-collected (orphan rows)
+            //   * Schema migration that renamed Pool but didn't
+            //     update Swap's foreign key
+            //
+            // Vacuous when no swaps exist (no FK to check).
+            // Distinct vacuous case from "no pools" — if pools=[]
+            // but swaps>0, that's an integrity failure (every swap
+            // is orphan), NOT vacuous.
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ swaps(first: 1, orderBy: timestamp, orderDirection: desc) { id pool { id } } pools(first: 50) { id } }',
+                }),
+            });
+            const swaps = j?.data?.swaps;
+            const pools = j?.data?.pools;
+            if (!Array.isArray(swaps) || !Array.isArray(pools)) {
+                throw new Error(`unexpected response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (swaps.length === 0) {
+                return { ok: true, detail: 'no swaps to check (vacuously true)' };
+            }
+            const swap = swaps[0];
+            const refPoolId = swap?.pool?.id;
+            if (typeof refPoolId !== 'string' || refPoolId.length === 0) {
+                throw new Error(`swap ${swap.id}: pool.id missing or non-string (handler dropped FK; got ${JSON.stringify(swap.pool)})`);
+            }
+            const poolIds = new Set(pools.map((p) => p.id));
+            if (!poolIds.has(refPoolId)) {
+                throw new Error(`swap ${swap.id}: references pool ${refPoolId} but no such pool in pools(first: 50) — orphan swap (FK derivation bug or pool deletion)`);
+            }
+            return { ok: true, detail: `swap ${swap.id} → pool ${refPoolId} (FK intact; ${pools.length} pool(s) total)` };
+        },
+    },
+    {
+        name: 'probabilityBounds',
+        description: 'for PREDICTION-type pools, latest candle close ∈ [0, 1] (the close IS the probability of YES; values outside this range are bugs)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // First ECONOMIC invariant from PROGRESS.md's economic-
+            // invariants table. Most futarchy markets use PREDICTION-
+            // type pools where the candle's close represents
+            // P(YES outcome) — by AMM construction, this MUST be in
+            // [0, 1] (since 1 YES token can redeem for at most 1
+            // unit of collateral on resolution).
+            //
+            // Distinct from candleOHLCOrdering (per-row shape):
+            // OHLC ordering can pass while the absolute values are
+            // still wrong — e.g., low=1e18, high=2e18 satisfies
+            // "low ≤ high" but is wildly out of probability range.
+            // This invariant catches the magnitude bugs that
+            // ordering-only checks miss.
+            //
+            // FILTERED to PREDICTION pool type — CONDITIONAL pools
+            // have prices like YES_TOKEN/YES_CURRENCY ratios
+            // (often >1), and EXPECTED_VALUE pools have projected
+            // token values (any positive number). Bounds-checking
+            // those would produce false positives. The pool.type
+            // field comes from the indexer schema; if it's missing
+            // (older indexer version, schema migration in progress)
+            // the invariant treats it as vacuous rather than
+            // false-failing.
+            //
+            // Bug shapes caught:
+            //   * Indexer emits raw uint256 prices instead of
+            //     decimal-converted strings (close=1e18 is a
+            //     ~12-orders-of-magnitude red flag)
+            //   * Real probability bug — sustained close > 1 means
+            //     market thinks "more than certain" (a possibility
+            //     briefly during fee imbalance, but persistent
+            //     means a UI/AMM math bug)
+            //   * Sign bug — close < 0 from signed-arithmetic leak
+            //     in the price-derivation handler
+            //
+            // Vacuous when no candles OR no PREDICTION pool — that's
+            // a distinct concern (existence checks).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ candles(first: 1, orderBy: time, orderDirection: desc) { id close pool { type } } }',
+                }),
+            });
+            const candles = j?.data?.candles;
+            if (!Array.isArray(candles)) {
+                throw new Error(`unexpected response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (candles.length === 0) {
+                return { ok: true, detail: 'no candles to check (vacuously true)' };
+            }
+            const candle = candles[0];
+            const poolType = candle?.pool?.type;
+            if (poolType !== 'PREDICTION') {
+                return { ok: true, detail: `latest candle pool type=${poolType ?? 'null'} is not PREDICTION; bounds don't apply (vacuously true)` };
+            }
+            const close = parseFloat(candle.close);
+            if (!Number.isFinite(close)) {
+                throw new Error(`candle ${candle.id}: close="${candle.close}" not a finite number (raw int leak?)`);
+            }
+            if (close < 0) {
+                throw new Error(`candle ${candle.id}: close=${close} < 0 (sign bug in price-derivation handler — probabilities can't be negative)`);
+            }
+            if (close > 1) {
+                throw new Error(`candle ${candle.id}: close=${close} > 1 (PREDICTION pool close represents P(YES), can't exceed 1; raw uint256 leak OR sustained "more than certain" UI/math bug)`);
+            }
+            return { ok: true, detail: `candle ${candle.id} (PREDICTION): close=${close} ∈ [0, 1]` };
+        },
+    },
+    {
+        name: 'candlePricesNonNegative',
+        description: 'latest candle OHLC values are all ≥ 0 (universal sanity that catches all-negative or mixed-sign OHLC bugs the ordering check allows)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Closes a gap left by candleOHLCOrdering +
+            // probabilityBounds:
+            //
+            //   * candleOHLCOrdering checks `low ≤ open, close ≤
+            //     high` — passes when low and high are both
+            //     negative (low=-3, high=-1, open=-2, close=-2 is
+            //     ORDERED but ALL negative) or mixed-sign with
+            //     ordering preserved.
+            //   * probabilityBounds catches close < 0, but ONLY
+            //     for PREDICTION-type pools. CONDITIONAL and
+            //     EXPECTED_VALUE pools (whose prices aren't
+            //     probabilities) skip that check, so a sign-bug
+            //     leak in their price-derivation handler goes
+            //     undetected.
+            //
+            // This invariant is the universal magnitude-sign check:
+            // all four OHLC fields ≥ 0 for ANY pool type. Bug
+            // shapes caught:
+            //   * Sign-bug leak in price derivation (signed
+            //     arithmetic without abs()) for non-PREDICTION
+            //     pools
+            //   * All-OHLC-negative aggregator bug (ordering
+            //     check passes by accident because low ≤ high is
+            //     true even for negatives)
+            //   * Defense-in-depth for PREDICTION pools (catches
+            //     negative open/high/low even when close happens
+            //     to round non-negative)
+            //
+            // Vacuous when no candles exist. Distinct concern
+            // from candleVolumesNonNegative which checks
+            // volumes (per-period sums) — this checks PRICES
+            // (per-period quotes).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ candles(first: 1, orderBy: time, orderDirection: desc) { id open high low close } }',
+                }),
+            });
+            const candles = j?.data?.candles;
+            if (!Array.isArray(candles)) {
+                throw new Error(`unexpected response: ${JSON.stringify(j)?.slice(0, 100)}`);
+            }
+            if (candles.length === 0) {
+                return { ok: true, detail: 'no candles to check (vacuously true)' };
+            }
+            const c = candles[0];
+            const fields = [
+                ['open', parseFloat(c.open)],
+                ['high', parseFloat(c.high)],
+                ['low', parseFloat(c.low)],
+                ['close', parseFloat(c.close)],
+            ];
+            for (const [name, val] of fields) {
+                if (!Number.isFinite(val)) {
+                    throw new Error(`candle ${c.id}: ${name}="${c[name]}" is not a finite number`);
+                }
+                if (val < 0) {
+                    throw new Error(`candle ${c.id}: ${name}=${val} < 0 (price went negative — sign-bug leak in price-derivation handler; ordering check missed this because mixed/all-negative satisfies low ≤ high)`);
+                }
+            }
+            return { ok: true, detail: `candle ${c.id}: OHLC all ≥ 0 (${fields.map(([n, v]) => `${n}=${v}`).join(', ')})` };
+        },
+    },
+    {
+        name: 'candleVolumesNonNegative',
+        description: 'latest candle has volumeToken0 ≥ 0 AND volumeToken1 ≥ 0 (vacuously true when no candles)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // Volumes per period are always ≥ 0 by definition (sum of
+            // |swap amount| over swaps in the period). A negative volume
+            // means the aggregator's signed-amount bug: probably
+            // subtracting outgoing from incoming when it should be
+            // taking the absolute value.
+            //
+            // Schema: volumeToken0, volumeToken1 are String-encoded
+            // (same as OHLC fields). Distinct invariant from
+            // candleOHLCOrdering because the failure mode is
+            // different: OHLC failure = aggregator's min/max logic
+            // broken; volume failure = aggregator's accumulator bug.
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ candles(first: 1, orderBy: time, orderDirection: desc) { id volumeToken0 volumeToken1 } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.candles)) {
+                throw new Error(`unexpected candles response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.candles.length === 0) {
+                return { ok: true, detail: 'no candles to check (vacuously true)' };
+            }
+            const c = j.data.candles[0];
+            const v0 = parseFloat(c.volumeToken0);
+            const v1 = parseFloat(c.volumeToken1);
+            for (const [name, val] of [['volumeToken0', v0], ['volumeToken1', v1]]) {
+                if (!Number.isFinite(val)) {
+                    throw new Error(`candle ${c.id}: ${name}="${c[name]}" is not a finite number`);
+                }
+                if (val < 0) {
+                    throw new Error(`candle ${c.id}: ${name}=${val} < 0 (signed-amount aggregator bug)`);
+                }
+            }
+            return { ok: true, detail: `candle ${c.id}: volumes=${v0}/${v1} non-negative` };
+        },
+    },
+    {
+        name: 'candleVolumesAllRowsNonNegative',
+        description: 'every candle (up to first 50) has volumeToken0 ≥ 0 AND volumeToken1 ≥ 0 (catches partial-rewrite or per-period-aggregator bugs that LATEST-only checks miss)',
+        layer: 'orchestrator↔candles',
+        check: async (ctx) => {
+            // ITERATE-ALL-ROWS strengthening of candleVolumesNonNegative
+            // (which only checks the latest candle). Sister to
+            // swapAmountsAllRowsPositive (already shipped); together
+            // they cover the iterate-all-rows pattern across the two
+            // main accumulator-bearing entities (swap amounts +
+            // candle volumes).
+            //
+            // Why both invariants exist:
+            //   * candleVolumesNonNegative (LATEST only) — cheap probe
+            //     that catches aggregator bugs uniform across ALL
+            //     candles. Most regressions land here first.
+            //   * THIS one (UP-TO-50 rows) — catches bugs that
+            //     affect SUBSETS of candles without affecting the
+            //     latest:
+            //       * Indexer reorg re-processed historical periods
+            //         and corrupted those candle rows
+            //       * Per-period decoder bug — aggregator reads pool
+            //         token-decimals from CURRENT pool state instead
+            //         of the period's snapshot, so historical
+            //         candles from before a decimals change get
+            //         wrong volumes
+            //       * Partial-rewrite bug — a fix re-emitted only
+            //         candles from a specific period range with the
+            //         corrupted shape
+            //       * Pool-specific aggregator bug — only candles
+            //         for a particular pool get wrong volumes
+            //         (latest happens to be a different pool)
+            //
+            // The 50-row cap: keep the query cheap. Mirror of the
+            // swap-side rationale (SubgraphSwap-style indexers can
+            // emit thousands of candles; sampling 50 is enough
+            // signal without bloating smoke-test runtime).
+            const j = await fetchJson(ctx.candlesUrl, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    query: '{ candles(first: 50, orderBy: time, orderDirection: desc) { id volumeToken0 volumeToken1 } }',
+                }),
+            });
+            if (!Array.isArray(j?.data?.candles)) {
+                throw new Error(`unexpected candles response: ${JSON.stringify(j)}`);
+            }
+            if (j.data.candles.length === 0) {
+                return { ok: true, detail: 'no candles to check (vacuously true)' };
+            }
+            for (const c of j.data.candles) {
+                const v0 = parseFloat(c.volumeToken0);
+                const v1 = parseFloat(c.volumeToken1);
+                for (const [name, val] of [['volumeToken0', v0], ['volumeToken1', v1]]) {
+                    if (!Number.isFinite(val)) {
+                        throw new Error(`candle ${c.id}: ${name}="${c[name]}" parseFloat = ${val} (not finite — partial-rewrite or per-period decoder bug; latest candle is unaffected)`);
+                    }
+                    if (val < 0) {
+                        throw new Error(`candle ${c.id}: ${name}=${val} < 0 (signed-amount aggregator bug; this period was processed with the wrong logic, latest candle is unaffected)`);
+                    }
+                }
+            }
+            return { ok: true, detail: `${j.data.candles.length} candles all have volumeToken0 ≥ 0 AND volumeToken1 ≥ 0` };
+        },
+    },
+    // ── Chain-process probes ────────────────────────────────────────
+    // Validate the chain process itself before checking contract state.
+    // If anvilBlockNumber + anvilChainId pass but rateSanity fails,
+    // the chain is alive but pointing at a wrong fork or has corrupt
+    // state.
+    {
+        name: 'anvilBlockNumber',
+        description: 'eth_blockNumber returns a positive block number (chain has state)',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            const result = await rpcRequest(ctx.rpcUrl, 'eth_blockNumber', []);
+            if (typeof result !== 'string' || !result.startsWith('0x')) {
+                throw new Error(`unexpected eth_blockNumber result: ${JSON.stringify(result)}`);
+            }
+            const blockNumber = BigInt(result);
+            if (blockNumber <= 0n) {
+                throw new Error(`block number is ${blockNumber} (≤ 0; fork has no state)`);
+            }
+            return { ok: true, detail: `block ${blockNumber}` };
+        },
+    },
+    {
+        name: 'anvilClientVersionMentionsAnvil',
+        description: 'web3_clientVersion response contains "anvil" (case-insensitive) — pins the EVM client identity, not just chain ID',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            // Distinct from anvilChainId. Chain ID can match Gnosis
+            // (0x64) on multiple clients (geth fork, erigon fork,
+            // anvil fork). The harness depends on Anvil-specific RPC
+            // extensions (anvil_impersonateAccount, anvil_setBalance,
+            // evm_snapshot/revert, evm_setNextBlockTimestamp). Running
+            // against the wrong client would let chain probes pass
+            // but break scenario-driven state mutations later.
+            //
+            // This invariant pins the CLIENT identity:
+            //   * web3_clientVersion is universal JSON-RPC
+            //   * Anvil returns something like "anvil/0.1.0" or
+            //     "anvil 1.5.0-stable" depending on version
+            //   * If the response is missing "anvil", we're on the
+            //     wrong client even if the chain ID matched
+            //
+            // Together with anvilChainId, both layers of "right
+            // environment" are pinned: chain ID for the network,
+            // client version for the EVM impl.
+            const result = await rpcRequest(ctx.rpcUrl, 'web3_clientVersion', []);
+            if (typeof result !== 'string') {
+                throw new Error(`web3_clientVersion returned non-string: ${JSON.stringify(result)?.slice(0, 60)}`);
+            }
+            if (!result.toLowerCase().includes('anvil')) {
+                throw new Error(`web3_clientVersion=${JSON.stringify(result)} does not contain "anvil" — wrong EVM client (anvil_/evm_ extensions for impersonation, snapshots, time-warping will silently fail in scenarios)`);
+            }
+            return { ok: true, detail: `client version: ${result}` };
+        },
+    },
+    {
+        name: 'anvilLatestBlockSensible',
+        description: 'eth_getBlockByNumber(latest) returns a block with a 0x… hash and a timestamp in [2020-01-01, now+1d] (catches stuck-clock + wrong-fork issues that the count-only block-number probe misses)',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            // anvilBlockNumber only checks `eth_blockNumber > 0`; that
+            // can pass while the chain is broken in subtle ways:
+            //   * Stuck clock — chain's notion of time is wrong (the
+            //     fork started fine, but the timestamp source got
+            //     desynced and now blocks have year-2099 timestamps)
+            //   * Genesis-only state — fork pinned to a frozen block
+            //     and `latest` returns garbage when no advance happened
+            //   * Hash structurally invalid — anvil bug or
+            //     misconfigured RPC returning string '0x' or null
+            //
+            // Mirrors the time-shape pattern from swapTimestampSensible
+            // and candleTimeMonotonic but at the chain layer. The
+            // [2020-01-01, now+1d] window is the same one used by
+            // swapTimestampSensible — keeps the catalog's notion of
+            // "sensible time" consistent across layers.
+            const block = await rpcRequest(ctx.rpcUrl, 'eth_getBlockByNumber', ['latest', false]);
+            if (!block || typeof block !== 'object') {
+                throw new Error(`expected block object, got ${typeof block} (${JSON.stringify(block)?.slice(0, 60)})`);
+            }
+            // Hash must be a 0x… string with 64 hex chars after the prefix.
+            if (typeof block.hash !== 'string' || !/^0x[0-9a-f]{64}$/i.test(block.hash)) {
+                throw new Error(`block.hash invalid (got ${JSON.stringify(block.hash)})`);
+            }
+            // Timestamp is a hex string per JSON-RPC convention; convert and bound.
+            if (typeof block.timestamp !== 'string' || !block.timestamp.startsWith('0x')) {
+                throw new Error(`block.timestamp expected hex string, got ${JSON.stringify(block.timestamp)}`);
+            }
+            const ts = Number(BigInt(block.timestamp));
+            const MIN_TS = 1_577_836_800;             // 2020-01-01 UTC
+            const MAX_TS = Math.floor(Date.now() / 1000) + 86_400;  // now + 1d clock skew
+            if (ts < MIN_TS) {
+                throw new Error(`block.timestamp ${ts} < ${MIN_TS} (2020-01-01 — stuck clock or wrong fork era)`);
+            }
+            if (ts > MAX_TS) {
+                throw new Error(`block.timestamp ${ts} > ${MAX_TS} (now + 1d — clock skewed forward)`);
+            }
+            const iso = new Date(ts * 1000).toISOString();
+            return { ok: true, detail: `latest block ${block.hash.slice(0, 10)}… @ ts=${ts} (${iso})` };
+        },
+    },
+    {
+        name: 'anvilChainId',
+        description: 'eth_chainId returns 0x64 (chain 100, Gnosis)',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            const result = await rpcRequest(ctx.rpcUrl, 'eth_chainId', []);
+            // anvil returns chain ID as a hex string. Forking Gnosis
+            // mainnet should preserve chain 100 (= 0x64). Different
+            // chain ID would mean forking the wrong chain or running
+            // bare anvil (default 31337 = 0x7a69).
+            if (result !== '0x64') {
+                const id = result?.startsWith?.('0x') ? Number(BigInt(result)) : result;
+                throw new Error(`chain id ${id} (raw: ${JSON.stringify(result)}); expected 0x64 (100 = Gnosis)`);
+            }
+            return { ok: true, detail: 'chain 100 (Gnosis) confirmed' };
+        },
+    },
+    {
+        name: 'anvilGasPricePresent',
+        description: 'eth_gasPrice returns a 0x-prefixed positive hex value (catches EIP-1559-only mode + broken fee market that silently breaks gas estimation in scenarios)',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            // Companion to anvilLatestBlockSensible + anvilChainId.
+            // Those pin "chain reachable + right network"; this
+            // pins the FEE-MARKET state, which can be independently
+            // broken:
+            //   * Anvil started in EIP-1559-only mode — eth_gasPrice
+            //     returns null (legacy gas pricing disabled). Tools
+            //     that estimate via legacy method silently fail.
+            //   * Fee market reports 0 — anvil flag misconfig
+            //     (e.g., --gas-price 0) makes transactions appear
+            //     free, masking real-world gas accounting bugs.
+            //   * Non-hex returned (number instead of hex string,
+            //     unprefixed value) — RPC-layer regression that
+            //     breaks downstream BigInt parsing.
+            //
+            // Bug shapes caught (NOT caught by other chain probes):
+            //   * Switching anvil flag in a way that disables
+            //     legacy gas-price RPC
+            //   * Forking from a chain where eth_gasPrice was
+            //     deprecated (some L2 forks)
+            //   * Anvil version regression where the method returns
+            //     a decimal number instead of a hex string
+            //
+            // Why this matters for scenarios: most futarchy flows
+            // submit transactions (impersonateAccount + send). Those
+            // need a working gas price for estimation; null/0/garbage
+            // breaks them silently or produces transactions stuck in
+            // pending forever.
+            const result = await rpcRequest(ctx.rpcUrl, 'eth_gasPrice', []);
+            if (result === null || result === undefined) {
+                throw new Error(`eth_gasPrice returned ${result === null ? 'null' : 'undefined'} — legacy gas pricing disabled (EIP-1559-only mode? method deprecated?)`);
+            }
+            if (typeof result !== 'string' || !result.startsWith('0x')) {
+                throw new Error(`eth_gasPrice returned non-hex-string: ${JSON.stringify(result)?.slice(0, 60)} (RPC-layer regression — downstream BigInt parsing will break)`);
+            }
+            let gasPrice;
+            try {
+                gasPrice = BigInt(result);
+            } catch {
+                throw new Error(`eth_gasPrice value ${JSON.stringify(result)} not parseable as BigInt`);
+            }
+            if (gasPrice <= 0n) {
+                throw new Error(`eth_gasPrice = ${gasPrice} (≤ 0; broken fee market — anvil --gas-price 0 misconfig? transactions appear free, masking gas-accounting bugs)`);
+            }
+            return { ok: true, detail: `gas price ${gasPrice} wei` };
+        },
+    },
+    {
+        name: 'anvilNetworkVersionMatchesChainId',
+        description: 'net_version (decimal string) numerically equals eth_chainId (hex). Catches RPC handler regressions where the two methods diverge — silently breaks consumers that pick one or the other',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            // Consistency check across two JSON-RPC methods that
+            // SHOULD agree:
+            //   * eth_chainId → '0x64' (hex; standard since EIP-695)
+            //   * net_version → '100'  (decimal string; legacy)
+            //
+            // Both name the same chain. Old tooling uses net_version;
+            // newer uses eth_chainId. They diverging means one of them
+            // is reporting a stale or wrong value, which silently
+            // breaks consumers depending on which method they pick.
+            //
+            // Bug shapes caught (NOT caught by anvilChainId alone):
+            //   * RPC handler ships eth_chainId fix but forgets to
+            //     update net_version (or vice versa) on a fork rebase
+            //   * Mock fixture hardcodes one but not the other
+            //   * Anvil version regression where one method reads
+            //     from a stale cached config and the other from
+            //     the live chain state
+            //   * Reverse-proxy misconfig that routes net_version
+            //     and eth_chainId to different upstreams (a
+            //     genuinely seen bug pattern in multi-chain RPC
+            //     gateways)
+            //
+            // Why a separate invariant: anvilChainId asserts
+            // eth_chainId === 0x64 (the EXPECTED value). This one
+            // asserts net_version === eth_chainId (CONSISTENCY).
+            // Both could pass independently:
+            //   * anvilChainId passes if eth_chainId returns 0x64
+            //   * this passes if net_version === eth_chainId
+            //     (regardless of WHAT they both equal)
+            // anvilChainId catches "wrong chain"; this catches
+            // "RPC layer disagrees with itself".
+            const [chainIdHex, netVersion] = await Promise.all([
+                rpcRequest(ctx.rpcUrl, 'eth_chainId', []),
+                rpcRequest(ctx.rpcUrl, 'net_version', []),
+            ]);
+            if (typeof chainIdHex !== 'string' || !chainIdHex.startsWith('0x')) {
+                throw new Error(`eth_chainId returned non-hex-string: ${JSON.stringify(chainIdHex)}`);
+            }
+            if (typeof netVersion !== 'string') {
+                throw new Error(`net_version returned non-string: ${JSON.stringify(netVersion)?.slice(0, 60)}`);
+            }
+            if (!/^\d+$/.test(netVersion)) {
+                throw new Error(`net_version expected decimal integer string, got ${JSON.stringify(netVersion)} (legacy format requirement — consumers parseInt() will get a wrong value or NaN)`);
+            }
+            const chainIdNum = BigInt(chainIdHex);
+            const netVersionNum = BigInt(netVersion);
+            if (chainIdNum !== netVersionNum) {
+                throw new Error(`net_version="${netVersion}" (= ${netVersionNum}) ≠ eth_chainId="${chainIdHex}" (= ${chainIdNum}) — RPC layer disagrees with itself; consumers picking one method or the other get inconsistent answers`);
+            }
+            return { ok: true, detail: `eth_chainId=${chainIdHex} ↔ net_version=${netVersion} (consistent)` };
+        },
+    },
+    {
+        name: 'anvilImpersonationCapabilityPresent',
+        description: 'anvil_impersonateAccount RPC method works (catches "hardhat-compatible" or wrong-fork clients that identify as anvil in version string but lack the impersonation extension scenarios depend on)',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            // The HARNESS depends on this method to drive scenarios:
+            // every flow that mutates state requires impersonating
+            // an account (so we can call functions as the proposer,
+            // trader, etc., without their private keys).
+            //
+            // anvilClientVersionMentionsAnvil checks the CLIENT says
+            // it's anvil. This invariant verifies the impersonation
+            // METHOD actually works — distinct domain. Several
+            // "hardhat-compatible" forks and patched-anvil builds
+            // exist that emit "anvil" in the version string but
+            // only implement a subset of anvil_* extensions.
+            //
+            // Bug shapes caught (NOT caught by anvilClientVersionMentionsAnvil):
+            //   * Hardhat-compatible third-party RPC that reports
+            //     "anvil/X" version but lacks anvil_impersonateAccount
+            //   * Anvil version regression that removed the method
+            //     (or renamed it)
+            //   * RPC layer with method-allowlisting that
+            //     accidentally excludes anvil_* methods
+            //   * Forked anvil that disabled impersonation for
+            //     "production safety" reasons
+            //
+            // Test address: ZERO_ADDR is universally safe to
+            // impersonate — no real account, no state to mutate.
+            // The invariant doesn't care about the result; it cares
+            // that the method DOESN'T return a "method not found"
+            // or similar error.
+            //
+            // Note: this is a CAPABILITY probe, not an end-to-end
+            // scenario test. Scenarios will exercise the full
+            // impersonate → call → unimpersonate flow; this invariant
+            // catches the "method missing entirely" failure mode
+            // before scenarios get that far.
+            const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
+            try {
+                await rpcRequest(ctx.rpcUrl, 'anvil_impersonateAccount', [ZERO_ADDR]);
+            } catch (err) {
+                const msg = err?.message || String(err);
+                if (/method.*not (found|supported|mocked)|-32601/i.test(msg)) {
+                    throw new Error(`anvil_impersonateAccount unavailable (${msg.slice(0, 100)}) — wrong client or method-allowlisting in the RPC layer; every scenario that mutates state will silently fail`);
+                }
+                throw err;
+            }
+            return { ok: true, detail: `anvil_impersonateAccount(0x0…0) accepted — impersonation extension available` };
+        },
+    },
+    {
+        name: 'anvilSnapshotCapabilityPresent',
+        description: 'evm_snapshot RPC method works and returns a non-empty snapshot id (catches forks/clients lacking the snapshot extension scenarios depend on for state rollback between tests)',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            // Sister to anvilImpersonationCapabilityPresent. Both
+            // probe ANVIL/GANACHE-LINEAGE extensions that the
+            // harness depends on. Together they form the minimal
+            // capability set scenarios need:
+            //   * impersonate → call function as arbitrary account
+            //   * snapshot/revert → roll back state between tests
+            //
+            // Note: evm_snapshot (and evm_revert) are part of the
+            // ganache lineage — supported by both anvil AND hardhat,
+            // but NOT by go-ethereum, erigon, reth, or other "real"
+            // clients. So this probe is more permissive than
+            // anvilImpersonationCapabilityPresent (which targets
+            // anvil-specific anvil_*); ANY ganache-compatible
+            // dev client passes here, but a wrong-fork client
+            // running geth/erigon would fail.
+            //
+            // Bug shapes caught (NOT caught by impersonation probe):
+            //   * Anvil started with --no-snapshot or similar flag
+            //     that disables the snapshot subsystem
+            //   * RPC layer with method-allowlisting that blocks
+            //     evm_* but allows anvil_* (or vice versa)
+            //   * Wrong-fork client (geth/erigon) — anvil
+            //     impersonation might be allowlisted, but evm_*
+            //     methods aren't supported at all
+            //   * Anvil version regression where the snapshot
+            //     subsystem reports "unsupported" or returns null
+            //
+            // Why we check the result is non-empty: the spec says
+            // evm_snapshot returns a quantity (hex string) that
+            // identifies the snapshot. A null/empty/non-hex
+            // response means the method is registered but the
+            // subsystem is broken — scenarios would call
+            // evm_revert(undefined) and silently fail.
+            //
+            // Note: this is a CAPABILITY probe, not a full
+            // snapshot/revert round-trip. We don't call evm_revert
+            // here — that's left to scenarios. This invariant
+            // catches the "method missing or returns garbage"
+            // failure mode before scenarios get that far.
+            let snapshotId;
+            try {
+                snapshotId = await rpcRequest(ctx.rpcUrl, 'evm_snapshot', []);
+            } catch (err) {
+                const msg = err?.message || String(err);
+                if (/method.*not (found|supported|mocked)|-32601/i.test(msg)) {
+                    throw new Error(`evm_snapshot unavailable (${msg.slice(0, 100)}) — wrong-fork client or method-allowlisting in the RPC layer; scenarios cannot roll back state between tests`);
+                }
+                throw err;
+            }
+            if (typeof snapshotId !== 'string' || !snapshotId.startsWith('0x')) {
+                throw new Error(`evm_snapshot returned non-hex result: ${JSON.stringify(snapshotId)?.slice(0, 60)} (snapshot subsystem broken — calling evm_revert with this id will silently fail)`);
+            }
+            return { ok: true, detail: `evm_snapshot returned id ${snapshotId} — snapshot/revert extension available` };
+        },
+    },
+    {
+        name: 'anvilTimeWarpCapabilityPresent',
+        description: 'evm_setNextBlockTimestamp RPC method works — completes the chain CAPABILITY trio (impersonate + snapshot + time-warp) scenarios depend on for futarchy resolution flows that need to simulate time passing',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            // Third (and final) chain-CAPABILITY probe. Together
+            // with anvilImpersonationCapabilityPresent and
+            // anvilSnapshotCapabilityPresent forms the MINIMAL
+            // CAPABILITY TRIO that scenarios depend on:
+            //   * impersonate → call function as arbitrary account
+            //   * snapshot/revert → roll back state between tests
+            //   * TIME-WARP → simulate "wait N seconds/days" without
+            //     actually waiting (futarchy resolution scenarios
+            //     need this to test "after the trading window
+            //     closes, the proposal resolves to X")
+            //
+            // Without time-warp, any scenario that involves a
+            // time-gated state transition (resolution after deadline,
+            // TWAP window calculation, vote-weight decay) cannot
+            // run at all — wall-clock waits would make CI runs
+            // hours-long.
+            //
+            // evm_setNextBlockTimestamp lineage: ganache-original
+            // method, supported by anvil + hardhat + ganache.
+            // Same support profile as evm_snapshot — wrong-fork
+            // clients (geth/erigon/reth) lack it.
+            //
+            // Bug shapes caught (NOT caught by impersonate / snapshot
+            // capability probes):
+            //   * Anvil flag --no-storage-caching or similar that
+            //     disables time-warp specifically (it's possible to
+            //     have snapshot working but timestamp manipulation
+            //     disabled)
+            //   * RPC layer with method-allowlisting that blocks
+            //     evm_setNextBlockTimestamp specifically (some
+            //     proxy-based dev setups whitelist evm_snapshot/
+            //     revert but not setNextBlockTimestamp)
+            //   * Anvil version regression where the time-warp
+            //     subsystem was rewritten and a newer signature
+            //     was shipped without the legacy alias (tools that
+            //     call the old signature break)
+            //
+            // Side-effect note: evm_setNextBlockTimestamp DOES
+            // mutate chain state (it sets the timestamp the next
+            // mined block will use). But no block is mined as part
+            // of this probe — the only effect is that if a scenario
+            // subsequently mines a block, its timestamp will be the
+            // far-future value we set. Subsequent scenarios can
+            // setNextBlockTimestamp again to override. The chosen
+            // value is now+86400 (1 day) — conservatively far enough
+            // to be obviously synthetic but not so far that downstream
+            // logic would misinterpret it as a year-2099 sentinel.
+            const farFuture = Math.floor(Date.now() / 1000) + 86400;
+            const farFutureHex = '0x' + farFuture.toString(16);
+            try {
+                await rpcRequest(ctx.rpcUrl, 'evm_setNextBlockTimestamp', [farFutureHex]);
+            } catch (err) {
+                const msg = err?.message || String(err);
+                if (/method.*not (found|supported|mocked)|-32601/i.test(msg)) {
+                    throw new Error(`evm_setNextBlockTimestamp unavailable (${msg.slice(0, 100)}) — wrong-fork client or method-allowlisting; futarchy resolution scenarios that simulate time passing cannot run`);
+                }
+                throw err;
+            }
+            return { ok: true, detail: `evm_setNextBlockTimestamp(${farFutureHex}) accepted — time-warp extension available` };
+        },
+    },
+    // ── Economic invariants ─────────────────────────────────────────
+    // Always-on truth properties from PROGRESS.md's "Economic
+    // invariants" table. Each one validates a single chain-level
+    // fact independent of the api or indexer.
+    {
+        name: 'rateSanity',
+        description: 'sDAI getRate() returns a uint256 ≥ 1e18 (rate ≥ 1.0)',
+        layer: 'orchestrator↔chain',
+        check: async (ctx) => {
+            const result = await ethCall(ctx.rpcUrl, SDAI_GNOSIS_ADDRESS, GET_RATE_SELECTOR);
+            if (typeof result !== 'string' || !result.startsWith('0x')) {
+                throw new Error(`unexpected eth_call result shape: ${JSON.stringify(result)}`);
+            }
+            const rateBigInt = BigInt(result);
+            if (rateBigInt < ONE_E18) {
+                const rateNum = Number(rateBigInt) / 1e18;
+                throw new Error(`sDAI rate ${rateNum.toFixed(6)} < 1.0 (raw: ${result})`);
+            }
+            const rateNum = Number(rateBigInt) / 1e18;
+            return { ok: true, detail: `sDAI rate ${rateNum.toFixed(6)} (≥ 1.0)` };
+            // Future enhancement: monotonicity check across calls.
+            // Needs persistent state (the orchestrator is one-shot, so
+            // monotonicity within a single run is trivially "≥ 1
+            // sample"). Cross-run monotonicity needs an external store
+            // (file in a volume? indexer query?) — out of scope for
+            // this slice.
+        },
+    },
+];
+
+/**
+ * Run every registered invariant, capturing per-check pass/fail.
+ *
+ * Failures don't short-circuit — we always run the full battery so a
+ * single broken layer doesn't hide downstream failures.
+ *
+ * @param {object} ctx              Service URL bundle
+ * @param {string} ctx.apiUrl       e.g. http://api:3031
+ * @param {string} ctx.registryUrl  e.g. http://registry-checkpoint:3000/graphql
+ * @param {string} ctx.candlesUrl   e.g. http://checkpoint:3000/graphql
+ * @param {string} ctx.rpcUrl       e.g. http://anvil:8545
+ * @returns {Promise<{pass: boolean, results: Array<{name,ok,detail?,error?}>}>}
+ */
+export async function runAllInvariants(ctx) {
+    const results = [];
+    for (const inv of INVARIANTS) {
+        try {
+            const r = await inv.check(ctx);
+            results.push({ name: inv.name, layer: inv.layer, ok: true, detail: r.detail });
+        } catch (e) {
+            results.push({ name: inv.name, layer: inv.layer, ok: false, error: e.message });
+        }
+    }
+    return { pass: results.every(r => r.ok), results };
+}
