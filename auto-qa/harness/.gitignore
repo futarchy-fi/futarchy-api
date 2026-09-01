@@ -1,0 +1,26 @@
+# Local node deps (we keep harness deps separate from the api repo deps)
+node_modules/
+
+# Anvil state snapshots / fork dumps
+.anvil-state/
+*.anvil-snapshot
+
+# Local Checkpoint indexer data (Phase 3)
+.checkpoint-data/
+
+# Captured RPC traces (Phase 6 scenario fixtures, when very large)
+scenarios/*.bin
+scenarios/*.gz
+
+# docker-compose volumes
+.compose-volumes/
+
+# Test artifacts
+.run-artifacts/
+*.video
+*.trace.zip
+*.har
+
+# Editor / OS
+.DS_Store
+*.log

@@ -1,0 +1,68 @@
+name: auto-qa harness — ARCHITECTURE.md cross-repo sync
+
+# Cross-repo drift check for the shared ARCHITECTURE.md spec doc.
+#
+# Phase 0 explicitly required `diff` between the two repos' copies
+# to report identical (`docs ARCHITECTURE.md shared spec mirrored
+# across both repos (\`diff\` reports identical)`). The doc-side
+# smoke test (`tests/smoke-architecture-sync.test.mjs`) handles the
+# dev-with-sibling-clone case; this workflow handles the
+# CI-with-only-one-repo-checked-out case.
+#
+# Mechanism: curl the SISTER repo's `auto-qa/harness/ARCHITECTURE.md`
+# from raw.githubusercontent.com (public; no token), diff against
+# the local copy. Fails loudly on byte mismatch.
+#
+# Trigger is `workflow_dispatch` ONLY for this first version,
+# matching the conservative roll-out pattern of slices 3a, 3c, 3e.
+# After the maintainer promotes this file (see
+# `auto-qa/harness/ci/README.md`) and smoke-tests it via the
+# Actions UI, follow-up iterations can add:
+#
+#   pull_request:
+#     paths: ['auto-qa/harness/ARCHITECTURE.md']  # gate spec edits
+#   schedule:
+#     - cron: '0 4 * * *'                          # nightly drift sweep
+#
+# Sister-side workflow on the interface repo mirrors this in
+# reverse (looks up futarchy-api). Both pass on the same baseline;
+# either failing means the shared spec drifted.
+#
+# Per Phase 7 slice 4d-architecture-sync-ci.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sister_branch:
+        description: 'Sister repo branch to compare against (default auto-qa; switch to main once both repos merge)'
+        required: false
+        default: 'auto-qa'
+
+jobs:
+  architecture-sync:
+    name: ARCHITECTURE.md cross-repo drift check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch sister ARCHITECTURE.md
+        env:
+          SISTER_REPO: futarchy-fi/interface
+          SISTER_BRANCH: ${{ inputs.sister_branch }}
+        run: |
+          set -euo pipefail
+          URL="https://raw.githubusercontent.com/${SISTER_REPO}/${SISTER_BRANCH}/auto-qa/harness/ARCHITECTURE.md"
+          echo "Fetching sister ARCHITECTURE.md from: ${URL}"
+          curl -sSf -o /tmp/sister-architecture.md "${URL}"
+          wc -c /tmp/sister-architecture.md
+
+      - name: Diff against local
+        # If this fails, the shared spec drifted. Pick one side as
+        # source of truth, `cp` to the other, commit on both.
+        # Sister-side smoke test (tests/smoke-architecture-sync
+        # .test.mjs on either repo) catches the same drift earlier
+        # for any contributor with a sibling clone.
+        run: diff -u auto-qa/harness/ARCHITECTURE.md /tmp/sister-architecture.md

@@ -11,7 +11,27 @@
     "scripts": {
         "start": "node src/index.js",
         "dev": "node --watch src/index.js",
-        "test:lib": "node lib/test.js"
+        "test:lib": "node lib/test.js",
+        "auto-qa:test": "node --test 'auto-qa/tests/**/*.test.mjs'",
+        "auto-qa:e2e": "npm --prefix auto-qa/harness run phase-status",
+        "auto-qa:e2e:detect": "npm --prefix auto-qa/harness run detect",
+        "auto-qa:e2e:detect:indexers": "npm --prefix auto-qa/harness run detect:indexers",
+        "auto-qa:e2e:fork": "npm --prefix auto-qa/harness run fork",
+        "auto-qa:e2e:smoke": "npm --prefix auto-qa/harness run smoke",
+        "auto-qa:e2e:smoke:compose": "npm --prefix auto-qa/harness run smoke:compose",
+        "auto-qa:e2e:smoke:api": "npm --prefix auto-qa/harness run smoke:api",
+        "auto-qa:e2e:smoke:passthrough": "npm --prefix auto-qa/harness run smoke:passthrough",
+        "auto-qa:e2e:smoke:stress": "npm --prefix auto-qa/harness run smoke:stress",
+        "auto-qa:e2e:smoke:detect:indexers": "npm --prefix auto-qa/harness run smoke:detect:indexers",
+        "auto-qa:e2e:smoke:start:indexers": "npm --prefix auto-qa/harness run smoke:start:indexers",
+        "auto-qa:e2e:smoke:bootstrap": "npm --prefix auto-qa/harness run smoke:bootstrap",
+        "auto-qa:e2e:smoke:orchestration": "npm --prefix auto-qa/harness run smoke:orchestration",
+        "auto-qa:e2e:smoke:roundtrip": "npm --prefix auto-qa/harness run smoke:roundtrip",
+        "auto-qa:e2e:indexers:bootstrap": "npm --prefix auto-qa/harness run indexers:bootstrap",
+        "auto-qa:e2e:indexers:start": "npm --prefix auto-qa/harness run indexers:start",
+        "auto-qa:e2e:indexers:stop": "npm --prefix auto-qa/harness run indexers:stop",
+        "auto-qa:e2e:scenarios:by-layer": "npm --prefix auto-qa/harness run scenarios:by-layer",
+        "auto-qa:e2e:invariants:catalog": "npm --prefix auto-qa/harness run invariants:catalog"
     },
     "dependencies": {
         "cors": "^2.8.5",
