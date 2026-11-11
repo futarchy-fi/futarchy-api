@@ -53,9 +53,10 @@ function stripChainPrefix(id) {
 // chain 1 runs as an isolated deployment (see futarchy-indexers
 // docker-compose.mainnet.yml); everything else stays on the shared instance.
 function candlesUpstream(chainId = 100) {
-    return parseInt(chainId) === 1 && ENDPOINTS.candlesMainnet
-        ? ENDPOINTS.candlesMainnet
-        : ENDPOINTS.candles;
+    const chain = parseInt(chainId);
+    if (chain === 1 && ENDPOINTS.candlesMainnet) return ENDPOINTS.candlesMainnet;
+    if (chain === 4663 && ENDPOINTS.candlesRobinhood) return ENDPOINTS.candlesRobinhood;
+    return ENDPOINTS.candles;
 }
 
 function addChainPrefix(id, chainId = 100) {

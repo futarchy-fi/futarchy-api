@@ -31,6 +31,10 @@ const CHECKPOINT = {
     // Isolated mainnet candles checkpoint (chain 1); see futarchy-indexers
     // proposals-candles/checkpoint/docker-compose.mainnet.yml (VM port 3002)
     candlesMainnet: process.env.CANDLES_MAINNET_URL || 'http://localhost:3002/graphql',
+    // Isolated Robinhood Chain candles checkpoint (chain 4663); see
+    // futarchy-indexers proposals-candles/checkpoint/docker-compose.robinhood.yml
+    // (VM port 3004). Unset = chain 4663 is not routed anywhere special.
+    candlesRobinhood: process.env.CANDLES_ROBINHOOD_URL || '',
 };
 
 export const ENDPOINTS = MODE === 'checkpoint' ? CHECKPOINT : GRAPH_NODE;
@@ -41,3 +45,4 @@ console.log(`[endpoints] Mode: ${MODE.toUpperCase()}`);
 console.log(`[endpoints] Registry: ${ENDPOINTS.registry}`);
 console.log(`[endpoints] Candles:  ${ENDPOINTS.candles}`);
 if (ENDPOINTS.candlesMainnet) console.log(`[endpoints] CandlesMainnet: ${ENDPOINTS.candlesMainnet}`);
+if (ENDPOINTS.candlesRobinhood) console.log(`[endpoints] CandlesRobinhood: ${ENDPOINTS.candlesRobinhood}`);
